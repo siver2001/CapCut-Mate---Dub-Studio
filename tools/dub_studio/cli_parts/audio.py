@@ -833,7 +833,7 @@ def create_dub_audio(
         )
         return manifests
 
-    filter_parts.append("".join(mix_inputs) + f"amix=inputs={len(mix_inputs)}:normalize=0:duration=first[dub]")
+    filter_parts.append("".join(mix_inputs) + f"amix=inputs={len(mix_inputs)}:normalize=0:duration=longest:dropout_transition=0[dub]")
     emit_progress(
         phase="render",
         step="tts_mix",
@@ -1105,7 +1105,7 @@ def create_final_audio(
                 "-i",
                 str(dub_audio_path),
                 "-filter_complex",
-                f"[0:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed];[bed][1:a]amix=inputs=2:normalize=0:duration=first[aout]",
+                f"[0:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed];[bed][1:a]amix=inputs=2:normalize=0:duration=longest:dropout_transition=0[aout]",
                 "-map",
                 "[aout]",
                 "-c:a",
@@ -1125,7 +1125,7 @@ def create_final_audio(
                 "-i",
                 str(dub_audio_path),
                 "-filter_complex",
-                f"[0:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig];[orig][1:a]amix=inputs=2:normalize=0:duration=first[aout]",
+                f"[0:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig];[orig][1:a]amix=inputs=2:normalize=0:duration=longest:dropout_transition=0[aout]",
                 "-map",
                 "[aout]",
                 "-c:a",

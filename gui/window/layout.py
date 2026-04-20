@@ -895,6 +895,8 @@ class WindowLayoutMixin:
             "Cảnh báo và ghi chú sau khi phân tích sẽ hiện ở đây."
         )
         warning_col.addWidget(self.warning_box)
+        self.warning_box.setMinimumHeight(100)
+        self.warning_box.setMaximumHeight(160)
         timeline_col = QVBoxLayout()
         timeline_col.addWidget(self._field_label("Timeline thoại"))
         self.timeline_box = QPlainTextEdit()
@@ -903,6 +905,8 @@ class WindowLayoutMixin:
             "Các câu thoại đầu tiên sẽ được hiển thị để bạn kiểm tra speaker."
         )
         timeline_col.addWidget(self.timeline_box)
+        self.timeline_box.setMinimumHeight(100)
+        self.timeline_box.setMaximumHeight(160)
         analysis_split.addLayout(warning_col, 4)
         analysis_split.addLayout(timeline_col, 5)
         analysis_layout.addLayout(analysis_split)
@@ -948,8 +952,10 @@ class WindowLayoutMixin:
         self.subtitle_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
         )
+        self.subtitle_table.setMinimumHeight(200)
+        self.subtitle_table.setMaximumHeight(350)
         self.subtitle_table.itemChanged.connect(self.on_subtitle_table_item_changed)
-        subtitle_layout.addWidget(self.subtitle_table, 1)
+        subtitle_layout.addWidget(self.subtitle_table)
         subtitle_page_layout.addWidget(subtitle_card, 1)
         self.main_tabs.addTab(subtitle_page, "Subtitle")
 
@@ -1200,6 +1206,8 @@ class WindowLayoutMixin:
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setPlaceholderText("Log chạy pipeline sẽ hiển thị tại đây.")
+        self.log_box.setMinimumHeight(150)
+        self.log_box.setMaximumHeight(280)
         status_layout.addWidget(self.log_box)
         status_page = QWidget()
         status_page_layout = QVBoxLayout(status_page)
@@ -1277,7 +1285,8 @@ class WindowLayoutMixin:
             4, QHeaderView.ResizeMode.Stretch
         )
         self.batch_table.setMinimumHeight(200)
-        batch_queue_layout.addWidget(self.batch_table, 1)
+        self.batch_table.setMaximumHeight(220)
+        batch_queue_layout.addWidget(self.batch_table)
 
         batch_output_row = QHBoxLayout()
         batch_output_row.setSpacing(8)
@@ -1327,6 +1336,8 @@ class WindowLayoutMixin:
         self.batch_log_box.setPlaceholderText(
             "Log batch sẽ hiển thị tại đây khi bắt đầu xử lý hàng loạt."
         )
+        self.batch_log_box.setMinimumHeight(120)
+        self.batch_log_box.setMaximumHeight(200)
         batch_log_layout.addWidget(self.batch_log_box)
         batch_page_layout.addWidget(batch_log_card, 1)
 

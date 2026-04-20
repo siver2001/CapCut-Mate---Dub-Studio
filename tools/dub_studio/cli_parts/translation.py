@@ -246,14 +246,13 @@ def _build_localization_prompt(
         '- "delivery": exactly one of: calm, neutral, curious, excited, urgent, suspense.\n'
         "\n"
         "Translation quality rules:\n"
-        "- Semantic fidelity first: preserve the original meaning, speaker intent, polarity, certainty, names, relationships, and facts exactly.\n"
-        "- Do NOT add explanation, subtext, hidden motives, or story details not in the source.\n"
-        "- If the source is ambiguous or fragmentary, keep that ambiguity — do not guess.\n"
-        "- Translate only sourceText. Use previousText/nextText/previousContext/nextContext only to disambiguate meaning.\n"
+        "- Semantic fidelity first, but adapt the sentence structure to flow naturally in spoken Vietnamese.\n"
+        "- Do NOT translate literally word-for-word. Rephrase idioms, slang, and jokes into natural Vietnamese equivalents.\n"
+        "- Make the spokenText sound exactly like a native Vietnamese speaker talking casually in a vlog or video.\n"
+        "- If the source is a fragmented sentence, smooth it out so it makes sense to the listener.\n"
+        "- Translate only sourceText. Use previousText/nextText/previousContext/nextContext to understand the ongoing conversation.\n"
         "- Keep translatedText within maxSubtitleChars and spokenText within maxSpokenChars when possible.\n"
-        "- Prefer short idiomatic Vietnamese. Do NOT produce stiff literal phrasing.\n"
-        "- Always use `mình` for singular first-person unless context is clearly plural.\n"
-        "- For casual or peer dialogue, prefer `mình` / `cậu` over rigid `tôi` / `bạn`.\n"
+        "- Use appropriate Vietnamese pronouns (mình/cậu, anh/em, mọi người) based on the context and tone of the video.\n"
         "- Do NOT add notes, markdown fences, or any text outside the JSON array.\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
@@ -384,7 +383,7 @@ def generate_intro_hook_via_ollama(
         "Sentence 2 must clearly say what the video will show, follow, or reveal so the viewer understands the premise.\n"
         "Sentence 3, if used, should sharpen the tension, stakes, or twist without turning into a full recap.\n"
         "It should feel genuinely intriguing while still making the video's main idea easy to understand.\n"
-        f"It should fit roughly {max(10, round(clip_duration_ms / 1500))}-{max(22, round(clip_duration_ms / 800))} spoken Vietnamese words total.\n"
+        f"It should fit roughly {max(18, round(clip_duration_ms / 450))}-{max(35, round(clip_duration_ms / 300))} spoken Vietnamese words total.\n"
         "No hashtags. No emojis. No clickbait nonsense.\n"
         'Return ONLY a valid JSON object: {"hook":"..."}.\n\n'
         + json.dumps(
@@ -395,7 +394,7 @@ def generate_intro_hook_via_ollama(
                     "startMs": item.get("startMs"),
                     "endMs": item.get("endMs"),
                 }
-                for item in window_segments[:6]
+                for item in window_segments[:15]
             ],
             ensure_ascii=False,
         )
@@ -404,7 +403,7 @@ def generate_intro_hook_via_ollama(
     payload = parse_json_response_payload(
         run_ollama_prompt(
             prompt,
-            max_tokens=96,
+            max_tokens=160,
             temperature=max(0.45, OLLAMA_TEMP),
             timeout=35,
         )
@@ -480,7 +479,7 @@ def generate_intro_hook_via_llama_cpp(
         "Sentence 2 must clearly say what the video will show, follow, or reveal so the viewer understands the premise.\n"
         "Sentence 3, if used, should sharpen the tension, stakes, or twist without turning into a full recap.\n"
         "It should feel genuinely intriguing while still making the video's main idea easy to understand.\n"
-        f"It should fit roughly {max(10, round(clip_duration_ms / 1500))}-{max(22, round(clip_duration_ms / 800))} spoken Vietnamese words total.\n"
+        f"It should fit roughly {max(18, round(clip_duration_ms / 450))}-{max(35, round(clip_duration_ms / 300))} spoken Vietnamese words total.\n"
         "No hashtags. No emojis. No clickbait nonsense.\n"
         'Return ONLY a valid JSON object: {"hook":"..."}.\n\n'
         + json.dumps(
@@ -491,7 +490,7 @@ def generate_intro_hook_via_llama_cpp(
                     "startMs": item.get("startMs"),
                     "endMs": item.get("endMs"),
                 }
-                for item in window_segments[:6]
+                for item in window_segments[:15]
             ],
             ensure_ascii=False,
         )
@@ -500,7 +499,7 @@ def generate_intro_hook_via_llama_cpp(
     payload = parse_json_response_payload(
         run_llama_cpp_prompt(
             prompt,
-            max_tokens=96,
+            max_tokens=160,
             temperature=max(0.45, LLAMA_CPP_TEMP),
             timeout=60,
         )

@@ -564,7 +564,7 @@ def translation_batch_progress(end_index: int, total: int) -> float:
     return 0.32 + (min(end_index, safe_total) / safe_total) * 0.12
 
 
-TRANSLATION_PROMPT_VERSION = 3
+TRANSLATION_PROMPT_VERSION = 4
 
 
 def translation_progress_message(*, provider_label: str, start: int, end_index: int, total: int, note: str = "") -> str:

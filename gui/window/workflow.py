@@ -127,10 +127,21 @@ class WindowWorkflowMixin:
         value = selected.strip()
         self.output_folder_quick_edit.blockSignals(True)
         self.output_dir_edit.blockSignals(True)
+        if hasattr(self, "batch_output_dir_edit"):
+            self.batch_output_dir_edit.blockSignals(True)
+        
         self.output_folder_quick_edit.setText(value)
         self.output_dir_edit.setText(value)
+        
+        if hasattr(self, "batch_output_dir_edit"):
+            self.batch_output_dir_edit.setText(value)
+        if hasattr(self, "_batch_output_dir"):
+            self._batch_output_dir = value
+
         self.output_folder_quick_edit.blockSignals(False)
         self.output_dir_edit.blockSignals(False)
+        if hasattr(self, "batch_output_dir_edit"):
+            self.batch_output_dir_edit.blockSignals(False)
 
     def choose_watermark_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -574,11 +585,12 @@ class WindowWorkflowMixin:
         self.stop_render_preview(clear_source=True)
         self.job_status = self.controller.get_job_status(job_id)
         self.refresh_all()
-        QMessageBox.information(
-            self,
-            "Render hoàn tất",
-            "Đã render xong. Bạn có thể bấm Xem video để preview ngay trong app hoặc bấm Xuất file khi muốn lưu ra ngoài.",
-        )
+        if not getattr(self, "_batch_running", False):
+            QMessageBox.information(
+                self,
+                "Render hoàn tất",
+                "Đã render xong. Bạn có thể bấm Xem video để preview ngay trong app hoặc bấm Xuất file khi muốn lưu ra ngoài.",
+            )
 
     def on_status_changed(self, job_id: str, payload: dict[str, Any]) -> None:
         if self.job_id == job_id:
@@ -588,7 +600,8 @@ class WindowWorkflowMixin:
     def on_job_failed(self, job_id: str, message: str) -> None:
         if self.job_id == job_id:
             self.stop_render_preview()
-            QMessageBox.critical(self, "Lỗi pipeline", repair_mojibake_text(message))
+            if not getattr(self, "_batch_running", False):
+                QMessageBox.critical(self, "Lỗi pipeline", repair_mojibake_text(message))
 
     def _handle_render_preview_error(self, _error, error_string: str) -> None:
         message = repair_mojibake_text(

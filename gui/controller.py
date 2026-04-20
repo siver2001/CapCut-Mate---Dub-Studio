@@ -327,9 +327,12 @@ class DubStudioJobController(QWidget):
         if not job or job.get("cancelRequested"):
             return
         process = job.get("process")
-        error_message = (
-            process.errorString() if process is not None else "Unknown process error."
-        )
+        try:
+            error_message = (
+                process.errorString() if process is not None else "Unknown process error."
+            )
+        except RuntimeError:
+            error_message = f"Process error ({error})"
         if error == QProcess.ProcessError.FailedToStart:
             self._fail_job(job_id, f"Unable to start pipeline: {error_message}")
             return

@@ -123,6 +123,12 @@ class WindowBatchMixin:
             self._batch_output_dir = selected
             if hasattr(self, "batch_output_dir_edit"):
                 self.batch_output_dir_edit.setText(selected)
+            # Sync with the global settings so the user isn't confused by other tabs
+            if hasattr(self, "output_dir_edit"):
+                self.output_dir_edit.setText(selected)
+            if hasattr(self, "output_folder_quick_edit"):
+                self.output_folder_quick_edit.setText(selected)
+            self.settings["outputDirectory"] = selected
 
     # ── start / stop batch ───────────────────────────────────────────
     def batch_start(self) -> None:

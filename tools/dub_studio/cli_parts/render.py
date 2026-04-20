@@ -42,7 +42,7 @@ def stable_video_codec() -> tuple[str, list[str]]:
     # Match the older test pipeline defaults because they are slower but much
     # more predictable across Windows laptops and mixed driver setups.
     # CRF 23 is the standard balance between quality and file size.
-    return "libx264", ["-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p"]
+    return "libx264", ["-preset", "medium", "-crf", "28", "-pix_fmt", "yuv420p"]
 
 
 @lru_cache(maxsize=1)
@@ -140,7 +140,7 @@ def choose_video_codec() -> tuple[str, list[str]]:
         return stable_video_codec()
     if can_use_nvenc():
         # CQ 23-24 for NVENC is roughly equivalent to CRF 23 for x264
-        return "h264_nvenc", ["-preset", "p5", "-rc", "vbr", "-cq", "23", "-pix_fmt", "yuv420p"]
+        return "h264_nvenc", ["-preset", "p5", "-rc", "vbr", "-cq", "28", "-pix_fmt", "yuv420p"]
     return stable_video_codec()
 
 
