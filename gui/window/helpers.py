@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from typing import Any
@@ -204,8 +204,16 @@ class WindowHelpersMixin:
                 "Mở output": "fa5s.external-link-alt",
                 "Xem video": "fa5s.play-circle",
                 "Xuất file": "fa5s.file-export",
+                "Từ đầu": "fa5s.undo",
+                "Lùi 10s": "fa5s.backward",
                 "Tạm dừng": "fa5s.pause-circle",
+                "Phát": "fa5s.play-circle",
+                "Tiến 10s": "fa5s.forward",
                 "Dừng phát": "fa5s.stop-circle",
+                "Toàn màn hình": "fa5s.expand",
+                "Thu nhỏ": "fa5s.compress",
+                "Tắt tiếng": "fa5s.volume-mute",
+                "Bật tiếng": "fa5s.volume-up",
                 "Import SRT": "fa5s.file-import",
                 "Export SRT": "fa5s.file-export",
                 "Chọn": "fa5s.folder",
@@ -224,8 +232,16 @@ class WindowHelpersMixin:
                 "Mở output": QStyle.StandardPixmap.SP_DirOpenIcon,
                 "Xem video": QStyle.StandardPixmap.SP_MediaPlay,
                 "Xuất file": QStyle.StandardPixmap.SP_DialogSaveButton,
+                "Từ đầu": QStyle.StandardPixmap.SP_MediaSkipBackward,
+                "Lùi 10s": QStyle.StandardPixmap.SP_MediaSeekBackward,
                 "Tạm dừng": QStyle.StandardPixmap.SP_MediaPause,
+                "Phát": QStyle.StandardPixmap.SP_MediaPlay,
+                "Tiến 10s": QStyle.StandardPixmap.SP_MediaSeekForward,
                 "Dừng phát": QStyle.StandardPixmap.SP_MediaStop,
+                "Toàn màn hình": QStyle.StandardPixmap.SP_TitleBarMaxButton,
+                "Thu nhỏ": QStyle.StandardPixmap.SP_TitleBarNormalButton,
+                "Tắt tiếng": QStyle.StandardPixmap.SP_MediaVolumeMuted,
+                "Bật tiếng": QStyle.StandardPixmap.SP_MediaVolume,
                 "Import SRT": QStyle.StandardPixmap.SP_DialogOpenButton,
                 "Export SRT": QStyle.StandardPixmap.SP_DialogSaveButton,
                 "Chọn": QStyle.StandardPixmap.SP_DialogOpenButton,

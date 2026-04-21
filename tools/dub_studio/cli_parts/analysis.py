@@ -162,76 +162,13 @@ def extract_speaker_samples(video_path: Path, segments: list[dict[str, Any]], ou
 
 
 def estimate_gender_from_sample_audio(sample_path: Path | str | None) -> dict[str, Any]:
-    if not sample_path:
-        return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-    path = Path(sample_path)
-    if not path.exists():
-        return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-    try:
-        import librosa
-        audio, sr = librosa.load(str(path), sr=16000, mono=True)
-        return _estimate_gender_from_audio_array(audio, sr)
-    except Exception:
-        return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
+    """Gender estimation disabled — always returns unknown."""
+    return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
 
 
 def _estimate_gender_from_audio_array(audio: Any, sr: int = 16000) -> dict[str, Any]:
-    try:
-        import librosa
-        import numpy as np
-
-        if audio is None:
-            return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-        if hasattr(audio, "ndim") and getattr(audio, "ndim", 1) > 1:
-            audio = np.asarray(audio).reshape(-1)
-        if len(audio) < max(sr // 2, 1):
-            return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-        frame_length = 1024
-        hop_length = 256
-        rms = librosa.feature.rms(y=audio, frame_length=frame_length, hop_length=hop_length)[0]
-        if rms.size == 0:
-            return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-        rms_threshold = max(float(np.percentile(rms, 35)), 1e-6)
-        f0 = librosa.yin(
-            audio,
-            fmin=75,
-            fmax=320,
-            sr=sr,
-            frame_length=frame_length,
-            hop_length=hop_length,
-        )
-        valid = np.isfinite(f0) & (f0 >= 75) & (f0 <= 320)
-        if valid.shape == rms.shape:
-            valid &= rms >= rms_threshold
-        voiced = f0[valid]
-        if voiced.size < 6:
-            return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-        median_pitch = float(np.median(voiced))
-        spread = float(np.std(voiced))
-        gender = "unknown"
-        confidence = 0.0
-        if median_pitch <= 145:
-            gender = "male"
-            confidence = 0.68 + min((145.0 - median_pitch) / 70.0, 0.18)
-        elif median_pitch >= 175:
-            gender = "female"
-            confidence = 0.68 + min((median_pitch - 175.0) / 85.0, 0.18)
-        elif median_pitch <= 160:
-            gender = "male"
-            confidence = 0.54 + min((160.0 - median_pitch) / 50.0, 0.12)
-        elif median_pitch >= 165:
-            gender = "female"
-            confidence = 0.54 + min((median_pitch - 165.0) / 55.0, 0.12)
-        confidence = max(min(confidence - min(spread, 45.0) / 220.0, 0.9), 0.0)
-        if confidence < 0.55:
-            gender = "unknown"
-        return {
-            "gender": gender,
-            "confidence": round(confidence, 4),
-            "medianPitchHz": round(median_pitch, 1),
-        }
-    except Exception:
-        return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
+    """Gender estimation disabled — always returns unknown."""
+    return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
 
 
 def estimate_gender_from_audio_slice(
@@ -241,16 +178,8 @@ def estimate_gender_from_audio_slice(
     start_ms: int,
     end_ms: int,
 ) -> dict[str, Any]:
-    start_index = max(int(start_ms * sr / 1000), 0)
-    end_index = min(max(int(end_ms * sr / 1000), start_index + 1), len(audio))
-    min_window = max(int(sr * 0.65), 1)
-    if end_index - start_index < min_window:
-        midpoint = (start_index + end_index) // 2
-        half_window = min_window // 2
-        start_index = max(midpoint - half_window, 0)
-        end_index = min(start_index + min_window, len(audio))
-        start_index = max(end_index - min_window, 0)
-    return _estimate_gender_from_audio_array(audio[start_index:end_index], sr)
+    """Gender estimation disabled — always returns unknown."""
+    return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
 
 
 def build_speaker_stats_from_segments(
@@ -297,102 +226,23 @@ def collapse_segments_to_gender_buckets(
     audio: Any,
     sr: int = 16000,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str, int, float, str]:
-    if not segments or audio is None:
+    """Simplified: gender-based speaker bucketing is disabled.
+
+    All segments are assigned to their existing speakerId (or speaker_1
+    as fallback).  The function signature is preserved so callers do not
+    need to change.
+    """
+    if not segments:
         return segments, {}, "speaker_1", 1, 0.42, "single_voice"
 
-    provisional: list[dict[str, Any]] = []
-    duration_by_gender = {"male": 0, "female": 0}
-    confidence_total = 0.0
-    confidence_count = 0
-    for segment in segments:
-        start_ms = max(int(segment.get("startMs", 0)) - 120, 0)
-        end_ms = max(int(segment.get("endMs", 0)) + 120, start_ms + 320)
-        gender_info = estimate_gender_from_audio_slice(
-            audio,
-            sr=sr,
-            start_ms=start_ms,
-            end_ms=end_ms,
-        )
-        gender = normalize_text(gender_info.get("gender") or "unknown").lower()
-        confidence = float(gender_info.get("confidence") or 0.0)
-        if gender in {"male", "female"}:
-            duration_by_gender[gender] += max(int(segment.get("endMs", 0)) - int(segment.get("startMs", 0)), 0)
-            confidence_total += confidence
-            confidence_count += 1
-        provisional.append(
-            {
-                "segment": segment,
-                "gender": gender if gender in {"male", "female"} else "unknown",
-                "confidence": confidence,
-            }
-        )
-
-    dominant_gender = "unknown"
-    if duration_by_gender["male"] or duration_by_gender["female"]:
-        dominant_gender = "male" if duration_by_gender["male"] >= duration_by_gender["female"] else "female"
-
-    resolved_labels = [item["gender"] for item in provisional]
-    for index, item in enumerate(provisional):
-        if item["gender"] in {"male", "female"} and item["confidence"] >= 0.6:
-            continue
-        previous_label = resolved_labels[index - 1] if index > 0 else "unknown"
-        next_label = resolved_labels[index + 1] if index + 1 < len(resolved_labels) else "unknown"
-        if previous_label == next_label and previous_label in {"male", "female"}:
-            resolved_labels[index] = previous_label
-        elif previous_label in {"male", "female"} and item["confidence"] < 0.7:
-            resolved_labels[index] = previous_label
-        elif next_label in {"male", "female"} and item["confidence"] < 0.66:
-            resolved_labels[index] = next_label
-        elif dominant_gender in {"male", "female"}:
-            resolved_labels[index] = dominant_gender
-
-    for index in range(1, len(resolved_labels) - 1):
-        previous_label = resolved_labels[index - 1]
-        next_label = resolved_labels[index + 1]
-        current_label = resolved_labels[index]
-        current_confidence = provisional[index]["confidence"]
-        if (
-            previous_label == next_label
-            and previous_label in {"male", "female"}
-            and current_label != previous_label
-            and current_confidence < 0.76
-        ):
-            resolved_labels[index] = previous_label
-
-    active_genders = [gender for gender in ("male", "female") if gender in resolved_labels]
-    if not active_genders:
-        remapped_segments = [{**segment, "speakerId": "speaker_1"} for segment in segments]
-        speaker_stats, main_speaker_id = build_speaker_stats_from_segments(remapped_segments)
-        return remapped_segments, speaker_stats, main_speaker_id, 1, 0.42, "single_voice"
-
-    gender_to_speaker = {"male": "speaker_1"}
-    if "female" in active_genders and "male" in active_genders:
-        gender_to_speaker["female"] = "speaker_2"
-    elif "female" in active_genders:
-        gender_to_speaker = {"female": "speaker_1"}
-
-    remapped_segments: list[dict[str, Any]] = []
-    for item, resolved_gender in zip(provisional, resolved_labels):
-        speaker_id = gender_to_speaker.get(resolved_gender, "speaker_1")
-        remapped_segments.append(
-            {
-                **item["segment"],
-                "speakerId": speaker_id,
-                "estimatedGender": resolved_gender,
-            }
-        )
-
+    remapped_segments = [
+        {**segment, "speakerId": segment.get("speakerId") or "speaker_1"}
+        for segment in segments
+    ]
     speaker_stats, main_speaker_id = build_speaker_stats_from_segments(remapped_segments)
     speaker_count = max(len(speaker_stats), 1)
-    speaker_confidence = 0.42
-    if confidence_count:
-        base_confidence = confidence_total / max(confidence_count, 1)
-        if speaker_count > 1:
-            speaker_confidence = max(min(base_confidence + 0.12, 0.92), 0.62)
-        else:
-            speaker_confidence = max(min(base_confidence, 0.84), 0.58)
-    voice_layout = "multi_character" if speaker_count > 1 else "single_voice"
-    return remapped_segments, speaker_stats, main_speaker_id, speaker_count, speaker_confidence, voice_layout
+    voice_layout = "single_voice"
+    return remapped_segments, speaker_stats, main_speaker_id, speaker_count, 0.42, voice_layout
 
 
 def analyze_with_whisperx(
@@ -1030,20 +880,10 @@ def build_speakers(
         speaker_id = f"speaker_{index + 1}"
         ref = refinement.get(speaker_id, {})
         sample_path = sample_paths.get(speaker_id)
-        sample_gender = estimate_gender_from_sample_audio(sample_path)
-        refined_gender = normalize_text(ref.get("gender") or "unknown").lower()
-        estimated_gender = refined_gender if refined_gender in {"male", "female"} else "unknown"
-        sample_gender_value = normalize_text(sample_gender.get("gender") or "unknown").lower()
-        sample_gender_confidence = float(sample_gender.get("confidence") or 0.0)
-        if sample_gender_value in {"male", "female"} and (
-            estimated_gender not in {"male", "female"} or sample_gender_confidence >= 0.74
-        ):
-            estimated_gender = sample_gender_value
         voice = resolve_voice_preset(
             recommend_voice_preset(
                 candidate=voice_mapping.get(speaker_id) or ref.get("suggestedVoice") or "",
                 index=index,
-                estimated_gender=estimated_gender,
             ),
             index=index,
         )
@@ -1053,24 +893,13 @@ def build_speakers(
         if not display_name:
             display_name = "Nhân vật chính" if speaker_id == main_speaker_id else f"Nhân vật {index + 1}"
 
-        if (
-            estimated_gender == "male"
-            and normalize_text(display_name).lower() in {"nhan vat chinh", f"nhan vat {index + 1}"}
-        ):
-            display_name = "Giọng nam"
-        elif (
-            estimated_gender == "female"
-            and normalize_text(display_name).lower() in {"nhan vat chinh", f"nhan vat {index + 1}"}
-        ):
-            display_name = "Giọng nữ"
-
         speakers.append(
             {
                 "speakerId": speaker_id,
                 "displayName": display_name,
-                "estimatedGender": estimated_gender,
-                "sampleGenderConfidence": sample_gender_confidence,
-                "samplePitchHz": sample_gender.get("medianPitchHz"),
+                "estimatedGender": "unknown",
+                "sampleGenderConfidence": 0.0,
+                "samplePitchHz": None,
                 "voicePreset": voice,
                 "voiceLabel": VOICE_LABELS.get(voice, voice),
                 "colorTag": SPEAKER_COLORS[index % len(SPEAKER_COLORS)],
@@ -1525,11 +1354,11 @@ def expand_subtitle_region(region: dict[str, Any], *, video_meta: dict[str, Any]
     confidence = float(region.get("confidence", 0.0))
     width = int(region.get("w", 0))
     height = int(region.get("h", 0))
-    pad_x = max(20, int(width * 0.08), int(video_meta["width"] * 0.012))
-    pad_y = max(14, int(height * 0.42), int(video_meta["height"] * 0.012))
+    pad_x = max(4, int(width * 0.02), int(video_meta["width"] * 0.004))
+    pad_y = max(2, int(height * 0.04), int(video_meta["height"] * 0.004))
     if confidence < 0.38:
-        pad_x += 10
-        pad_y += 6
+        pad_x += 2
+        pad_y += 2
     x = max(int(region.get("x", 0)) - pad_x, 0)
     y = max(int(region.get("y", 0)) - pad_y, 0)
     right = min(int(region.get("x", 0)) + width + pad_x, int(video_meta["width"]))
@@ -1758,13 +1587,18 @@ def stabilize_region(candidate: dict[str, Any], previous: dict[str, Any], *, vid
     size_dh = abs(int(candidate.get("h", 0)) - int(previous.get("h", 0)))
     iou = region_iou(candidate, previous)
 
-    if center_dx <= 10 and center_dy <= 8 and size_dw <= 24 and size_dh <= 16:
-        return union_regions(candidate, previous, video_meta=video_meta)
+    # Nếu box thay đổi cực kỳ ít (cả vị trí và kích thước), giữ nguyên box cũ để tránh rung giật
+    if center_dx <= 12 and center_dy <= 8 and size_dw <= 18 and size_dh <= 12:
+        return previous.copy()
 
-    if center_dx <= 24 and center_dy <= 18 and size_dw <= 42 and size_dh <= 24 or iou >= 0.58:
-        return union_regions(candidate, previous, video_meta=video_meta)
+    # Nếu box có thay đổi kích thước nhưng vị trí Y không đổi, ta ưu tiên giữ Y cũ, nhưng cho phép width thay đổi
+    quantized = quantize_region(candidate, video_meta=video_meta)
+    if center_dy <= 12 and size_dh <= 12:
+        quantized["y"] = previous["y"]
+        quantized["h"] = previous["h"]
+        quantized["centerY"] = previous["centerY"]
 
-    return quantize_region(candidate, video_meta=video_meta)
+    return quantized
 
 
 def choose_cleanup_effect(region: dict[str, Any], *, video_meta: dict[str, Any]) -> str:
@@ -1903,8 +1737,6 @@ def build_dynamic_subtitle_regions(
             region = quantize_region(region, video_meta=video_meta)
 
         padded_region = expand_subtitle_region(region, video_meta=video_meta)
-        if previous_detected_region is not None:
-            padded_region = union_regions(padded_region, previous_detected_region, video_meta=video_meta)
         padded_region["centerX"] = padded_region["x"] + padded_region["w"] // 2
         padded_region["centerY"] = padded_region["y"] + padded_region["h"] // 2
         padded_region["startMs"] = subtitle.start_ms
@@ -1914,32 +1746,10 @@ def build_dynamic_subtitle_regions(
         dynamic_regions.append(padded_region)
         previous_detected_region = region
 
-    merged_regions: list[dict[str, Any]] = []
-    for region in dynamic_regions:
-        if not merged_regions:
-            merged_regions.append(region.copy())
-            continue
-        previous = merged_regions[-1]
-        same_position = all(abs(int(previous[key]) - int(region[key])) <= 18 for key in ("x", "y")) and all(
-            abs(int(previous[key]) - int(region[key])) <= 36 for key in ("w", "h")
-        )
-        near_overlap = region_iou(previous, region) >= 0.55
-        if (same_position or near_overlap) and int(region["startMs"]) - int(previous["endMs"]) <= 380:
-            previous["endMs"] = region["endMs"]
-            merged_region = union_regions(previous, region, video_meta=video_meta)
-            previous["x"] = int(merged_region["x"])
-            previous["y"] = int(merged_region["y"])
-            previous["w"] = int(merged_region["w"])
-            previous["h"] = int(merged_region["h"])
-            previous["centerX"] = previous["x"] + previous["w"] // 2
-            previous["centerY"] = previous["y"] + previous["h"] // 2
-            previous["cleanupEffect"] = "blur" if "blur" in {previous.get("cleanupEffect"), region.get("cleanupEffect")} else "mask"
-            continue
-        merged_regions.append(region.copy())
     subtitle_positions = build_stable_subtitle_positions(
         subtitles,
-        dynamic_regions=merged_regions,
+        dynamic_regions=dynamic_regions,
         fallback_region=fallback_region,
         video_meta=video_meta,
     )
-    return merged_regions, subtitle_positions
+    return dynamic_regions, subtitle_positions

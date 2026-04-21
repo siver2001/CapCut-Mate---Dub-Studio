@@ -21,6 +21,7 @@ class _BatchItem:
     __slots__ = (
         "input_path",
         "status",
+        "detail_status",
         "job_id",
         "progress",
         "error",
@@ -30,6 +31,7 @@ class _BatchItem:
     def __init__(self, input_path: str) -> None:
         self.input_path: str = input_path
         self.status: str = "pending"  # pending | analyzing | rendering | done | error
+        self.detail_status: str = "⏳ Chờ xử lý"
         self.job_id: str | None = None
         self.progress: float = 0.0
         self.error: str = ""
@@ -38,6 +40,27 @@ class _BatchItem:
 
 class WindowBatchMixin:
     """Mixin providing batch / bulk-processing capabilities for DubStudioWindow."""
+
+    _BATCH_STEP_LABELS: dict[str, str] = {
+        "prepare": "Chuẩn bị",
+        "input": "Chuẩn bị video",
+        "analyze": "Đang phân tích",
+        "audio_extract": "Đang tách audio",
+        "transcribe": "Đang chép lời",
+        "diarize": "Đang nhận diện speaker",
+        "translate": "Đang dịch phụ đề",
+        "subtitle": "Đang tạo subtitle",
+        "timeline": "Đang dựng timeline",
+        "voice": "Đang gán giọng",
+        "tts": "Đang lồng tiếng",
+        "tts_mix": "Đang ghép giọng đọc",
+        "mix_audio": "Đang trộn audio",
+        "background_prepare": "Đang tách âm nền",
+        "render": "Đang render",
+        "encode": "Đang xuất video",
+        "finalize": "Đang hoàn tất",
+        "export": "Đang xuất file",
+    }
 
     # ── public state ─────────────────────────────────────────────────
     def _init_batch_state(self) -> None:
@@ -59,11 +82,19 @@ class WindowBatchMixin:
         )
         if not paths:
             return
+        last_added_index = -1
         for p in paths:
             if any(item.input_path == p for item in self._batch_queue):
                 continue
             self._batch_queue.append(_BatchItem(p))
+            last_added_index = len(self._batch_queue) - 1
         self._refresh_batch_ui()
+        if last_added_index >= 0 and hasattr(self, "batch_table"):
+            self.batch_table.selectRow(last_added_index)
+            self.show_source_video_preview(
+                self._batch_queue[last_added_index].input_path,
+                switch_to_preview_tab=True,
+            )
 
     def batch_remove_selected(self) -> None:
         """Remove the currently-selected row from the batch queue."""
@@ -176,6 +207,7 @@ class WindowBatchMixin:
         for item in self._batch_queue:
             if item.status in ("pending", "error"):
                 item.status = "pending"
+                item.detail_status = "⏳ Chờ xử lý"
                 item.progress = 0.0
                 item.error = ""
                 item.output_path = ""
@@ -192,6 +224,9 @@ class WindowBatchMixin:
             self._update_batch_log(f"▶ Bắt đầu chạy batch cho {total_count} video...")
         else:
             self._update_batch_log(f"▶ Tiếp tục chạy batch cho {pending_count} video còn lại...")
+        self._update_batch_log(
+            "  • Mỗi video sẽ tự chạy đủ chu trình: phân tích → tạo subtitle → lồng tiếng → render → xuất file."
+        )
 
         self._refresh_batch_ui()
         self._batch_process_next()
@@ -209,6 +244,7 @@ class WindowBatchMixin:
             current_item = self._batch_queue[self._batch_current_index]
             if current_item.status in ("analyzing", "rendering"):
                 current_item.status = "pending"
+                current_item.detail_status = "⏳ Chờ xử lý"
                 current_item.progress = 0.0
                 current_item.job_id = None
         self._batch_current_index = -1
@@ -236,6 +272,7 @@ class WindowBatchMixin:
         self._batch_current_index = next_index
         item = self._batch_queue[next_index]
         item.status = "analyzing"
+        item.detail_status = "🔍 Đang chuẩn bị phân tích..."
         item.progress = 0.0
         self._refresh_batch_ui()
         self._update_batch_log(
@@ -270,10 +307,11 @@ class WindowBatchMixin:
             return
 
         item.status = "rendering"
+        item.detail_status = "🎬 Đang tạo subtitle + lồng tiếng..."
         item.progress = 0.5
         self._refresh_batch_ui()
         self._update_batch_log(
-            f"  ✓ Phân tích xong, bắt đầu render: {Path(item.input_path).name}"
+            f"  ✓ Phân tích xong, bắt đầu tạo subtitle + lồng tiếng + render: {Path(item.input_path).name}"
         )
 
         try:
@@ -305,6 +343,9 @@ class WindowBatchMixin:
         if item is None:
             return
 
+        item.detail_status = "📦 Đang xuất file..."
+        self._refresh_batch_ui()
+
         # Export the rendered video to the batch output directory
         source_video = (
             payload.get("previewVideoPath")
@@ -335,6 +376,7 @@ class WindowBatchMixin:
             item.output_path = source_video or ""
 
         item.status = "done"
+        item.detail_status = "✅ Hoàn tất"
         item.progress = 1.0
         self._refresh_batch_ui()
 
@@ -351,6 +393,7 @@ class WindowBatchMixin:
             return
 
         item.status = "error"
+        item.detail_status = "❌ Lỗi"
         item.error = message
         item.progress = 0.0
         self._update_batch_log(f"  ✗ Lỗi: {repair_mojibake_text(message)}")
@@ -369,6 +412,9 @@ class WindowBatchMixin:
             return
 
         raw_progress = float(payload.get("progress") or 0)
+        phase = str(payload.get("phase") or "").strip().lower()
+        step = str(payload.get("step") or "").strip().lower()
+        item.detail_status = self._describe_batch_step(item.status, phase=phase, step=step)
         if item.status == "analyzing":
             item.progress = raw_progress * 0.5
         elif item.status == "rendering":
@@ -381,6 +427,40 @@ class WindowBatchMixin:
             if item.job_id == job_id:
                 return item
         return None
+
+    def _current_batch_item(self) -> _BatchItem | None:
+        if 0 <= self._batch_current_index < len(self._batch_queue):
+            return self._batch_queue[self._batch_current_index]
+        return None
+
+    def _describe_batch_step(self, batch_status: str, *, phase: str, step: str) -> str:
+        base_label = self._BATCH_STEP_LABELS.get(step)
+        if base_label:
+            if batch_status == "analyzing":
+                return f"🔍 {base_label}"
+            if batch_status == "rendering":
+                return f"🎬 {base_label}"
+            return base_label
+        if batch_status == "analyzing":
+            return "🔍 Đang phân tích..."
+        if batch_status == "rendering":
+            if phase == "render":
+                return "🎬 Đang render..."
+            return "🎬 Đang xử lý..."
+        if batch_status == "done":
+            return "✅ Hoàn tất"
+        if batch_status == "error":
+            return "❌ Lỗi"
+        return "⏳ Chờ xử lý"
+
+    def _batch_overall_progress(self) -> float:
+        total = len(self._batch_queue)
+        if total <= 0:
+            return 0.0
+        completed_units = 0.0
+        for item in self._batch_queue:
+            completed_units += max(0.0, min(float(item.progress), 1.0))
+        return max(0.0, min(completed_units / total, 1.0))
 
     def _is_batch_job(self, job_id: str) -> bool:
         return self._batch_running and self._find_batch_item_by_job_id(job_id) is not None
@@ -406,6 +486,9 @@ class WindowBatchMixin:
             else self.settings["sourceLanguage"]
         )
         output_dir = self._batch_output_dir or self.settings.get("outputDirectory", "")
+        output_targets = copy.deepcopy(self.settings["outputTargets"])
+        if not any(bool(value) for value in output_targets.values()):
+            output_targets["mp4"] = True
         return {
             "sourceLanguage": effective_source_language or "",
             "targetLanguage": self.settings["targetLanguage"],
@@ -415,7 +498,7 @@ class WindowBatchMixin:
             "subtitlePreset": copy.deepcopy(self.settings["subtitlePreset"]),
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
             "sourceSubtitleCleanupMode": self.settings["sourceSubtitleCleanupMode"],
-            "outputTargets": copy.deepcopy(self.settings["outputTargets"]),
+            "outputTargets": output_targets,
             "timingMode": self.settings["timingMode"],
             "videoCodecMode": self.settings.get("videoCodecMode", "gpu_preferred"),
             "keepOriginalAudio": self.settings["keepOriginalAudio"],
@@ -475,7 +558,7 @@ class WindowBatchMixin:
                 "done": "✅ Hoàn tất",
                 "error": "❌ Lỗi",
             }
-            status_text = status_map.get(item.status, item.status)
+            status_text = item.detail_status or status_map.get(item.status, item.status)
             progress_text = f"{int(item.progress * 100)}%"
             output_text = Path(item.output_path).name if item.output_path else ""
 
@@ -499,12 +582,10 @@ class WindowBatchMixin:
 
         # Update overall batch progress bar
         if hasattr(self, "batch_progress_bar"):
-            total = len(self._batch_queue)
-            if total > 0:
-                overall = sum(item.progress for item in self._batch_queue) / total
-                self.batch_progress_bar.setValue(int(overall * 100))
-            else:
-                self.batch_progress_bar.setValue(0)
+            overall = self._batch_overall_progress()
+            overall_percent = int(round(overall * 100))
+            self.batch_progress_bar.setValue(overall_percent)
+            self.batch_progress_bar.setFormat(f"Tổng batch: {overall_percent}%")
 
         # Update batch status label
         if hasattr(self, "batch_status_label"):
@@ -513,9 +594,15 @@ class WindowBatchMixin:
             total = len(self._batch_queue)
             if self._batch_running:
                 current = self._batch_current_index + 1
+                current_item = self._current_batch_item()
+                current_progress = (
+                    int(round(float(current_item.progress) * 100))
+                    if current_item is not None
+                    else 0
+                )
                 self.batch_status_label.setText(
                     repair_mojibake_text(
-                        f"Đang xử lý: {current}/{total} | Xong: {done} | Lỗi: {errors}"
+                        f"Đang xử lý: {current}/{total} | Video hiện tại: {current_progress}% | Xong: {done} | Lỗi: {errors}"
                     )
                 )
             elif total > 0:
@@ -549,12 +636,22 @@ class WindowBatchMixin:
         if hasattr(self, "batch_down_btn"):
             self.batch_down_btn.setEnabled(not self._batch_running)
 
+    def batch_preview_selected(self) -> None:
+        if not hasattr(self, "batch_table"):
+            return
+        row = self.batch_table.currentRow()
+        if 0 <= row < len(self._batch_queue):
+            self.show_source_video_preview(
+                self._batch_queue[row].input_path,
+                switch_to_preview_tab=False,
+            )
+
     def _update_batch_log(self, message: str) -> None:
         """Append a message to the batch log box."""
         if not hasattr(self, "batch_log_box"):
             return
-        existing = self.batch_log_box.toPlainText()
-        new_text = existing + ("\n" if existing else "") + repair_mojibake_text(message)
-        self.batch_log_box.setPlainText(new_text)
+        existing_lines = self.batch_log_box.toPlainText().splitlines()
+        existing_lines.append(repair_mojibake_text(message))
+        self.batch_log_box.setPlainText("\n".join(existing_lines[-40:]))
         scroll_bar = self.batch_log_box.verticalScrollBar()
         scroll_bar.setValue(scroll_bar.maximum())

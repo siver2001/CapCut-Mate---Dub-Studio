@@ -43,12 +43,14 @@ from ..process_utils import (
     extract_audio_clip,
     run,
     run_output,
+    safe_print,
 )
 from ..render_utils import compose_ass, default_subtitle_region, resolve_subtitle_region_for_position
 from ..subtitle_utils import (
     apply_subtitle_timeline_to_segments,
     build_subtitle_timeline,
     build_spoken_text,
+    collapse_repeated_words,
     compose_srt,
     compose_srt_from_timeline,
     create_display_subtitles,

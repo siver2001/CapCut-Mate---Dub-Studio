@@ -177,9 +177,8 @@ WATERMARK_POSITION_OPTIONS = [
 ]
 
 SPEAKER_DETECTION_OPTIONS = [
-    ("auto", "Tự động theo audio gốc"),
-    ("dialogue", "Hội thoại nhiều người"),
-    ("narrator", "Giọng chung 1 người"),
+    ("narrator", "Giọng chung 1 người (mặc định)"),
+    ("dialogue", "Hội thoại nhiều người (thủ công)"),
 ]
 
 TIMING_MODE_OPTIONS = [

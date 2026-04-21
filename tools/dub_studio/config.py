@@ -70,6 +70,7 @@ DUB_TRANSCRIBE_PROVIDER = env_value("DUB_TRANSCRIBE_PROVIDER", default="auto").l
 DUB_TRANSLATE_PROVIDER = env_value("DUB_TRANSLATE_PROVIDER", default="auto").lower()
 DUB_USE_GPU = env_bool("DUB_USE_GPU", default=True)
 DUB_USE_VIENEU = env_bool("DUB_USE_VIENEU", default=False)
+DUB_TTS_ENABLE_PARALLEL = env_bool("DUB_TTS_ENABLE_PARALLEL", default=True)
 DUB_ENABLE_ENERGY_MATCHING = env_bool("DUB_ENABLE_ENERGY_MATCHING", default=True)
 DUB_MAX_ENERGY_GAIN_DB = float(env_value("DUB_MAX_ENERGY_GAIN_DB", default="7.0"))
 DUB_SOURCE_SEPARATION_ENABLED = env_bool("DUB_SOURCE_SEPARATION_ENABLED", default=True)
@@ -101,6 +102,29 @@ OLLAMA_KEEP_ALIVE = env_value("DUB_OLLAMA_KEEP_ALIVE", default="30m")
 OLLAMA_WARMUP = env_bool("DUB_OLLAMA_WARMUP", default=True)
 OLLAMA_WARMUP_TIMEOUT = max(int(env_value("DUB_OLLAMA_WARMUP_TIMEOUT", default="90")), 15)
 EDGE_TTS_TIMEOUT = max(int(env_value("DUB_EDGE_TTS_TIMEOUT", default="45")), 10)
+EDGE_TTS_CONCURRENCY = max(
+    int(
+        env_value(
+            "DUB_EDGE_TTS_CONCURRENCY",
+            default=str(min(max((os.cpu_count() or 8) // 2, 2), 4)),
+        )
+    ),
+    1,
+)
+VIENEU_TTS_CONCURRENCY = max(
+    int(
+        env_value(
+            "DUB_VIENEU_TTS_CONCURRENCY",
+            default=("1" if DUB_USE_GPU else "2"),
+        )
+    ),
+    1,
+)
+TTS_FIT_CACHE_ENABLED = env_bool("DUB_TTS_FIT_CACHE_ENABLED", default=True)
+VIDEO_X264_PRESET = env_value("DUB_VIDEO_X264_PRESET", default="veryfast") or "veryfast"
+VIDEO_X264_CRF = max(int(env_value("DUB_VIDEO_X264_CRF", default="28")), 18)
+VIDEO_NVENC_PRESET = env_value("DUB_VIDEO_NVENC_PRESET", default="p4") or "p4"
+VIDEO_NVENC_CQ = max(int(env_value("DUB_VIDEO_NVENC_CQ", default="28")), 18)
 TRANSLATE_BATCH_SIZE = max(int(env_value("DUB_TRANSLATE_BATCH_SIZE", default="4")), 1)
 TRANSLATE_FIRST_BATCH_SIZE = max(
     int(env_value("DUB_TRANSLATE_FIRST_BATCH_SIZE", default=str(min(TRANSLATE_BATCH_SIZE, 4)))),

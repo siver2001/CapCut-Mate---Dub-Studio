@@ -14,5 +14,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # pragma: no cover
-        print(f"Pipeline failed: {exc}", file=sys.stderr)
+        try:
+            print(f"Pipeline failed: {exc}", file=sys.stderr)
+        except (BrokenPipeError, OSError):
+            pass
         raise

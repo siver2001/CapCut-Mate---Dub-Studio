@@ -346,7 +346,7 @@ def ensure_ollama_runtime(
     )
     try:
         # Model pull can take several minutes depending on internet speed.
-        print(f"[info] Đang tải model {OLLAMA_MODEL} từ Ollama Hub (có thể mất vài phút)...", flush=True)
+        safe_print(f"[info] Đang tải model {OLLAMA_MODEL} từ Ollama Hub (có thể mất vài phút)...", flush=True)
         run([str(binary), "pull", OLLAMA_MODEL], timeout=600.0)
     except Exception:
         return False
@@ -507,7 +507,7 @@ def run_ollama_prompt(prompt: str, *, max_tokens: int = 2048, temperature: float
         # Increase stall patience on retries
         effective_stall = stall_timeout + attempt * 30.0
         started_at = time.monotonic()
-        print(
+        safe_print(
             f"[info] Đang gửi yêu cầu tới Ollama (lần {attempt + 1}, stall_timeout={effective_stall:.0f}s, stream=true)...",
             flush=True,
         )
@@ -520,12 +520,12 @@ def run_ollama_prompt(prompt: str, *, max_tokens: int = 2048, temperature: float
             if not output:
                 raise RuntimeError("Ollama không trả về nội dung nào.")
             elapsed = time.monotonic() - started_at
-            print(f"[info] Ollama hoàn tất trong {elapsed:.1f}s (JSON response: {len(output)} ký tự).", flush=True)
+            safe_print(f"[info] Ollama hoàn tất trong {elapsed:.1f}s (JSON response: {len(output)} ký tự).", flush=True)
             return output
         except Exception as exc:
             last_exc = exc
             elapsed = time.monotonic() - started_at
-            print(
+            safe_print(
                 f"[warn] Ollama lỗi lần {attempt + 1}: {type(exc).__name__}: "
                 f"{str(exc)[:200]} (sau {elapsed:.1f}s)",
                 flush=True,
@@ -842,7 +842,7 @@ def run_llama_cpp_prompt(prompt: str, *, max_tokens: int, temperature: float | N
     if LLAMA_CPP_N_GPU_LAYERS:
         command.extend(["-ngl", str(LLAMA_CPP_N_GPU_LAYERS)])
     effective_timeout = timeout if timeout is not None else LLAMA_CPP_TIMEOUT
-    print(f"[info] Dang chay llama.cpp (timeout={effective_timeout}s)...", flush=True)
+    safe_print(f"[info] Dang chay llama.cpp (timeout={effective_timeout}s)...", flush=True)
     completed = run(command, cwd=ROOT, capture_output=True, timeout=effective_timeout)
     output = (completed.stdout or "").strip()
     if not output:
@@ -1057,7 +1057,7 @@ def ensure_whisperx_runtime(*, phase: str, step: str, progress: float) -> None:
                 progress=min(progress + 0.04, 0.998),
             )
         except Exception as exc:
-            print(
+            safe_print(
                 f"[warn] WhisperX diarization cache chưa sẵn sàng, sẽ tiếp tục với ASR/alignment và fallback speaker nếu cần: {normalize_text(str(exc))[:220]}",
                 flush=True,
             )

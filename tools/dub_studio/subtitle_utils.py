@@ -82,6 +82,60 @@ def collapse_repeated_pronouns(text: str) -> str:
     return normalize_text(clean)
 
 
+def collapse_repeated_words(text: str) -> str:
+    """Remove consecutive duplicate words or short phrases from text.
+
+    This catches common LLM stuttering patterns and artifacts caused by
+    running build_spoken_text multiple times on the same text.  It handles:
+    - Single word repeats: "mọi mọi chuyện" → "mọi chuyện"
+    - Two-word phrase repeats: "mọi chuyện mọi chuyện" → "mọi chuyện"
+    - Three-word phrase repeats for longer text
+    """
+    clean = normalize_text(text)
+    if not clean:
+        return ""
+    words = clean.split()
+    if len(words) < 3:
+        return clean
+
+    # Pass 1: collapse consecutive identical single words
+    # e.g. "mọi mọi chuyện" → "mọi chuyện"
+    def _token_key(word: str) -> str:
+        normalized = re.sub(r"^[^\wÀ-ỹ]+|[^\wÀ-ỹ]+$", "", word.lower())
+        return normalized or word.lower()
+
+    deduped: list[str] = [words[0]]
+    for word in words[1:]:
+        previous_word = deduped[-1]
+        if (
+            _token_key(word) != _token_key(previous_word)
+            or re.search(r"[,;:.!?…]", previous_word)
+            or re.search(r"[,;:.!?…]", word)
+        ):
+            deduped.append(word)
+    result = " ".join(deduped)
+
+    # Pass 2: collapse consecutive duplicate 2-word phrases
+    # e.g. "mọi chuyện mọi chuyện bắt đầu" → "mọi chuyện bắt đầu"
+    result = re.sub(
+        r"\b(\S+\s+\S+)\s+\1\b",
+        r"\1",
+        result,
+        flags=re.IGNORECASE,
+    )
+
+    # Pass 3: collapse consecutive duplicate 3-word phrases (for longer text)
+    if len(result.split()) >= 8:
+        result = re.sub(
+            r"\b(\S+\s+\S+\s+\S+)\s+\1\b",
+            r"\1",
+            result,
+            flags=re.IGNORECASE,
+        )
+
+    return normalize_text(result)
+
+
 def normalize_first_person_pronouns(text: str) -> str:
     clean = normalize_text(text)
     if not clean:
@@ -157,13 +211,12 @@ def add_light_spoken_filler(text: str, delivery: str) -> str:
     clean = normalize_text(text)
     if not clean:
         return ""
-    if any(clean.lower().endswith(suffix) for suffix in VIETNAMESE_FILLER_SUFFIXES):
+    filler_base = clean.rstrip(" .,!?:;…").lower()
+    if any(filler_base.endswith(suffix) for suffix in VIETNAMESE_FILLER_SUFFIXES):
         return clean
     normalized_delivery = str(delivery or "neutral").strip().lower()
     if len(clean.split()) < 4:
         return clean
-    if normalized_delivery == "curious" and clean.endswith("?"):
-        return clean[:-1].rstrip() + " nhỉ?"
     if normalized_delivery == "excited" and clean.endswith("!"):
         return clean[:-1].rstrip() + " đấy!"
     if normalized_delivery == "suspense" and clean.endswith("..."):
@@ -272,6 +325,7 @@ def build_spoken_text(translated_text: str, source_text: str = "", delivery: str
     spoken = normalize_first_person_pronouns(spoken)
     spoken = prefer_minh_cau_pair(spoken, source_text)
     spoken = collapse_repeated_pronouns(spoken)
+    spoken = collapse_repeated_words(spoken)
     spoken = soften_literal_leading_pronoun(spoken, source_text)
 
     if len(spoken) >= 28:
@@ -291,7 +345,10 @@ def build_spoken_text(translated_text: str, source_text: str = "", delivery: str
             prefer_soft=normalized_delivery in {"calm", "suspense"},
         )
     spoken = add_light_spoken_filler(spoken, normalized_delivery)
-    return smooth_spoken_delivery(spoken, normalized_delivery)
+    spoken = smooth_spoken_delivery(spoken, normalized_delivery)
+    # Final dedup pass: catch any repeated words introduced by
+    # delivery/filler/pause injection above.
+    return collapse_repeated_words(spoken)
 
 
 def parse_srt_timestamp(value: str) -> int:

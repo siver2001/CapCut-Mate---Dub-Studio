@@ -414,7 +414,7 @@ def default_settings() -> dict[str, Any]:
     return {
         "sourceLanguage": "auto",
         "targetLanguage": "vi",
-        "speakerDetectionMode": "auto",
+        "speakerDetectionMode": "narrator",
         "speakerCount": 1,
         "voiceMapping": {},
         "introHook": {
@@ -671,7 +671,7 @@ def build_effective_analysis(job: dict[str, Any] | None) -> dict[str, Any] | Non
     detection_mode = (
         overrides.get("speakerDetectionMode")
         or base.get("renderDefaults", {}).get("speakerDetectionMode")
-        or "auto"
+        or "narrator"
     )
     detected_speaker_count = max(
         1,
@@ -687,14 +687,10 @@ def build_effective_analysis(job: dict[str, Any] | None) -> dict[str, Any] | Non
     requested_speaker_count = max(
         1, min(int(overrides.get("speakerCount") or detected_speaker_count or 1), 4)
     )
-    if detection_mode == "narrator":
-        speaker_count = 1
-    elif detection_mode == "dialogue":
+    if detection_mode == "dialogue":
         speaker_count = requested_speaker_count
-    elif base.get("voiceLayout") == "single_voice":
-        speaker_count = 1
     else:
-        speaker_count = detected_speaker_count
+        speaker_count = 1
     raw_main_speaker_id = base.get("mainSpeakerId") or "speaker_1"
     try:
         main_index = int(str(raw_main_speaker_id).replace("speaker_", ""))

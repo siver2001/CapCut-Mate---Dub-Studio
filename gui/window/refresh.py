@@ -80,7 +80,7 @@ class WindowRefreshMixin:
 
     def refresh_preview(self) -> None:
         self.preview_canvas.update_state(
-            self.effective_analysis or self.analysis,
+            self.preview_media_analysis or self.effective_analysis or self.analysis,
             self.settings,
             self.compute_preview_text(),
         )
@@ -134,12 +134,40 @@ class WindowRefreshMixin:
             self.pause_preview_btn.setEnabled(
                 not running and has_render_preview and preview_available
             )
+        if hasattr(self, "restart_preview_btn"):
+            self.restart_preview_btn.setEnabled(
+                not running and has_render_preview and preview_available
+            )
+        if hasattr(self, "seek_back_preview_btn"):
+            self.seek_back_preview_btn.setEnabled(
+                not running and has_render_preview and preview_available
+            )
+        if hasattr(self, "seek_forward_preview_btn"):
+            self.seek_forward_preview_btn.setEnabled(
+                not running and has_render_preview and preview_available
+            )
         if hasattr(self, "stop_preview_btn"):
             self.stop_preview_btn.setEnabled(
                 not running and has_render_preview and preview_available
             )
+        if hasattr(self, "fullscreen_preview_btn"):
+            self.fullscreen_preview_btn.setEnabled(
+                not running and has_render_preview and preview_available
+            )
         if hasattr(self, "render_preview_seek_slider"):
             self.render_preview_seek_slider.setEnabled(
+                not running and has_render_preview and preview_available
+            )
+        if hasattr(self, "mute_preview_btn"):
+            self.mute_preview_btn.setEnabled(
+                not running and has_render_preview and preview_available
+            )
+        if hasattr(self, "render_preview_volume_slider"):
+            self.render_preview_volume_slider.setEnabled(
+                not running and has_render_preview and preview_available
+            )
+        if hasattr(self, "render_preview_speed_combo"):
+            self.render_preview_speed_combo.setEnabled(
                 not running and has_render_preview and preview_available
             )
         if hasattr(self, "import_srt_btn"):
@@ -173,11 +201,14 @@ class WindowRefreshMixin:
         self.summary_labels["cleanupMode"].setText(
             str((analysis.get("subtitleRegion") or {}).get("cleanupMode") or "--")
         )
-        self.warning_box.setPlainText(
-            "\\n".join(
-                repair_mojibake_text(item) for item in (analysis.get("warnings") or [])
+        warning_box = getattr(self, "warning_box", None)
+        if warning_box is not None:
+            warning_box.setPlainText(
+                "\\n".join(
+                    repair_mojibake_text(item)
+                    for item in (analysis.get("warnings") or [])
+                )
             )
-        )
         subtitle_timeline = analysis.get("subtitleTimeline") or []
         timeline_lines = []
         for item in subtitle_timeline[:12]:
@@ -186,7 +217,9 @@ class WindowRefreshMixin:
                     f"{item.get('startMs', 0) / 1000:.1f}s | {item.get('speakerId') or '--'} | {normalize_preview_text(item.get('text'))}"
                 )
             )
-        self.timeline_box.setPlainText("\\n".join(timeline_lines))
+        timeline_box = getattr(self, "timeline_box", None)
+        if timeline_box is not None:
+            timeline_box.setPlainText("\\n".join(timeline_lines))
         if hasattr(self, "subtitle_editor_status"):
             source_label = str(analysis.get("subtitleTimelineSource") or "ai_generated")
             pretty_source = {
@@ -278,6 +311,12 @@ class WindowRefreshMixin:
         self.output_folder_quick_edit.setText(output_directory)
         self.output_folder_quick_edit.setToolTip(output_directory)
         self.output_folder_quick_edit.setCursorPosition(0)
+        if hasattr(self, "_apply_render_preview_audio_state"):
+            self._apply_render_preview_audio_state()
+        if hasattr(self, "_apply_render_preview_playback_rate"):
+            self._apply_render_preview_playback_rate()
+        if hasattr(self, "_update_render_preview_button_labels"):
+            self._update_render_preview_button_labels()
         self._update_color_button_styles()
         self._configure_responsive_widgets()
         self._repair_widget_texts()

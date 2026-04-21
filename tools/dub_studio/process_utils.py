@@ -11,13 +11,28 @@ from typing import Any
 from .config import DUB_STUDIO_DIR
 
 
+def safe_print(*parts: Any, flush: bool = False, file: Any | None = None) -> None:
+    kwargs: dict[str, Any] = {"flush": flush}
+    if file is not None:
+        kwargs["file"] = file
+    try:
+        print(*parts, **kwargs)
+    except UnicodeEncodeError:
+        safe_parts = [
+            str(part).encode("ascii", errors="backslashreplace").decode("ascii")
+            for part in parts
+        ]
+        try:
+            print(*safe_parts, **kwargs)
+        except (BrokenPipeError, OSError):
+            return
+    except (BrokenPipeError, OSError):
+        return
+
+
 def emit(prefix: str, payload: dict[str, Any]) -> None:
     line = f"{prefix}::{json.dumps(payload, ensure_ascii=False)}"
-    try:
-        print(line, flush=True)
-    except UnicodeEncodeError:
-        safe_line = f"{prefix}::{json.dumps(payload, ensure_ascii=True)}"
-        print(safe_line, flush=True)
+    safe_print(line, flush=True)
 
 
 def emit_progress(

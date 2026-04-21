@@ -39,10 +39,15 @@ from .translation import (
 )
 
 def stable_video_codec() -> tuple[str, list[str]]:
-    # Match the older test pipeline defaults because they are slower but much
-    # more predictable across Windows laptops and mixed driver setups.
-    # CRF 23 is the standard balance between quality and file size.
-    return "libx264", ["-preset", "medium", "-crf", "28", "-pix_fmt", "yuv420p"]
+    # Favor a faster default preset for interactive dubbing/export iterations.
+    return "libx264", [
+        "-preset",
+        VIDEO_X264_PRESET,
+        "-crf",
+        str(VIDEO_X264_CRF),
+        "-pix_fmt",
+        "yuv420p",
+    ]
 
 
 @lru_cache(maxsize=1)
@@ -139,8 +144,16 @@ def choose_video_codec() -> tuple[str, list[str]]:
     if mode == "cpu_stable":
         return stable_video_codec()
     if can_use_nvenc():
-        # CQ 23-24 for NVENC is roughly equivalent to CRF 23 for x264
-        return "h264_nvenc", ["-preset", "p5", "-rc", "vbr", "-cq", "28", "-pix_fmt", "yuv420p"]
+        return "h264_nvenc", [
+            "-preset",
+            VIDEO_NVENC_PRESET,
+            "-rc",
+            "vbr",
+            "-cq",
+            str(VIDEO_NVENC_CQ),
+            "-pix_fmt",
+            "yuv420p",
+        ]
     return stable_video_codec()
 
 
@@ -192,42 +205,27 @@ def burn_subtitles(
 
     dynamic_regions = [region for region in (dynamic_regions or []) if int(region.get("w", 0)) > 0 and int(region.get("h", 0)) > 0]
 
-    # When there are too many dynamic regions, the filter_complex chain becomes
-    # extremely heavy (each region adds split→crop→blur→overlay) and can cause
-    # FFmpeg to hang indefinitely on the first frame.  Fall back to a single
-    # static blur region that covers the whole subtitle area for the entire
-    # video duration.
-    MAX_DYNAMIC_REGIONS = 30
-    if len(dynamic_regions) > MAX_DYNAMIC_REGIONS:
-        print(f"[warn] {len(dynamic_regions)} dynamic regions detected – collapsing to static region to avoid FFmpeg hang.", flush=True)
-        dynamic_regions = []
-
     if dynamic_regions:
         if cleanup_mode == "localized_blur":
-            filter_parts: list[str] = []
-            current_label = "v0"
-            filter_parts.append(f"[0:v]null[{current_label}]")
-            for idx, region in enumerate(dynamic_regions, start=1):
-                next_label = f"v{idx}"
-                start_t = max(int(region.get("startMs", 0)), 0) / 1000
-                end_t = max(int(region.get("endMs", 0)), 0) / 1000
-                x = max(int(region.get("x", region_x)), 0)
-                y = max(int(region.get("y", region_y)), 0)
-                w = max(int(region.get("w", region_w)), 1)
-                h = max(int(region.get("h", region_h)), 1)
-                base_label = f"base{idx}"
-                crop_label = f"crop{idx}"
-                blur_label = f"blur{idx}"
-                filter_parts.append(f"[{current_label}]split=2[{base_label}][{crop_label}]")
-                filter_parts.append(
-                    f"[{crop_label}]crop=w={w}:h={h}:x={x}:y={y},{blur_filter}[{blur_label}]"
-                )
-                filter_parts.append(
-                    f"[{base_label}][{blur_label}]overlay={x}:{y}:enable='between(t,{start_t:.3f},{end_t:.3f})'[{next_label}]"
-                )
-                current_label = next_label
-            filter_parts.append(f"[{current_label}]{subtitles_filter}[vout]")
-            video_filter = ";".join(filter_parts)
+            drawbox_chain = ",".join(
+                [
+                    "drawbox="
+                    f"x={max(int(region.get('x', region_x)), 0)}:"
+                    f"y={max(int(region.get('y', region_y)), 0)}:"
+                    f"w={max(int(region.get('w', region_w)), 1)}:"
+                    f"h={max(int(region.get('h', region_h)), 1)}:"
+                    "color=white:t=fill:"
+                    f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
+                    for region in dynamic_regions
+                ]
+            )
+            video_filter = (
+                "[0:v]split=3[orig][blur_src][mask_src];"
+                f"[blur_src]{blur_filter}[blurred];"
+                f"[mask_src]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,{drawbox_chain}[mask];"
+                "[orig][blurred][mask]maskedmerge[merged];"
+                f"[merged]{subtitles_filter}[vout]"
+            )
             filter_arg = "-filter_complex"
             video_map = "[vout]"
         elif cleanup_mode == "localized_mask":
@@ -1411,8 +1409,8 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
 
     emit_progress(phase="render", step="prepare", progress=0.08, message="Đang chuẩn bị dữ liệu render")
     os.environ["CAPCUT_VIDEO_CODEC_MODE"] = video_codec_mode
-    print(f"Using video codec mode: {video_codec_mode}", flush=True)
-    print(f"Using video codec: {choose_video_codec()[0]}", flush=True)
+    safe_print(f"Using video codec mode: {video_codec_mode}", flush=True)
+    safe_print(f"Using video codec: {choose_video_codec()[0]}", flush=True)
     translated_cache_path = dirs["analysis"] / "translated.json"
     editable_subtitle_timeline = analysis.get("subtitleTimeline") or []
     segments = (

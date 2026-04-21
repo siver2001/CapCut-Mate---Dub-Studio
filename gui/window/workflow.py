@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import shutil
 from pathlib import Path
@@ -30,10 +31,57 @@ from gui.utils import (
     repair_mojibake_text,
     resolve_intro_voice_preset,
 )
+from tools.dub_studio.media_utils import extract_thumbnail, get_video_meta
+from tools.dub_studio.render_utils import default_subtitle_region
 from tools.dub_studio.subtitle_utils import compose_srt_from_timeline, parse_srt_to_timeline
 
 
 class WindowWorkflowMixin:
+    def _build_quick_preview_analysis(self, video_path: Path) -> dict[str, Any] | None:
+        resolved_path = video_path.expanduser().resolve()
+        if not resolved_path.exists() or not resolved_path.is_file():
+            return None
+        cache_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "preview_cache")
+        stat = resolved_path.stat()
+        cache_key = hashlib.sha1(
+            f"{resolved_path}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
+        ).hexdigest()[:16]
+        thumbnail_path = cache_dir / f"{cache_key}.jpg"
+        video_meta = get_video_meta(resolved_path)
+        if not thumbnail_path.exists() or thumbnail_path.stat().st_size <= 0:
+            extract_thumbnail(resolved_path, thumbnail_path)
+        subtitle_region = default_subtitle_region(video_meta)
+        return {
+            "inputPath": str(resolved_path),
+            "thumbnailPath": str(thumbnail_path) if thumbnail_path.exists() else "",
+            "videoMeta": video_meta,
+            "subtitleRegion": subtitle_region,
+            "warnings": [],
+            "subtitleTimeline": [],
+            "segments": [],
+        }
+
+    def show_source_video_preview(
+        self,
+        video_path: str | Path,
+        *,
+        switch_to_preview_tab: bool = False,
+        refresh_all: bool = False,
+    ) -> None:
+        try:
+            preview_analysis = self._build_quick_preview_analysis(Path(video_path))
+        except Exception:
+            preview_analysis = None
+        self.preview_media_analysis = preview_analysis
+        if switch_to_preview_tab and hasattr(self, "main_tabs") and hasattr(
+            self, "preview_page"
+        ):
+            self.main_tabs.setCurrentWidget(self.preview_page)
+        if refresh_all:
+            self.refresh_all()
+        else:
+            self.refresh_preview()
+
     @staticmethod
     def _format_render_preview_time(ms: int) -> str:
         total_seconds = max(0, int(ms // 1000))
@@ -72,6 +120,61 @@ class WindowWorkflowMixin:
             self.render_preview_seek_slider.blockSignals(False)
         self._set_render_preview_time_labels(0, self._render_preview_duration_ms)
 
+    def _update_render_preview_button_labels(self) -> None:
+        is_playing = False
+        if self.render_preview_player is not None:
+            playback_state = getattr(self.render_preview_player, "playbackState", None)
+            if callable(playback_state):
+                is_playing = (
+                    playback_state() == QMediaPlayer.PlaybackState.PlayingState
+                )
+        if hasattr(self, "pause_preview_btn"):
+            self.pause_preview_btn.setText("Tạm dừng" if is_playing else "Phát")
+        if hasattr(self, "mute_preview_btn"):
+            self.mute_preview_btn.setText(
+                "Bật tiếng" if self._render_preview_muted else "Tắt tiếng"
+            )
+        if hasattr(self, "fullscreen_preview_btn") and self.render_video_widget is not None:
+            is_fullscreen = bool(
+                getattr(self.render_video_widget, "isFullScreen", lambda: False)()
+            )
+            self.fullscreen_preview_btn.setText(
+                "Thu nhỏ" if is_fullscreen else "Toàn màn hình"
+            )
+
+    def _apply_render_preview_audio_state(self) -> None:
+        safe_volume = max(0, min(int(self._render_preview_volume), 100))
+        if hasattr(self, "render_preview_volume_slider"):
+            self.render_preview_volume_slider.blockSignals(True)
+            self.render_preview_volume_slider.setValue(safe_volume)
+            self.render_preview_volume_slider.blockSignals(False)
+        if hasattr(self, "render_preview_volume_value"):
+            label = "Tắt tiếng" if self._render_preview_muted else f"{safe_volume}%"
+            self.render_preview_volume_value.setText(label)
+        if self.render_preview_audio_output is not None:
+            effective_volume = 0 if self._render_preview_muted else safe_volume
+            self.render_preview_audio_output.setVolume(effective_volume / 100.0)
+        self._update_render_preview_button_labels()
+
+    def _apply_render_preview_playback_rate(self) -> None:
+        safe_rate = max(0.25, min(float(self._render_preview_playback_rate), 3.0))
+        self._render_preview_playback_rate = safe_rate
+        if hasattr(self, "render_preview_speed_combo"):
+            self._set_combo_value(self.render_preview_speed_combo, str(safe_rate))
+        if self.render_preview_player is not None:
+            self.render_preview_player.setPlaybackRate(safe_rate)
+
+    def _current_render_player_position(self) -> int:
+        if self.render_preview_player is None:
+            return 0
+        position_getter = getattr(self.render_preview_player, "position", None)
+        if callable(position_getter):
+            try:
+                return max(0, int(position_getter()))
+            except Exception:
+                return 0
+        return 0
+
     def choose_video(self) -> None:
         if self.controller.has_running_job():
             QMessageBox.warning(
@@ -89,11 +192,16 @@ class WindowWorkflowMixin:
         self.job_id = None
         self.analysis = None
         self.effective_analysis = None
+        self.preview_media_analysis = None
         self.job_status = None
         self.last_output_path = ""
         self.last_exported_output_path = ""
         self.stop_render_preview(clear_source=True)
-        self.refresh_all()
+        self.show_source_video_preview(
+            path,
+            switch_to_preview_tab=True,
+            refresh_all=True,
+        )
 
     def choose_directory(self, target_edit: QLineEdit) -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -265,11 +373,14 @@ class WindowWorkflowMixin:
             )
             return
         self.last_output_path = str(video_path)
-        if hasattr(self, "main_tabs") and hasattr(self, "preview_page"):
-            self.main_tabs.setCurrentWidget(self.preview_page)
+        if hasattr(self, "main_tabs") and hasattr(self, "render_page"):
+            self.main_tabs.setCurrentWidget(self.render_page)
         self.render_preview_player.stop()
         self.render_preview_player.setSource(QUrl.fromLocalFile(str(video_path)))
+        self._apply_render_preview_audio_state()
+        self._apply_render_preview_playback_rate()
         self.render_preview_player.play()
+        self._update_render_preview_button_labels()
         if hasattr(self, "render_preview_status_label"):
             self.render_preview_status_label.setText(
                 repair_mojibake_text(
@@ -277,14 +388,41 @@ class WindowWorkflowMixin:
                 )
             )
 
+    def restart_render_preview(self) -> None:
+        if self.render_preview_player is None:
+            return
+        self.render_preview_player.setPosition(0)
+        self.render_preview_player.play()
+        self._update_render_preview_button_labels()
+        self._set_render_preview_time_labels(0, self._render_preview_duration_ms)
+
+    def seek_render_preview_relative(self, delta_ms: int) -> None:
+        if self.render_preview_player is None:
+            return
+        target_position = max(
+            0,
+            min(
+                self._current_render_player_position() + int(delta_ms),
+                self._render_preview_duration_ms,
+            ),
+        )
+        self.render_preview_player.setPosition(target_position)
+        self._set_render_preview_time_labels(
+            target_position, self._render_preview_duration_ms
+        )
+
     def pause_render_preview(self) -> None:
         if self.render_preview_player is None:
             return
         playback_state = getattr(self.render_preview_player, "playbackState", None)
         if callable(playback_state):
             current_state = playback_state()
+            if current_state == QMediaPlayer.PlaybackState.StoppedState:
+                self.preview_rendered_video()
+                return
             if current_state == QMediaPlayer.PlaybackState.PausedState:
                 self.render_preview_player.play()
+                self._update_render_preview_button_labels()
                 preview_path = (
                     Path(self._current_render_preview_path()).name or "video render"
                 )
@@ -296,6 +434,7 @@ class WindowWorkflowMixin:
                     )
                 return
         self.render_preview_player.pause()
+        self._update_render_preview_button_labels()
         preview_path = Path(self._current_render_preview_path()).name or "video render"
         if hasattr(self, "render_preview_status_label"):
             self.render_preview_status_label.setText(
@@ -308,6 +447,7 @@ class WindowWorkflowMixin:
             if clear_source:
                 self.render_preview_player.setSource(QUrl())
         self._reset_render_preview_timeline(clear_duration=clear_source)
+        self._update_render_preview_button_labels()
         if clear_source and hasattr(self, "render_preview_status_label"):
             self.render_preview_status_label.setText(
                 "Chưa có video render để xem trước."
@@ -317,6 +457,41 @@ class WindowWorkflowMixin:
             self.render_preview_status_label.setText(
                 repair_mojibake_text(f"Đã dừng preview: {preview_path}")
             )
+
+    def toggle_render_preview_mute(self) -> None:
+        self._render_preview_muted = not self._render_preview_muted
+        self._apply_render_preview_audio_state()
+
+    def on_render_preview_volume_changed(self, value: int) -> None:
+        self._render_preview_volume = max(0, min(int(value), 100))
+        if self._render_preview_volume > 0 and self._render_preview_muted:
+            self._render_preview_muted = False
+        self._apply_render_preview_audio_state()
+
+    def on_render_preview_speed_changed(self) -> None:
+        if not hasattr(self, "render_preview_speed_combo"):
+            return
+        try:
+            self._render_preview_playback_rate = float(
+                self.render_preview_speed_combo.currentData() or 1.0
+            )
+        except Exception:
+            self._render_preview_playback_rate = 1.0
+        self._apply_render_preview_playback_rate()
+
+    def toggle_render_preview_fullscreen(self) -> None:
+        if self.render_video_widget is None:
+            return
+        is_fullscreen = bool(
+            getattr(self.render_video_widget, "isFullScreen", lambda: False)()
+        )
+        if hasattr(self.render_video_widget, "setFullScreen"):
+            self.render_video_widget.setFullScreen(not is_fullscreen)
+        elif is_fullscreen:
+            self.render_video_widget.showNormal()
+        else:
+            self.render_video_widget.showFullScreen()
+        self._update_render_preview_button_labels()
 
     def _on_render_preview_duration_changed(self, duration: int) -> None:
         self._render_preview_duration_ms = max(0, int(duration))
@@ -348,6 +523,12 @@ class WindowWorkflowMixin:
             self._set_render_preview_time_labels(
                 safe_position, self._render_preview_duration_ms
             )
+
+    def _on_render_preview_playback_state_changed(self, _state) -> None:
+        self._update_render_preview_button_labels()
+
+    def _on_render_preview_fullscreen_changed(self, _fullscreen: bool) -> None:
+        self._update_render_preview_button_labels()
 
     def on_render_preview_slider_pressed(self) -> None:
         self._render_preview_scrubbing = True
@@ -567,14 +748,19 @@ class WindowWorkflowMixin:
         self._set_subtitle_timeline(timeline, source="edited")
 
     def on_analysis_ready(self, job_id: str, analysis: dict[str, Any]) -> None:
+        if self._is_batch_job(job_id):
+            return
         self.job_id = job_id
         self.analysis = copy.deepcopy(self.controller.jobs[job_id]["analysis"])
         self.effective_analysis = analysis
+        self.preview_media_analysis = None
         self.hydrate_settings_from_analysis(analysis)
         self.rebuild_voice_mapping_ui()
         self.refresh_all()
 
     def on_render_ready(self, job_id: str, payload: dict[str, Any]) -> None:
+        if self._is_batch_job(job_id):
+            return
         self.last_output_path = (
             payload.get("previewVideoPath")
             or payload.get("outputVideoPath")
@@ -593,11 +779,15 @@ class WindowWorkflowMixin:
             )
 
     def on_status_changed(self, job_id: str, payload: dict[str, Any]) -> None:
+        if self._is_batch_job(job_id):
+            return
         if self.job_id == job_id:
             self.job_status = payload
             self.refresh_status_only()
 
     def on_job_failed(self, job_id: str, message: str) -> None:
+        if self._is_batch_job(job_id):
+            return
         if self.job_id == job_id:
             self.stop_render_preview()
             if not getattr(self, "_batch_running", False):
@@ -607,6 +797,7 @@ class WindowWorkflowMixin:
         message = repair_mojibake_text(
             error_string or "Không thể phát video preview trong giao diện."
         )
+        self._update_render_preview_button_labels()
         if hasattr(self, "render_preview_status_label"):
             self.render_preview_status_label.setText("Phát video thất bại")
         QMessageBox.warning(self, "Không thể xem preview", message)
@@ -693,10 +884,6 @@ class WindowWorkflowMixin:
         self.settings["speakerDetectionMode"] = mode
         if mode == "narrator":
             self.speaker_count_spin.setValue(1)
-        elif mode == "auto":
-            self.speaker_count_spin.setValue(
-                max(1, len((self.effective_analysis or {}).get("speakers") or []))
-            )
         else:
             detected_raw = int(
                 (self.analysis or {}).get("detectedSpeakerCountRaw")

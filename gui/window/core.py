@@ -74,6 +74,7 @@ class DubStudioWindow(
         self.job_status: dict[str, Any] | None = None
         self.last_output_path = ""
         self.last_exported_output_path = ""
+        self.preview_media_analysis: dict[str, Any] | None = None
         self.settings = default_settings()
         self.voice_combo_map: dict[str, Any] = {}
         self.animated_cards: list[Any] = []
@@ -96,6 +97,9 @@ class DubStudioWindow(
         self.render_video_widget = QVideoWidget(self) if QVideoWidget else None
         self._render_preview_duration_ms = 0
         self._render_preview_scrubbing = False
+        self._render_preview_muted = False
+        self._render_preview_volume = 100
+        self._render_preview_playback_rate = 1.0
         if self.voice_player is not None and self.voice_audio_output is not None:
             self.voice_audio_output.setVolume(0.92)
             self.voice_player.setAudioOutput(self.voice_audio_output)
@@ -110,6 +114,12 @@ class DubStudioWindow(
             self.render_preview_player.setAudioOutput(self.render_preview_audio_output)
             if self.render_video_widget is not None:
                 self.render_preview_player.setVideoOutput(self.render_video_widget)
+                try:
+                    self.render_video_widget.fullScreenChanged.connect(
+                        self._on_render_preview_fullscreen_changed
+                    )
+                except Exception:
+                    pass
             self.render_preview_player.errorOccurred.connect(
                 self._handle_render_preview_error
             )
@@ -118,6 +128,9 @@ class DubStudioWindow(
             )
             self.render_preview_player.durationChanged.connect(
                 self._on_render_preview_duration_changed
+            )
+            self.render_preview_player.playbackStateChanged.connect(
+                self._on_render_preview_playback_state_changed
             )
         self._configure_responsive_widgets()
         self.preview_canvas.subtitle_dragged.connect(self.on_preview_subtitle_dragged)

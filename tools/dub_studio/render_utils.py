@@ -9,10 +9,13 @@ from .subtitle_utils import normalize_text
 def default_subtitle_region(video_meta: dict[str, Any]) -> dict[str, Any]:
     width = int(video_meta["width"])
     height = int(video_meta["height"])
-    region_width = int(width * 0.68)
-    region_height = int(max(height * 0.085, 92))
+    # Thu hẹp vùng làm mờ từ 0.68 -> 0.45 chiều rộng để không quá rộng
+    region_width = int(width * 0.45)
+    # Giảm chiều cao từ 0.085 -> 0.05 và min = 60 để không quá to
+    region_height = int(max(height * 0.05, 60))
     x = max((width - region_width) // 2, 0)
-    y = max(height - region_height - int(height * 0.035), 0)
+    # Tinh chỉnh lại vị trí Y để nằm sát dưới hơn một chút, bớt che video
+    y = max(height - region_height - int(height * 0.04), 0)
     return {
         "detected": False,
         "cleanupMode": "localized_blur",

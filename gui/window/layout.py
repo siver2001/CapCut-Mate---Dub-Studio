@@ -849,12 +849,28 @@ class WindowLayoutMixin:
             render_video_layout.addWidget(self.render_video_unavailable_label, 1)
         render_controls = QHBoxLayout()
         render_controls.setSpacing(10)
+        self.restart_preview_btn = self._make_button("Từ đầu", "ghost")
+        self.restart_preview_btn.clicked.connect(self.restart_render_preview)
+        self.seek_back_preview_btn = self._make_button("Lùi 10s", "ghost")
+        self.seek_back_preview_btn.clicked.connect(
+            lambda: self.seek_render_preview_relative(-10000)
+        )
         self.pause_preview_btn = self._make_button("Tạm dừng", "ghost")
         self.pause_preview_btn.clicked.connect(self.pause_render_preview)
+        self.seek_forward_preview_btn = self._make_button("Tiến 10s", "ghost")
+        self.seek_forward_preview_btn.clicked.connect(
+            lambda: self.seek_render_preview_relative(10000)
+        )
         self.stop_preview_btn = self._make_button("Dừng phát", "ghost")
         self.stop_preview_btn.clicked.connect(self.stop_render_preview)
+        self.fullscreen_preview_btn = self._make_button("Toàn màn hình", "ghost")
+        self.fullscreen_preview_btn.clicked.connect(self.toggle_render_preview_fullscreen)
+        render_controls.addWidget(self.restart_preview_btn)
+        render_controls.addWidget(self.seek_back_preview_btn)
         render_controls.addWidget(self.pause_preview_btn)
+        render_controls.addWidget(self.seek_forward_preview_btn)
         render_controls.addWidget(self.stop_preview_btn)
+        render_controls.addWidget(self.fullscreen_preview_btn)
         render_controls.addStretch(1)
         render_video_layout.addLayout(render_controls)
         seek_row = QHBoxLayout()
@@ -879,44 +895,44 @@ class WindowLayoutMixin:
         seek_row.addWidget(self.render_preview_seek_slider, 1)
         seek_row.addWidget(self.render_preview_duration_label)
         render_video_layout.addLayout(seek_row)
-        preview_page_layout.addWidget(render_video_card, 2)
-
-        analysis_card, analysis_layout = self._make_card(
-            "Chi tiết phân tích",
-            "Cảnh báo và timeline được gom chung để kiểm tra nhanh mà vẫn không làm giao diện quá dài.",
+        audio_row = QHBoxLayout()
+        audio_row.setSpacing(10)
+        self.mute_preview_btn = self._make_button("Tắt tiếng", "ghost")
+        self.mute_preview_btn.clicked.connect(self.toggle_render_preview_mute)
+        self.render_preview_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.render_preview_volume_slider.setRange(0, 100)
+        self.render_preview_volume_slider.setValue(100)
+        self.render_preview_volume_slider.valueChanged.connect(
+            self.on_render_preview_volume_changed
         )
-        analysis_split = QHBoxLayout()
-        analysis_split.setSpacing(14)
-        warning_col = QVBoxLayout()
-        warning_col.addWidget(self._field_label("Cảnh báo"))
-        self.warning_box = QPlainTextEdit()
-        self.warning_box.setReadOnly(True)
-        self.warning_box.setPlaceholderText(
-            "Cảnh báo và ghi chú sau khi phân tích sẽ hiện ở đây."
+        self.render_preview_volume_value = QLabel("100%")
+        self.render_preview_volume_value.setObjectName("FieldLabel")
+        self.render_preview_speed_combo = self._make_combo(
+            [
+                ("0.75", "0.75x"),
+                ("1.0", "1x"),
+                ("1.25", "1.25x"),
+                ("1.5", "1.5x"),
+                ("2.0", "2x"),
+            ],
+            self.on_render_preview_speed_changed,
         )
-        warning_col.addWidget(self.warning_box)
-        self.warning_box.setMinimumHeight(100)
-        self.warning_box.setMaximumHeight(160)
-        timeline_col = QVBoxLayout()
-        timeline_col.addWidget(self._field_label("Timeline thoại"))
-        self.timeline_box = QPlainTextEdit()
-        self.timeline_box.setReadOnly(True)
-        self.timeline_box.setPlaceholderText(
-            "Các câu thoại đầu tiên sẽ được hiển thị để bạn kiểm tra speaker."
-        )
-        timeline_col.addWidget(self.timeline_box)
-        self.timeline_box.setMinimumHeight(100)
-        self.timeline_box.setMaximumHeight(160)
-        analysis_split.addLayout(warning_col, 4)
-        analysis_split.addLayout(timeline_col, 5)
-        analysis_layout.addLayout(analysis_split)
-        preview_page_layout.addWidget(analysis_card, 2)
+        self._set_combo_value(self.render_preview_speed_combo, "1.0")
+        audio_row.addWidget(self.mute_preview_btn)
+        audio_row.addWidget(self._field_label("Âm lượng"))
+        audio_row.addWidget(self.render_preview_volume_slider, 1)
+        audio_row.addWidget(self.render_preview_volume_value)
+        audio_row.addSpacing(10)
+        audio_row.addWidget(self._field_label("Tốc độ"))
+        audio_row.addWidget(self.render_preview_speed_combo)
+        render_video_layout.addLayout(audio_row)
         self.main_tabs.addTab(preview_page, "Preview")
 
-        subtitle_page = QWidget()
-        subtitle_page_layout = QVBoxLayout(subtitle_page)
-        subtitle_page_layout.setContentsMargins(0, 0, 0, 0)
-        subtitle_page_layout.setSpacing(14)
+        subtitle_status_page = QWidget()
+        subtitle_status_page_layout = QVBoxLayout(subtitle_status_page)
+        subtitle_status_page_layout.setContentsMargins(0, 0, 0, 0)
+        subtitle_status_page_layout.setSpacing(14)
+        subtitle_status_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         subtitle_card, subtitle_layout = self._make_card(
             "Subtitle timeline",
             "Toàn bộ câu thoại được giữ theo mốc thời gian hiện hành. Bạn có thể sửa trực tiếp, import file SRT ngoài hoặc export SRT đang dùng trước khi render.",
@@ -952,12 +968,12 @@ class WindowLayoutMixin:
         self.subtitle_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
         )
-        self.subtitle_table.setMinimumHeight(200)
-        self.subtitle_table.setMaximumHeight(350)
+        self.subtitle_table.setMinimumHeight(180)
+        self.subtitle_table.setMaximumHeight(240)
         self.subtitle_table.itemChanged.connect(self.on_subtitle_table_item_changed)
         subtitle_layout.addWidget(self.subtitle_table)
-        subtitle_page_layout.addWidget(subtitle_card, 1)
-        self.main_tabs.addTab(subtitle_page, "Subtitle")
+        subtitle_status_page_layout.addWidget(subtitle_card)
+        self.main_tabs.addTab(subtitle_status_page, "Subtitle & tiến trình")
 
         settings_card, settings_layout = self._make_card(
             "Thiết lập thông minh",
@@ -1164,8 +1180,8 @@ class WindowLayoutMixin:
         settings_page = QWidget()
         settings_page_layout = QVBoxLayout(settings_page)
         settings_page_layout.setContentsMargins(0, 0, 0, 0)
+        settings_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         settings_page_layout.addWidget(settings_card)
-        settings_page_layout.addStretch(1)
         self.main_tabs.addTab(settings_page, "Thiết lập")
 
         voice_card, voice_layout_root = self._make_card(
@@ -1182,16 +1198,19 @@ class WindowLayoutMixin:
         voice_page = QWidget()
         voice_page_layout = QVBoxLayout(voice_page)
         voice_page_layout.setContentsMargins(0, 0, 0, 0)
+        voice_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         voice_page_layout.addWidget(voice_card)
-        voice_page_layout.addStretch(1)
         self.main_tabs.addTab(voice_page, "Nhân vật")
 
         status_card, status_layout = self._make_card(
             "Tiến trình & nhật ký",
             "Theo dõi phase chạy pipeline, phần trăm hoàn thành và log chi tiết ngay trong ứng dụng.",
         )
+        status_layout.setContentsMargins(18, 10, 18, 18)
+        status_layout.setSpacing(8)
         progress_row = QHBoxLayout()
         progress_row.setSpacing(12)
+        progress_row.setContentsMargins(0, 0, 0, 0)
         self.phase_label = self._make_chip("Trạng thái: idle")
         self.step_label = self._make_chip("Bước: chờ")
         progress_row.addWidget(self.phase_label)
@@ -1206,20 +1225,38 @@ class WindowLayoutMixin:
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setPlaceholderText("Log chạy pipeline sẽ hiển thị tại đây.")
-        self.log_box.setMinimumHeight(150)
-        self.log_box.setMaximumHeight(280)
+        self.log_box.setMinimumHeight(180)
+        self.log_box.setMaximumHeight(260)
         status_layout.addWidget(self.log_box)
-        status_page = QWidget()
-        status_page_layout = QVBoxLayout(status_page)
-        status_page_layout.setContentsMargins(0, 0, 0, 0)
-        status_page_layout.addWidget(status_card)
-        self.main_tabs.addTab(status_page, "Tiến trình")
+        subtitle_status_page_layout.insertWidget(0, status_card)
+
+        render_page = QWidget()
+        self.render_page = render_page
+        render_page_layout = QVBoxLayout(render_page)
+        render_page_layout.setContentsMargins(0, 0, 0, 0)
+        render_page_layout.setSpacing(14)
+        render_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        render_result_card, render_result_layout = self._make_card(
+            "Thành phẩm sau render",
+            "Toàn bộ video render nội bộ sẽ được gom tại đây để bạn xem lại, tua nhanh và kiểm tra trước khi xuất file.",
+        )
+        render_result_note = QLabel(
+            "Tab này nằm ngay trước Batch để tách riêng phần thành phẩm khỏi khu chỉnh preview."
+        )
+        render_result_note.setObjectName("SectionHint")
+        render_result_note.setWordWrap(True)
+        render_result_layout.addWidget(render_result_note)
+        render_result_layout.addWidget(render_video_card)
+        render_page_layout.addWidget(render_result_card)
+        self.main_tabs.addTab(render_page, "Thành phẩm")
 
         # ── Batch Processing Tab ────────────────────────────────────
         batch_page = QWidget()
         batch_page_layout = QVBoxLayout(batch_page)
         batch_page_layout.setContentsMargins(0, 0, 0, 0)
         batch_page_layout.setSpacing(14)
+        batch_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         batch_queue_card, batch_queue_layout = self._make_card(
             "Xử lý hàng loạt",
@@ -1259,7 +1296,7 @@ class WindowLayoutMixin:
 
         self.batch_table = QTableWidget(0, 5)
         self.batch_table.setHorizontalHeaderLabels(
-            ["#", "Tên video", "Trạng thái", "Tiến độ", "Output"]
+            ["#", "Tên video", "Trạng thái", "Tiến độ video", "Output"]
         )
         self.batch_table.verticalHeader().setVisible(False)
         self.batch_table.setAlternatingRowColors(True)
@@ -1269,6 +1306,7 @@ class WindowLayoutMixin:
         self.batch_table.setSelectionMode(
             QTableWidget.SelectionMode.SingleSelection
         )
+        self.batch_table.itemSelectionChanged.connect(self.batch_preview_selected)
         self.batch_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
         )
@@ -1322,24 +1360,26 @@ class WindowLayoutMixin:
         self.batch_progress_bar = QProgressBar()
         self.batch_progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.batch_progress_bar.setTextVisible(True)
-        self.batch_progress_bar.setFormat("Batch: %p%")
+        self.batch_progress_bar.setFormat("Tổng batch: %p%")
         batch_queue_layout.addWidget(self.batch_progress_bar)
 
-        batch_page_layout.addWidget(batch_queue_card, 3)
+        batch_page_layout.addWidget(batch_queue_card)
 
         batch_log_card, batch_log_layout = self._make_card(
             "Nhật ký batch",
-            "Toàn bộ quá trình xử lý hàng loạt được ghi lại để theo dõi tiến trình và debug nếu cần.",
+            "Hiển thị các mốc chính của batch để theo dõi nhanh mà không kéo giao diện quá dài.",
         )
+        batch_log_layout.setContentsMargins(18, 10, 18, 18)
+        batch_log_layout.setSpacing(8)
         self.batch_log_box = QPlainTextEdit()
         self.batch_log_box.setReadOnly(True)
         self.batch_log_box.setPlaceholderText(
             "Log batch sẽ hiển thị tại đây khi bắt đầu xử lý hàng loạt."
         )
-        self.batch_log_box.setMinimumHeight(120)
-        self.batch_log_box.setMaximumHeight(200)
+        self.batch_log_box.setMinimumHeight(150)
+        self.batch_log_box.setMaximumHeight(220)
         batch_log_layout.addWidget(self.batch_log_box)
-        batch_page_layout.addWidget(batch_log_card, 1)
+        batch_page_layout.addWidget(batch_log_card)
 
         self.main_tabs.addTab(batch_page, "Batch")
 
@@ -1349,14 +1389,11 @@ class WindowLayoutMixin:
             input_card,
             summary_card,
             preview_card,
-            analysis_card,
             subtitle_card,
             settings_card,
             voice_card,
             status_card,
+            render_result_card,
             batch_queue_card,
             batch_log_card,
         ]
-
-
-
