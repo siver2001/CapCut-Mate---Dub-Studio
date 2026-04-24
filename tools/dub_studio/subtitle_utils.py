@@ -6,8 +6,97 @@ from typing import Any
 from .models import SubtitleLine
 
 
+_CJK_REPAIR_PATTERN = re.compile(
+    r"[\u4e00-\u9fff"
+    r"\u3400-\u4dbf"
+    r"\u3040-\u309f"
+    r"\u30a0-\u30ff"
+    r"\uac00-\ud7af"
+    r"\u1100-\u11ff"
+    r"]"
+)
+_VIETNAMESE_REPAIR_PATTERN = re.compile(
+    r"[A-Za-zÀ-ỹĂăÂâĐđÊêÔôƠơƯư]"
+)
+_MOJIBAKE_HINT_PATTERN = re.compile(
+    r"[ÃÂÄÅÆÇÐÑÒÓÔÕÖØÙÚÛÜÝÞßæçðïñ¢£¤¥¦§¨©ª«¬®¯°±²³´µ¶·¸¹º»¼½¾€™œšž•]"
+)
+
+_UNTRANSLATED_SOURCE_PATTERN = re.compile(
+    r"[\u4e00-\u9fff"
+    r"\u3400-\u4dbf"
+    r"\u3040-\u309f"
+    r"\u30a0-\u30ff"
+    r"\uac00-\ud7af"
+    r"\u1100-\u11ff"
+    r"]"
+)
+
+
+def _text_quality_score(text: str) -> int:
+    compact = text.replace(" ", "")
+    cjk_chars = len(_CJK_REPAIR_PATTERN.findall(compact))
+    vietnamese_chars = len(_VIETNAMESE_REPAIR_PATTERN.findall(compact))
+    mojibake_hints = len(_MOJIBAKE_HINT_PATTERN.findall(compact))
+    replacement_chars = compact.count("\ufffd")
+    return (cjk_chars * 6) + vietnamese_chars - (mojibake_hints * 4) - (replacement_chars * 8)
+
+
+def _repair_mojibake_text(text: str) -> str:
+    candidate = str(text or "")
+    if not candidate or all(ord(char) < 128 for char in candidate):
+        return candidate
+    best = candidate
+    best_score = _text_quality_score(best)
+    for _ in range(3):
+        improved = False
+        for encoding in ("latin1", "cp1252"):
+            try:
+                repaired = best.encode(encoding).decode("utf-8")
+            except Exception:
+                continue
+            repaired_score = _text_quality_score(repaired)
+            if repaired_score > best_score + 2:
+                best = repaired
+                best_score = repaired_score
+                improved = True
+                break
+        if not improved:
+            break
+    return best
+
+
 def normalize_text(text: str) -> str:
-    return " ".join(text.replace("\n", " ").split()).strip()
+    repaired = _repair_mojibake_text(str(text or ""))
+    return " ".join(repaired.replace("\n", " ").split()).strip()
+
+
+def looks_like_untranslated_source(text: str, source_text: str = "") -> bool:
+    clean = normalize_text(text)
+    if not clean:
+        return True
+    compact = clean.replace(" ", "")
+    cjk_chars = len(_UNTRANSLATED_SOURCE_PATTERN.findall(compact))
+    total_chars = max(len(compact), 1)
+    if cjk_chars / total_chars > 0.4:
+        return True
+    normalized_source = normalize_text(source_text)
+    if normalized_source and normalized_source == clean:
+        if _UNTRANSLATED_SOURCE_PATTERN.search(normalized_source):
+            return True
+    return False
+
+
+def pick_best_localized_text(
+    translated_text: str = "",
+    spoken_text: str = "",
+    source_text: str = "",
+) -> str:
+    for candidate in (translated_text, spoken_text):
+        clean = normalize_text(candidate)
+        if clean and not looks_like_untranslated_source(clean, source_text):
+            return clean
+    return ""
 
 
 VIETNAMESE_FILLER_SUFFIXES = (
@@ -579,8 +668,11 @@ def build_subtitle_timeline(
 ) -> list[dict[str, Any]]:
     timeline: list[dict[str, Any]] = []
     for index, segment in enumerate(segments, start=1):
-        text = normalize_text(
-            segment.get("translatedText") or segment.get("sourceText") or ""
+        source_text = normalize_text(segment.get("sourceText") or "")
+        text = pick_best_localized_text(
+            segment.get("translatedText") or "",
+            segment.get("spokenText") or "",
+            source_text,
         )
         if not text:
             continue
@@ -595,7 +687,7 @@ def build_subtitle_timeline(
                 "text": text,
                 "segmentId": str(segment.get("id") or ""),
                 "speakerId": str(segment.get("speakerId") or ""),
-                "sourceText": normalize_text(segment.get("sourceText") or ""),
+                "sourceText": source_text,
             }
         )
     return renumber_subtitle_timeline(timeline)

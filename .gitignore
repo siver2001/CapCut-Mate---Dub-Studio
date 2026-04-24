@@ -1,10 +1,18 @@
-# Byte-compiled / optimized / DLL files
+# Python bytecode / caches
 __pycache__/
 *.py[cod]
 *$py.class
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
 
-# C extensions
+# C extensions / native build output
 *.so
+*.pyd
+*.dll
+*.dylib
+*.exe
 
 # Distribution / packaging
 .Python
@@ -36,37 +44,86 @@ htmlcov/
 .nox/
 .coverage
 .coverage.*
-.cache
+.cache/
 nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
-.hypothesis/
-.pytest_cache/
 cover/
 
-# Environments
+# Environments / secrets
 .env
-.venv
+.env.*
+!.env.example
+.venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 
-# Project specific
+# Local IDE / agent state
+.vscode/
+.idea/
+.claude/
+
+# Docker local overrides
+docker-compose.yaml
+docker-compose.override.yaml
+compose.yaml
+compose.override.yaml
+!docker-compose.example.yaml
+
+# Runtime output / temp files
 output/
 temp/
 scratch/
 tmp_*/
+logs/
+*.log
+
+# Rendered media / large local inputs
 douyin_video.mp4
 *.mp4
+*.mov
+*.mkv
+*.avi
+*.m4v
+*.webm
 *.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.opus
+*.wma
+
+# Downloaded models / heavy local tools
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.ckpt
+tools/llama.cpp/
+tools/ffmpeg*
+tools/ffprobe*
+
+# Generated CapCut / JianYing draft data
+template/default2/
+template/*_dubstudio_*/
+template/**/draft_agency_config.json
+template/**/draft_info.json
+template/**/draft_meta_info.json
+src/pyJianYingDraft/assets/draft_content_template.json
+src/pyJianYingDraft/assets/draft_meta_info.json
+
+# Project JSON policy: ignore generated JSON by default, keep committed config.
 *.json
 !settings.json
 !pyproject.toml
 !uv.lock
+!config/
 !config/*.json
-
-# VS Code
-.vscode/
+!config/**/*.json

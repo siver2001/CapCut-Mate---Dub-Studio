@@ -1,9 +1,115 @@
+import json
 import os
+import subprocess
 import uuid
-import pymediainfo
 
 from typing import Optional, Literal
 from typing import Dict, Any
+
+try:
+    import pymediainfo  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    pymediainfo = None  # type: ignore
+
+
+_STILL_IMAGE_EXTENSIONS = {
+    ".bmp",
+    ".heic",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _duration_us_from_seconds(value: Any) -> int:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = 0.0
+    return max(int(seconds * 1_000_000), 0)
+
+
+def _ffprobe_json(path: str) -> Dict[str, Any]:
+    completed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout or "{}")
+
+
+def _first_stream(probe: Dict[str, Any], codec_type: str) -> Optional[Dict[str, Any]]:
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") == codec_type:
+            return stream
+    return None
+
+
+def _probe_visual_metadata(path: str, postfix: str) -> Dict[str, Any]:
+    probe = _ffprobe_json(path)
+    video_stream = _first_stream(probe, "video") or {}
+    width = _safe_int(video_stream.get("width"), 0)
+    height = _safe_int(video_stream.get("height"), 0)
+    duration_us = _duration_us_from_seconds(
+        video_stream.get("duration") or probe.get("format", {}).get("duration")
+    )
+
+    if postfix.lower() in _STILL_IMAGE_EXTENSIONS:
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Could not detect image dimensions for {path}")
+        return {
+            "material_type": "photo",
+            "duration": 10_800_000_000,
+            "width": width,
+            "height": height,
+        }
+
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Input material {path} has no video or image tracks")
+
+    return {
+        "material_type": "video",
+        "duration": max(duration_us, 1),
+        "width": width,
+        "height": height,
+    }
+
+
+def _probe_audio_duration_us(path: str) -> int:
+    probe = _ffprobe_json(path)
+    if _first_stream(probe, "video"):
+        raise ValueError("Audio materials should not contain video tracks")
+    audio_stream = _first_stream(probe, "audio") or {}
+    if not audio_stream:
+        raise ValueError(f"Given material file {path} has no audio tracks")
+    duration_us = _duration_us_from_seconds(
+        audio_stream.get("duration") or probe.get("format", {}).get("duration")
+    )
+    if duration_us <= 0:
+        raise ValueError(f"Could not determine audio duration for {path}")
+    return duration_us
 
 class CropSettings:
     """Crop settings for materials, each attribute is between 0-1. Note the origin is at the top-left corner."""
@@ -88,31 +194,38 @@ class VideoMaterial:
         self.crop_settings = crop_settings
         self.local_material_id = ""
 
-        if not pymediainfo.MediaInfo.can_parse():
-            raise ValueError(f"Unsupported video material type '{postfix}'")
+        metadata: Dict[str, Any] | None = None
+        if pymediainfo is not None:
+            try:
+                if pymediainfo.MediaInfo.can_parse():
+                    info = pymediainfo.MediaInfo.parse(
+                        path,
+                        mediainfo_options={"File_TestContinuousFileNames": "0"},
+                    )
+                    if len(info.video_tracks):
+                        metadata = {
+                            "material_type": "video",
+                            "duration": max(int(info.video_tracks[0].duration * 1e3), 1),  # type: ignore
+                            "width": int(info.video_tracks[0].width),  # type: ignore
+                            "height": int(info.video_tracks[0].height),  # type: ignore
+                        }
+                    elif len(info.image_tracks):
+                        metadata = {
+                            "material_type": "photo",
+                            "duration": 10800000000,
+                            "width": int(info.image_tracks[0].width),  # type: ignore
+                            "height": int(info.image_tracks[0].height),  # type: ignore
+                        }
+            except Exception:
+                metadata = None
 
-        info: pymediainfo.MediaInfo = \
-            pymediainfo.MediaInfo.parse(path, mediainfo_options={"File_TestContinuousFileNames": "0"})  # type: ignore
-        # Treated as video material if it has video tracks
-        if len(info.video_tracks):
-            self.material_type = "video"
-            self.duration = int(info.video_tracks[0].duration * 1e3)  # type: ignore
-            self.width, self.height = info.video_tracks[0].width, info.video_tracks[0].height  # type: ignore
-        # For gif files, use imageio to get duration
-        elif postfix.lower() == ".gif":
-            import imageio
-            gif = imageio.get_reader(path)
+        if metadata is None:
+            metadata = _probe_visual_metadata(path, postfix)
 
-            self.material_type = "video"
-            self.duration = int(round(gif.get_meta_data()['duration'] * gif.get_length() * 1e3))
-            self.width, self.height = info.image_tracks[0].width, info.image_tracks[0].height  # type: ignore
-            gif.close()
-        elif len(info.image_tracks):
-            self.material_type = "photo"
-            self.duration = 10800000000  # Equivalent to 3 hours
-            self.width, self.height = info.image_tracks[0].width, info.image_tracks[0].height  # type: ignore
-        else:
-            raise ValueError(f"Input material {path} has no video or image tracks")
+        self.material_type = metadata["material_type"]
+        self.duration = int(metadata["duration"])
+        self.width = int(metadata["width"])
+        self.height = int(metadata["height"])
 
     def export_json(self) -> Dict[str, Any]:
         video_material_json = {
@@ -168,14 +281,25 @@ class AudioMaterial:
         self.material_id = uuid.uuid4().hex
         self.path = path
 
-        if not pymediainfo.MediaInfo.can_parse():
-            raise ValueError("Unsupported audio material type %s" % os.path.splitext(path)[1])
-        info: pymediainfo.MediaInfo = pymediainfo.MediaInfo.parse(path)  # type: ignore
-        if len(info.video_tracks):
-            raise ValueError("Audio materials should not contain video tracks")
-        if not len(info.audio_tracks):
-            raise ValueError(f"Given material file {path} has no audio tracks")
-        self.duration = int(info.audio_tracks[0].duration * 1e3)  # type: ignore
+        duration_us: int | None = None
+        if pymediainfo is not None:
+            try:
+                if pymediainfo.MediaInfo.can_parse():
+                    info = pymediainfo.MediaInfo.parse(path)  # type: ignore
+                    if len(info.video_tracks):
+                        raise ValueError("Audio materials should not contain video tracks")
+                    if not len(info.audio_tracks):
+                        raise ValueError(f"Given material file {path} has no audio tracks")
+                    duration_us = max(int(info.audio_tracks[0].duration * 1e3), 1)  # type: ignore
+            except ValueError:
+                raise
+            except Exception:
+                duration_us = None
+
+        if duration_us is None:
+            duration_us = _probe_audio_duration_us(path)
+
+        self.duration = duration_us
 
     def export_json(self) -> Dict[str, Any]:
         return {

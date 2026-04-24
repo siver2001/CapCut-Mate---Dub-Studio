@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .common import *
 from .runtime import (
+    ensure_whisperx_align_cache,
     get_transcription_model_path,
     hf_repo_cached,
     import_whisperx_module,
@@ -286,8 +287,11 @@ def analyze_with_whisperx(
     align_kwargs: dict[str, Any] = {}
     if align_repo_id:
         if not hf_repo_cached(align_repo_id):
-            raise RuntimeError(
-                f"WhisperX align model cho ngon ngu {detected_language} chua co local cache. Hay chay prepare de tai model."
+            ensure_whisperx_align_cache(
+                language_code=detected_language,
+                phase="analysis",
+                step="align",
+                progress=0.35,
             )
         align_kwargs = {
             "model_name": align_repo_id,
@@ -1354,16 +1358,26 @@ def expand_subtitle_region(region: dict[str, Any], *, video_meta: dict[str, Any]
     confidence = float(region.get("confidence", 0.0))
     width = int(region.get("w", 0))
     height = int(region.get("h", 0))
-    pad_x = max(4, int(width * 0.02), int(video_meta["width"] * 0.004))
-    pad_y = max(2, int(height * 0.04), int(video_meta["height"] * 0.004))
+    pad_x = max(4, int(width * 0.02), int(video_meta["width"] * 0.002))
+    pad_y = max(3, int(height * 0.04), int(video_meta["height"] * 0.002))
     if confidence < 0.38:
-        pad_x += 2
-        pad_y += 2
+        pad_x += max(2, int(width * 0.01))
+        pad_y += max(2, int(height * 0.025))
     x = max(int(region.get("x", 0)) - pad_x, 0)
     y = max(int(region.get("y", 0)) - pad_y, 0)
     right = min(int(region.get("x", 0)) + width + pad_x, int(video_meta["width"]))
     bottom = min(int(region.get("y", 0)) + height + pad_y, int(video_meta["height"]))
-    expanded = {**region, "x": x, "y": y, "w": max(right - x, 1), "h": max(bottom - y, 1)}
+    expanded_w = max(right - x, 1)
+    expanded_h = max(bottom - y, 1)
+    # Cap width expansion to prevent oversized blur/mask
+    max_expanded_w = max(width * 3, int(video_meta["width"] * 0.30))
+    if expanded_w > max_expanded_w:
+        center_x = x + expanded_w // 2
+        expanded_w = max_expanded_w
+        x = max(center_x - expanded_w // 2, 0)
+        right = min(x + expanded_w, int(video_meta["width"]))
+        expanded_w = max(right - x, 1)
+    expanded = {**region, "x": x, "y": y, "w": expanded_w, "h": expanded_h}
     expanded["centerX"] = expanded["x"] + expanded["w"] // 2
     expanded["centerY"] = expanded["y"] + expanded["h"] // 2
     return quantize_region(expanded, video_meta=video_meta)
@@ -1512,8 +1526,8 @@ def detect_subtitle_region_in_frame(
 
         region_x = int(max((left - 10) * scale_x, 0))
         region_y = int(max((start - 4) * scale_y, 0))
-        region_w = int(max(((right - left) + 20) * scale_x, video_meta["width"] * 0.18))
-        region_h = int(max(((end - start) + 8) * scale_y, video_meta["height"] * 0.045))
+        region_w = int(max(((right - left) + 10) * scale_x, video_meta["width"] * 0.18))
+        region_h = int(max(((end - start) + 4) * scale_y, video_meta["height"] * 0.045))
         region_w = min(region_w, video_meta["width"] - region_x)
         region_h = min(region_h, video_meta["height"] - region_y)
         region_center_y = region_y + region_h // 2
@@ -1576,6 +1590,114 @@ def quantize_region(region: dict[str, Any], *, video_meta: dict[str, Any]) -> di
     snapped["centerX"] = snapped["x"] + snapped["w"] // 2
     snapped["centerY"] = snapped["y"] + snapped["h"] // 2
     return snapped
+
+
+def _median(values: list[int]) -> int:
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+
+
+def cross_validate_regions(
+    regions: list[dict[str, Any]],
+    *,
+    video_meta: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Pass 2: Cross-validate detected regions.
+    Filter out outlier detections whose position/size deviates significantly
+    from the temporal cluster. Subtitles don't jump around — a region that's
+    far from the majority is likely a false detection.
+    """
+    if len(regions) < 3:
+        return regions
+
+    def median_of(values: list[int]) -> int:
+        return _median(values)
+
+    med_x = median_of([int(r.get("x", 0)) for r in regions])
+    med_y = median_of([int(r.get("y", 0)) for r in regions])
+    med_w = median_of([int(r.get("w", 0)) for r in regions])
+    med_h = median_of([int(r.get("h", 0)) for r in regions])
+    med_center_x = med_x + med_w // 2
+    med_center_y = med_y + med_h // 2
+
+    # Stricter tolerances than before:
+    # - Horizontal deviation: within 15% of video width or 1.5x median width
+    # - Vertical deviation: within 0.12x video height (subtitle bands are tight)
+    max_dev_x = max(int(video_meta["width"] * 0.15), int(med_w * 1.5), 30)
+    max_dev_y = max(int(video_meta["height"] * 0.12), int(med_h * 1.2), 18)
+
+    validated: list[dict[str, Any]] = []
+    for region in regions:
+        cx = int(region.get("centerX", int(region.get("x", 0)) + int(region.get("w", 0)) // 2))
+        cy = int(region.get("centerY", int(region.get("y", 0)) + int(region.get("h", 0)) // 2))
+        rw = int(region.get("w", 0))
+        # Outlier: center too far from median OR width is 3x+ median (noise)
+        if abs(cx - med_center_x) <= max_dev_x and abs(cy - med_center_y) <= max_dev_y and rw <= med_w * 4:
+            validated.append(region)
+        else:
+            # Keep but mark as low-confidence fallback
+            validated.append({**region, "_outlier": True})
+    return validated
+
+
+def consolidate_detected_regions(
+    detected_regions: list[dict[str, Any]],
+    *,
+    video_meta: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not detected_regions:
+        return None
+    if len(detected_regions) == 1:
+        return quantize_region(detected_regions[0], video_meta=video_meta)
+
+    # Pass 2: Cross-validate before consolidation
+    validated = cross_validate_regions(detected_regions, video_meta=video_meta)
+    non_outliers = [r for r in validated if not r.get("_outlier")]
+
+    # Use median values as the anchor (more robust than highest-confidence)
+    source = non_outliers if non_outliers else validated
+
+    def med(values: list[int]) -> int:
+        return _median(values)
+
+    med_x = med([int(r.get("x", 0)) for r in source])
+    med_y = med([int(r.get("y", 0)) for r in source])
+    med_w = med([int(r.get("w", 0)) for r in source])
+    med_h = med([int(r.get("h", 0)) for r in source])
+    max_conf = max(float(r.get("confidence", 0.0)) for r in source)
+
+    # Build anchor from median values
+    anchor = {
+        "x": med_x,
+        "y": med_y,
+        "w": med_w,
+        "h": med_h,
+        "centerX": med_x + med_w // 2,
+        "centerY": med_y + med_h // 2,
+        "confidence": max_conf,
+    }
+
+    # Stricter compatibility: IoU >= 0.3 AND closer spatial tolerances
+    compatible: list[dict[str, Any]] = []
+    for region in source:
+        iou = region_iou(region, anchor)
+        dx = abs(int(region.get("centerX", 0)) - anchor["centerX"])
+        dy = abs(int(region.get("centerY", 0)) - anchor["centerY"])
+        if iou >= 0.3 or (dx <= max(int(anchor["w"] * 0.22), 28) and dy <= max(int(anchor["h"] * 0.45), 16)):
+            compatible.append(region)
+
+    final_source = compatible if compatible else source
+
+    merged = {
+        "x": med([int(r.get("x", 0)) for r in final_source]),
+        "y": med([int(r.get("y", 0)) for r in final_source]),
+        "w": med([int(r.get("w", 0)) for r in final_source]),
+        "h": med([int(r.get("h", 0)) for r in final_source]),
+        "confidence": max(float(r.get("confidence", 0.0)) for r in final_source),
+    }
+    merged["centerX"] = merged["x"] + merged["w"] // 2
+    merged["centerY"] = merged["y"] + merged["h"] // 2
+    return quantize_region(merged, video_meta=video_meta)
 
 
 def stabilize_region(candidate: dict[str, Any], previous: dict[str, Any], *, video_meta: dict[str, Any]) -> dict[str, Any]:
@@ -1702,28 +1824,70 @@ def build_dynamic_subtitle_regions(
         "confidence": 0.0,
         "detected": False,
     }
+    fallback_anchor_region = quantize_region(fallback_position_region, video_meta=video_meta)
     previous_detected_region: dict[str, Any] | None = None
 
-    for subtitle in subtitles:
-        midpoint = int((subtitle.start_ms + subtitle.end_ms) / 2)
-        sample_key = int(round(midpoint / 500.0) * 500)
-        if sample_key not in cache:
-            try:
-                frame = extract_gray_frame(video_path, sample_key, sample_width, sample_height)
-                cache[sample_key] = detect_subtitle_region_in_frame(
-                    frame,
-                    sample_width=sample_width,
-                    sample_height=sample_height,
-                    video_meta=video_meta,
-                    fallback_region=fallback_region,
-                )
-            except Exception:
-                cache[sample_key] = fallback_position_region.copy()
-        region = cache[sample_key]
-        if not subtitle_region_detected(region):
+    for index, subtitle in enumerate(subtitles):
+        sub_start = int(subtitle.start_ms)
+        sub_end = int(subtitle.end_ms)
+        subtitle_duration = max(sub_end - sub_start, 1)
+
+        # Pass 1: Better sample distribution
+        # Previous: 5 points clustered at boundaries (start, start+22%, 50%, end-22%, end)
+        # New: 8 evenly-spaced points to maximize coverage across the subtitle duration
+        # Also sample from adjacent subtitle periods to handle timing overlap
+        num_samples = 8
+        sample_points = set()
+        for i in range(num_samples):
+            frac = i / max(num_samples - 1, 1)
+            pt = int(sub_start + frac * subtitle_duration)
+            sample_points.add(pt)
+        # Add points from adjacent subtitles for better boundary coverage
+        if index > 0:
+            prev_end = int(subtitles[index - 1].end_ms)
+            if prev_end < sub_start:
+                sample_points.add(int((prev_end + sub_start) / 2))
+        if index + 1 < len(subtitles):
+            next_start = int(subtitles[index + 1].start_ms)
+            if next_start > sub_end:
+                sample_points.add(int((sub_end + next_start) / 2))
+
+        detected_regions: list[dict[str, Any]] = []
+        for sample_point in sorted(sample_points):
+            # Coarser cache key (round to nearest 150ms) to avoid duplicate extraction
+            sample_key = int(round(sample_point / 150.0) * 150)
+            if sample_key not in cache:
+                try:
+                    frame = extract_gray_frame(video_path, sample_key, sample_width, sample_height)
+                    cache[sample_key] = detect_subtitle_region_in_frame(
+                        frame,
+                        sample_width=sample_width,
+                        sample_height=sample_height,
+                        video_meta=video_meta,
+                        fallback_region=fallback_region,
+                    )
+                except Exception:
+                    cache[sample_key] = fallback_position_region.copy()
+            region = cache[sample_key]
+            if subtitle_region_detected(region):
+                detected_regions.append(quantize_region(region, video_meta=video_meta))
+
+        region: dict[str, Any] | None = None
+        if detected_regions:
+            # Pass 2: Cross-validate detections (removes temporal outliers)
+            validated = cross_validate_regions(detected_regions, video_meta=video_meta)
+            non_outliers = [r for r in validated if not r.get("_outlier")]
+            source = non_outliers if non_outliers else detected_regions
+            region = consolidate_detected_regions(source, video_meta=video_meta)
+        elif previous_detected_region is not None:
+            region = previous_detected_region.copy()
+        elif subtitle_region_detected(fallback_anchor_region):
+            region = fallback_anchor_region.copy()
+
+        if region is None:
             continue
 
-        if previous_detected_region is not None:
+        if detected_regions and previous_detected_region is not None:
             big_vertical_jump = abs(int(region.get("centerY", 0)) - int(previous_detected_region.get("centerY", 0))) > int(video_meta["height"] * 0.18)
             big_horizontal_jump = abs(int(region.get("centerX", 0)) - int(previous_detected_region.get("centerX", 0))) > int(video_meta["width"] * 0.16)
             if (
@@ -1733,18 +1897,31 @@ def build_dynamic_subtitle_regions(
             ):
                 region = previous_detected_region
             region = stabilize_region(region, previous_detected_region, video_meta=video_meta)
-        else:
+        elif detected_regions:
             region = quantize_region(region, video_meta=video_meta)
 
+        region["detected"] = True
+        region["confidence"] = round(max(float(region.get("confidence", 0.0)), SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
+
+        # Apply minimum padding — just enough to avoid cutting off the edges of subtitle text
         padded_region = expand_subtitle_region(region, video_meta=video_meta)
         padded_region["centerX"] = padded_region["x"] + padded_region["w"] // 2
         padded_region["centerY"] = padded_region["y"] + padded_region["h"] // 2
-        padded_region["startMs"] = subtitle.start_ms
-        padded_region["endMs"] = subtitle.end_ms
+
+        # Temporal padding: lead/trail around the subtitle period
+        previous_end = int(subtitles[index - 1].end_ms) if index > 0 else 0
+        next_start = int(subtitles[index + 1].start_ms) if index + 1 < len(subtitles) else int(subtitle.end_ms)
+        gap_before = max(sub_start - previous_end, 0)
+        gap_after = max(next_start - sub_end, 0)
+        # Leaner padding: 40% of gap (not 50%), capped tighter
+        lead_ms = min(max(int(gap_before * 0.4), 30), 120)
+        trail_ms = min(max(int(gap_after * 0.4), 30), 120)
+        padded_region["startMs"] = max(sub_start - lead_ms, 0)
+        padded_region["endMs"] = max(sub_end + trail_ms, padded_region["startMs"] + 120)
         padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
         padded_region["detected"] = True
         dynamic_regions.append(padded_region)
-        previous_detected_region = region
+        previous_detected_region = region.copy()
 
     subtitle_positions = build_stable_subtitle_positions(
         subtitles,

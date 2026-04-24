@@ -93,14 +93,19 @@ def escape_ass_text(text: str) -> str:
     )
 
 
-def hex_to_ass_color(hex_color: str) -> str:
+def hex_to_ass_color(hex_color: str, alpha: float | None = None) -> str:
     value = hex_color.strip().lstrip("#")
     if len(value) != 6:
         return "&H00FFFFFF"
     red = value[0:2]
     green = value[2:4]
     blue = value[4:6]
-    return f"&H00{blue}{green}{red}".upper()
+    if alpha is None:
+        alpha_hex = "00"
+    else:
+        safe_alpha = max(0.0, min(float(alpha), 1.0))
+        alpha_hex = f"{int(round((1.0 - safe_alpha) * 255)):02X}"
+    return f"&H{alpha_hex}{blue}{green}{red}".upper()
 
 
 def compose_ass(
@@ -112,9 +117,34 @@ def compose_ass(
 ) -> str:
     font_size = int(subtitle_preset.get("fontSize", 18))
     ass_font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
+    font_tokens = " ".join(
+        str(part or "")
+        for part in (
+            subtitle_preset.get("fontFamily"),
+            subtitle_preset.get("fontFamilyLabel"),
+            subtitle_preset.get("fontFamilyName"),
+            ass_font_name,
+        )
+    ).lower()
+    bold_flag = -1 if "bold" in font_tokens or "black" in font_tokens else 0
     primary_color = subtitle_preset.get("assPrimaryColor") or hex_to_ass_color(subtitle_preset.get("fontColor", "#ffd200"))
     outline_color = subtitle_preset.get("assOutlineColor") or hex_to_ass_color(subtitle_preset.get("strokeColor", "#000000"))
     outline = int(subtitle_preset.get("strokeWidth", 2))
+    box_enabled = bool(subtitle_preset.get("boxEnabled", False))
+    box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()
+    use_unified_box = box_enabled and box_layout_mode == "unified"
+    box_fill_color = subtitle_preset.get("assBoxFillColor") or hex_to_ass_color(
+        subtitle_preset.get("boxFillColor", "#77b8ee"),
+        float(subtitle_preset.get("boxFillOpacity", 0.86)),
+    )
+    box_border_color = subtitle_preset.get("assBoxBorderColor") or hex_to_ass_color(
+        subtitle_preset.get("boxBorderColor", "#3b82f6"),
+        float(subtitle_preset.get("boxBorderOpacity", 1.0)),
+    )
+    box_border_width = max(int(subtitle_preset.get("boxBorderWidth", 2)), 0)
+    box_padding_x = max(int(subtitle_preset.get("boxPaddingX", 24)), 0)
+    box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12)), 0)
+    box_shadow = max(int(round((box_padding_x + box_padding_y) / 10)), 2) if use_unified_box else 0
     position_preset = str(subtitle_preset.get("positionPreset") or "bottom").strip().lower()
     alignment = 8 if position_preset == "top" else 5 if position_preset == "middle" else 2
     margin_v = int(
@@ -133,7 +163,13 @@ def compose_ass(
         "",
         "[V4+ Styles]",
         "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
-        f"Style: DubDefault,{ass_font_name},{font_size},{primary_color},{primary_color},{outline_color},&H00000000,0,0,0,0,100,100,0,0,1,{outline},0,{alignment},0,0,{margin_v},1",
+        (
+            f"Style: DubDefault,{ass_font_name},{font_size},{primary_color},{primary_color},"
+            f"{outline_color if use_unified_box else box_border_color if box_enabled else outline_color},"
+            f"{box_fill_color if box_enabled else '&H00000000'},"
+            f"{bold_flag},0,0,0,100,100,0,0,{4 if use_unified_box else 3 if box_enabled else 1},"
+            f"{box_border_width if box_enabled and not use_unified_box else outline},{box_shadow},{alignment},0,0,{margin_v},1"
+        ),
         "",
         "[Events]",
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",

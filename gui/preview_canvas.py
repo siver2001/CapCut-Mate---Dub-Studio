@@ -3,12 +3,18 @@ from gui.utils import (
     copy,
     default_settings,
     find_font_option,
+    normalize_preview_text,
     repair_mojibake_text,
     resolve_preview_caption_placement,
 )
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QImage, QPixmap, QPen, QFont, QPainterPath
+from PyQt6.QtGui import QPainter, QColor, QImage, QPixmap, QPen, QFont
+
+from tools.dub_studio.font_cache import preload_font
+
+# Track which fonts have been loaded into Qt's font database
+_loaded_fonts: set[str] = set()
 
 
 class PreviewCanvas(QWidget):
@@ -24,16 +30,33 @@ class PreviewCanvas(QWidget):
         self.setMinimumHeight(320)
         self._target_rect = QRectF()
         self._caption_rect = QRectF()
-        self._cleanup_rect = QRectF()
-        self._cleanup_handle_rect = QRectF()
         self._watermark_rect = QRectF()
         self._watermark_handle_rect = QRectF()
+        # Preload all Google Fonts in background to avoid delay on first paint
+        self._preload_fonts_in_background()
+
+    def _preload_fonts_in_background(self) -> None:
+        """Load all Google Fonts in a background thread so preview is ready immediately."""
+        try:
+            from PyQt6.QtCore import QThread
+
+            class FontPreloadThread(QThread):
+                def run(self) -> None:
+                    try:
+                        from tools.dub_studio.font_cache import preload_all_fonts
+
+                        preload_all_fonts()
+                    except Exception:
+                        pass
+
+            thread = FontPreloadThread(self)
+            thread.setDaemon(True)
+            thread.start(QThread.Priority.LowestPriority)
+        except Exception:
+            pass  # Non-critical: fonts load lazily on paint anyway
         self._dragging_caption = False
-        self._dragging_cleanup = False
-        self._resizing_cleanup = False
         self._resizing_watermark = False
         self._drag_offset_y = 0.0
-        self._cleanup_drag_offset = (0.0, 0.0)
 
     def update_state(
         self,
@@ -46,10 +69,35 @@ class PreviewCanvas(QWidget):
         self.preview_text = preview_text
         self.update()
 
+    @staticmethod
+    def _build_preview_text(text: str, max_words_per_line: int) -> str:
+        clean = normalize_preview_text(text)
+        if not clean:
+            clean = "Đây là preview subtitle để xem cỡ chữ, màu chữ và box trên video."
+        words = clean.split()
+        safe_limit = max(2, int(max_words_per_line or 5))
+        lines: list[str] = []
+        current: list[str] = []
+        for word in words:
+            current.append(word)
+            if len(current) >= safe_limit:
+                lines.append(" ".join(current))
+                current = []
+            if len(lines) >= 2:
+                break
+        if current and len(lines) < 2:
+            lines.append(" ".join(current))
+        if len(lines) >= 2 and len(words) > sum(len(line.split()) for line in lines):
+            lines[-1] = lines[-1].rstrip(" .,!?:;") + "..."
+        if not lines:
+            lines = [clean]
+        return "\n".join(lines[:2])
+
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.fillRect(self.rect(), QColor("#091221"))
+        pending_preview_overlay: dict[str, Any] | None = None
 
         if not self.analysis or not self.analysis.get("thumbnailPath"):
             painter.setPen(QColor("#cbd5e1"))
@@ -79,51 +127,22 @@ class PreviewCanvas(QWidget):
         self._target_rect = QRectF(target)
         painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
 
-        video_meta = self.analysis.get("videoMeta") or {}
-        width = max(int(video_meta.get("width") or 1), 1)
-        height = max(int(video_meta.get("height") or 1), 1)
-        region = self.settings.get("subtitleRegion") or {}
-
-        def map_rect(x: int, y: int, w: int, h: int) -> QRectF:
-            return QRectF(
-                target.left() + (x / width) * target.width(),
-                target.top() + (y / height) * target.height(),
-                max((w / width) * target.width(), 1.0),
-                max((h / height) * target.height(), 1.0),
-            )
-
-        preview_rect = map_rect(
-            region.get("x", 0),
-            region.get("y", 0),
-            region.get("w", 0),
-            region.get("h", 0),
-        )
-        self._cleanup_rect = QRectF(preview_rect)
-        self._cleanup_handle_rect = QRectF(
-            preview_rect.right() - 8, preview_rect.bottom() - 8, 10, 10
-        )
-
-        cleanup_mode = self.settings.get("sourceSubtitleCleanupMode", "none")
-        if cleanup_mode != "none":
-            fill = QColor(0, 0, 0, 105 if cleanup_mode == "localized_mask" else 55)
-            painter.fillRect(preview_rect, fill)
-            painter.setPen(QPen(QColor("#facc15"), 2))
-            painter.drawRoundedRect(preview_rect, 10, 10)
-            painter.fillRect(self._cleanup_handle_rect, QColor("#facc15"))
-        painter.setPen(QPen(QColor(255, 255, 255, 180), 1, Qt.PenStyle.DashLine))
-        painter.drawRoundedRect(preview_rect, 10, 10)
-
         subtitle_preset = self.settings.get("subtitlePreset") or {}
         if subtitle_preset.get("enabled", True):
             font_option = find_font_option(
                 str(subtitle_preset.get("fontFamily") or "arial-bold")
             )
+            font_family = str(
+                subtitle_preset.get("fontFamilyName")
+                or font_option["fontFamilyName"]
+            )
+            # Load font from cache if not already loaded (enables Google Fonts / custom fonts in preview)
+            if font_family not in _loaded_fonts:
+                if preload_font(font_family):
+                    _loaded_fonts.add(font_family)
             base_font = QFont(
-                str(
-                    subtitle_preset.get("fontFamilyName")
-                    or font_option["fontFamilyName"]
-                ),
-                max(int(subtitle_preset.get("fontSize", 28) * 0.55), 12),
+                font_family,
+                max(int(subtitle_preset.get("fontSize", 14) * 0.8), 12),
             )
             base_font.setBold(True)
             placement, offset = resolve_preview_caption_placement(
@@ -131,49 +150,121 @@ class PreviewCanvas(QWidget):
                 int(subtitle_preset.get("bottomOffset", 54)),
             )
             painter.setFont(base_font)
-            metrics_height = painter.fontMetrics().boundingRect("Ag").height()
-            text_rect = QRectF(
-                target.left() + target.width() * 0.08,
-                target.top(),
-                target.width() * 0.84,
-                target.height(),
+            metrics = painter.fontMetrics()
+            metrics_height = metrics.boundingRect("Ag").height()
+            preview_text = self._build_preview_text(
+                repair_mojibake_text(self.preview_text or ""),
+                int(subtitle_preset.get("maxWordsPerChunk", 5)),
             )
-            if placement == "top":
-                text_rect.moveTop(target.top() + offset)
-                text_rect.setHeight(metrics_height * 2.8)
-            elif placement == "middle":
-                text_rect.setHeight(metrics_height * 3.0)
-                text_rect.moveTop(target.center().y() - text_rect.height() * 0.5)
-            else:
-                text_rect.setHeight(metrics_height * 2.8)
-                text_rect.moveTop(target.bottom() - text_rect.height() - offset)
-            self._caption_rect = QRectF(text_rect)
-            path = QPainterPath()
-            path.addText(
-                text_rect.left() + 6,
-                text_rect.top() + metrics_height + 4,
-                base_font,
-                repair_mojibake_text(self.preview_text or "Xem trước vietsub mới"),
-            )
-            stroke_width = max(float(subtitle_preset.get("strokeWidth", 2)), 0.0) * 1.3
-            painter.setPen(
-                QPen(
-                    QColor(str(subtitle_preset.get("strokeColor", "#000000"))),
-                    stroke_width,
+            max_text_width = target.width() * 0.76
+            text_width = min(metrics.horizontalAdvance(preview_text.replace("\n", " ")), max_text_width)
+            box_enabled = bool(subtitle_preset.get("boxEnabled", False))
+            box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()
+            box_padding_x = max(int(subtitle_preset.get("boxPaddingX", 24) * 0.55), 12)
+            box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12) * 0.6), 8)
+            box_radius = max(int(subtitle_preset.get("boxRadius", 16) * 0.6), 8)
+            box_border_width = max(int(subtitle_preset.get("boxBorderWidth", 2)), 0)
+            box_fill_opacity = max(min(float(subtitle_preset.get("boxFillOpacity", 0.86)), 1.0), 0.0)
+            box_border_opacity = max(min(float(subtitle_preset.get("boxBorderOpacity", 1.0)), 1.0), 0.0)
+            line_gap = max(int(metrics_height * 0.3), 4)
+            preview_lines = preview_text.splitlines() or [preview_text]
+            content_height = metrics_height * len(preview_lines) + line_gap * max(len(preview_lines) - 1, 0)
+            caption_width = max(text_width + box_padding_x * 2, target.width() * 0.22)
+            caption_height = content_height + box_padding_y * 2
+            if box_enabled and box_layout_mode == "line" and len(preview_lines) > 1:
+                caption_height = (
+                    len(preview_lines) * (metrics_height + box_padding_y * 2)
+                    + max(line_gap - 1, 3) * (len(preview_lines) - 1)
                 )
+            if not box_enabled:
+                caption_width += 20
+                caption_height += 12
+            caption_width = min(caption_width, target.width() * 0.84)
+            caption_left = target.center().x() - caption_width * 0.5
+            if placement == "top":
+                caption_top = target.top() + offset
+            elif placement == "middle":
+                caption_top = target.center().y() - caption_height * 0.5
+            else:
+                caption_top = target.bottom() - caption_height - offset
+            caption_rect = QRectF(caption_left, caption_top, caption_width, caption_height)
+            caption_rects = [caption_rect]
+            if box_enabled:
+                box_fill = QColor(str(subtitle_preset.get("boxFillColor", "#77b8ee")))
+                box_fill.setAlphaF(box_fill_opacity)
+                box_border = QColor(str(subtitle_preset.get("boxBorderColor", "#3b82f6")))
+                box_border.setAlphaF(box_border_opacity)
+                if box_border_width > 0:
+                    painter.setPen(QPen(box_border, float(box_border_width)))
+                else:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(box_fill)
+                if box_layout_mode == "line" and len(preview_lines) > 1:
+                    line_rects: list[QRectF] = []
+                    current_top = caption_top
+                    min_width = target.width() * 0.24
+                    for line in preview_lines:
+                        line_text_width = min(
+                            metrics.horizontalAdvance(line or " "),
+                            max_text_width,
+                        )
+                        line_box_width = min(
+                            max(line_text_width + box_padding_x * 2, min_width),
+                            target.width() * 0.84,
+                        )
+                        line_box_height = metrics_height + box_padding_y * 2
+                        line_left = target.center().x() - line_box_width * 0.5
+                        line_rect = QRectF(
+                            line_left,
+                            current_top,
+                            line_box_width,
+                            line_box_height,
+                        )
+                        line_rects.append(line_rect)
+                        current_top += line_box_height + max(line_gap - 1, 3)
+                    caption_rects = line_rects or [caption_rect]
+                for rect in caption_rects:
+                    painter.drawRoundedRect(rect, box_radius, box_radius)
+            outline_union_rect = QRectF(caption_rects[0])
+            for rect in caption_rects[1:]:
+                outline_union_rect = outline_union_rect.united(rect)
+            self._caption_rect = QRectF(outline_union_rect.adjusted(-8, -8, 8, 8))
+            stroke_width = max(int(round(float(subtitle_preset.get("strokeWidth", 2)) * 1.2)), 1)
+            text_rect = outline_union_rect.adjusted(
+                box_padding_x,
+                box_padding_y - 2,
+                -box_padding_x,
+                -box_padding_y + 2,
             )
-            painter.drawPath(path)
-            painter.fillPath(
-                path, QColor(str(subtitle_preset.get("fontColor", "#ffd200")))
-            )
+            pending_preview_overlay = {
+                "font": QFont(base_font),
+                "textRect": QRectF(text_rect),
+                "text": preview_text,
+                "fontColor": QColor(str(subtitle_preset.get("fontColor", "#ffd200"))),
+                "strokeColor": QColor(str(subtitle_preset.get("strokeColor", "#000000"))),
+                "strokeWidth": stroke_width,
+            }
             painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
-            painter.drawRoundedRect(text_rect.adjusted(-8, -6, 8, 8), 12, 12)
+            outline_rect = self._caption_rect
+            painter.drawRoundedRect(outline_rect, 12, 12)
+            hint_font = QFont("Segoe UI", 9)
+            painter.setFont(hint_font)
+            hint_text = "Preview subtitle - kéo để đổi vị trí"
+            hint_width = painter.fontMetrics().horizontalAdvance(hint_text) + 16
+            hint_rect = QRectF(
+                target.left() + 10,
+                target.top() + 10,
+                min(hint_width, target.width() * 0.44),
+                painter.fontMetrics().height() + 10,
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(8, 15, 29, 185))
+            painter.drawRoundedRect(hint_rect, 10, 10)
             painter.setPen(QColor("#e2e8f0"))
-            painter.setFont(QFont("Segoe UI", 9))
             painter.drawText(
-                text_rect.adjusted(0, -24, 0, -4),
+                hint_rect,
                 Qt.AlignmentFlag.AlignCenter,
-                "Kéo phụ đề để đổi vị trí",
+                hint_text,
             )
         else:
             self._caption_rect = QRectF()
@@ -223,6 +314,26 @@ class PreviewCanvas(QWidget):
             self._watermark_handle_rect = QRectF()
 
         painter.end()
+        if pending_preview_overlay:
+            overlay = QPainter(self)
+            overlay.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            overlay.setFont(pending_preview_overlay["font"])
+            text_rect = pending_preview_overlay["textRect"]
+            text = pending_preview_overlay["text"]
+            text_flags = int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap)
+            stroke_width = max(int(pending_preview_overlay["strokeWidth"]), 0)
+            if stroke_width > 0:
+                overlay.setPen(pending_preview_overlay["strokeColor"])
+                for dx in range(-stroke_width, stroke_width + 1):
+                    for dy in range(-stroke_width, stroke_width + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        if abs(dx) + abs(dy) > stroke_width + 1:
+                            continue
+                        overlay.drawText(text_rect.translated(dx, dy), text_flags, text)
+            overlay.setPen(pending_preview_overlay["fontColor"])
+            overlay.drawText(text_rect, text_flags, text)
+            overlay.end()
 
     @staticmethod
     def _fit_rect(bounds: QRectF, source_width: int, source_height: int) -> QRectF:
@@ -253,25 +364,6 @@ class PreviewCanvas(QWidget):
             self.setCursor(Qt.CursorShape.SizeVerCursor)
             event.accept()
             return
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and self._cleanup_handle_rect.contains(event.position())
-        ):
-            self._resizing_cleanup = True
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-            event.accept()
-            return
-        if event.button() == Qt.MouseButton.LeftButton and self._cleanup_rect.contains(
-            event.position()
-        ):
-            self._dragging_cleanup = True
-            self._cleanup_drag_offset = (
-                float(event.position().x() - self._cleanup_rect.left()),
-                float(event.position().y() - self._cleanup_rect.top()),
-            )
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
-            event.accept()
-            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
@@ -289,29 +381,11 @@ class PreviewCanvas(QWidget):
             self.subtitle_dragged.emit(placement, offset)
             event.accept()
             return
-        if self._dragging_cleanup and self._target_rect.height() > 0:
-            left = float(event.position().x() - self._cleanup_drag_offset[0])
-            top = float(event.position().y() - self._cleanup_drag_offset[1])
-            self.cleanup_region_changed.emit(self._resolve_cleanup_move(left, top))
-            event.accept()
-            return
-        if self._resizing_cleanup and self._target_rect.height() > 0:
-            self.cleanup_region_changed.emit(
-                self._resolve_cleanup_resize(
-                    float(event.position().x()), float(event.position().y())
-                )
-            )
-            event.accept()
-            return
 
         if self._caption_rect.contains(event.position()):
             self.setCursor(Qt.CursorShape.SizeVerCursor)
         elif self._watermark_handle_rect.contains(event.position()):
             self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        elif self._cleanup_handle_rect.contains(event.position()):
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        elif self._cleanup_rect.contains(event.position()):
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
         else:
             self.unsetCursor()
         super().mouseMoveEvent(event)
@@ -322,12 +396,6 @@ class PreviewCanvas(QWidget):
             self.unsetCursor()
         if self._dragging_caption:
             self._dragging_caption = False
-            self.unsetCursor()
-            event.accept()
-            return
-        if self._dragging_cleanup or self._resizing_cleanup:
-            self._dragging_cleanup = False
-            self._resizing_cleanup = False
             self.unsetCursor()
             event.accept()
             return
@@ -355,47 +423,3 @@ class PreviewCanvas(QWidget):
             offset = int(round(distance_from_bottom / 0.7))
         return position, max(0, min(offset, 240))
 
-    def _resolve_cleanup_move(self, left: float, top: float) -> dict[str, int]:
-        target = self._target_rect
-        rect = self._cleanup_rect
-        bounded_left = max(
-            float(target.left()), min(left, float(target.right() - rect.width()))
-        )
-        bounded_top = max(
-            float(target.top()), min(top, float(target.bottom() - rect.height()))
-        )
-        return self._cleanup_rect_to_region(
-            QRectF(bounded_left, bounded_top, rect.width(), rect.height())
-        )
-
-    def _resolve_cleanup_resize(self, right: float, bottom: float) -> dict[str, int]:
-        rect = self._cleanup_rect
-        target = self._target_rect
-        bounded_right = max(rect.left() + 36.0, min(right, float(target.right())))
-        bounded_bottom = max(rect.top() + 28.0, min(bottom, float(target.bottom())))
-        return self._cleanup_rect_to_region(
-            QRectF(
-                rect.left(),
-                rect.top(),
-                bounded_right - rect.left(),
-                bounded_bottom - rect.top(),
-            )
-        )
-
-    def _cleanup_rect_to_region(self, rect: QRectF) -> dict[str, int]:
-        if not self.analysis or not self.analysis.get("videoMeta"):
-            return {"x": 0, "y": 0, "w": 0, "h": 0}
-        target = self._target_rect
-        video_meta = self.analysis.get("videoMeta") or {}
-        width = max(int(video_meta.get("width") or 1), 1)
-        height = max(int(video_meta.get("height") or 1), 1)
-        return {
-            "x": max(
-                0, int(round((rect.left() - target.left()) / target.width() * width))
-            ),
-            "y": max(
-                0, int(round((rect.top() - target.top()) / target.height() * height))
-            ),
-            "w": max(1, int(round(rect.width() / target.width() * width))),
-            "h": max(1, int(round(rect.height() / target.height() * height))),
-        }

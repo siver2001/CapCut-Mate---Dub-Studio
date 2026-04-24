@@ -17,10 +17,11 @@ def burn_subtitles(
     subtitle_outline_color: str = "&H00000000",
     subtitle_margin_v: int = 54,
     source_subtitle_mask_mode: str = "black",
+    subtitle_font_name: str = "Arial",
 ) -> None:
     subtitles_filter = (
         f"subtitles={subtitles_path.relative_to(ROOT).as_posix()}:"
-        f"force_style='FontName=Arial,PrimaryColour={subtitle_color},"
+        f"force_style='FontName={subtitle_font_name},PrimaryColour={subtitle_color},"
         f"OutlineColour={subtitle_outline_color},BorderStyle=1,Outline=2,Shadow=0,"
         f"FontSize={subtitle_font_size},BackColour=&H00000000,MarginV={subtitle_margin_v},Alignment=2'"
     )

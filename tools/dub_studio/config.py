@@ -68,6 +68,31 @@ LLAMA_CPP_MODEL_URL = env_value("DUB_LLAMA_CPP_MODEL_URL", default="")
 
 DUB_TRANSCRIBE_PROVIDER = env_value("DUB_TRANSCRIBE_PROVIDER", default="auto").lower()
 DUB_TRANSLATE_PROVIDER = env_value("DUB_TRANSLATE_PROVIDER", default="auto").lower()
+MICROSOFT_TRANSLATOR_KEY = env_value(
+    "DUB_MICROSOFT_TRANSLATOR_KEY",
+    "MICROSOFT_TRANSLATOR_KEY",
+    "AZURE_TRANSLATOR_KEY",
+    default="",
+)
+MICROSOFT_TRANSLATOR_ENDPOINT = (
+    env_value(
+        "DUB_MICROSOFT_TRANSLATOR_ENDPOINT",
+        "MICROSOFT_TRANSLATOR_ENDPOINT",
+        "AZURE_TRANSLATOR_ENDPOINT",
+        default="https://api.cognitive.microsofttranslator.com",
+    ).rstrip("/")
+    or "https://api.cognitive.microsofttranslator.com"
+)
+MICROSOFT_TRANSLATOR_REGION = env_value(
+    "DUB_MICROSOFT_TRANSLATOR_REGION",
+    "MICROSOFT_TRANSLATOR_REGION",
+    "AZURE_TRANSLATOR_REGION",
+    default="",
+)
+MICROSOFT_TRANSLATOR_TIMEOUT = max(
+    int(env_value("DUB_MICROSOFT_TRANSLATOR_TIMEOUT", default="20")),
+    5,
+)
 DUB_USE_GPU = env_bool("DUB_USE_GPU", default=True)
 DUB_USE_VIENEU = env_bool("DUB_USE_VIENEU", default=False)
 DUB_TTS_ENABLE_PARALLEL = env_bool("DUB_TTS_ENABLE_PARALLEL", default=True)
@@ -93,7 +118,7 @@ LLAMA_CPP_THREADS = max(
 LLAMA_CPP_N_GPU_LAYERS = int(env_value("DUB_LLAMA_CPP_N_GPU_LAYERS", default=("999" if DUB_USE_GPU else "0")))
 LLAMA_CPP_TEMP = float(env_value("DUB_LLAMA_CPP_TEMP", default="0.2"))
 OLLAMA_BASE_URL = env_value("DUB_OLLAMA_BASE_URL", default="http://localhost:11434").rstrip("/")
-OLLAMA_MODEL = env_value("DUB_OLLAMA_MODEL", default="gemma4:e4b")
+OLLAMA_MODEL = env_value("DUB_OLLAMA_MODEL", default="qwen3:4b")
 OLLAMA_CTX = max(int(env_value("DUB_OLLAMA_CTX", default="4096")), 1024)
 OLLAMA_TEMP = float(env_value("DUB_OLLAMA_TEMP", default="0.25"))
 OLLAMA_TIMEOUT = int(env_value("DUB_OLLAMA_TIMEOUT", default="120"))
@@ -219,6 +244,18 @@ VOICE_LABELS = {
     "vi-VN-NamMinhNeural": "EdgeTTS • Nam Nam Minh",
 }
 LANGUAGE_OPTIONS = ("en", "zh", "ko", "ja")
+WHISPERX_PRELOAD_ALIGN_LANGUAGES = tuple(
+    language
+    for language in dict.fromkeys(
+        part.strip().lower()
+        for part in env_value(
+            "DUB_WHISPERX_PRELOAD_ALIGN_LANGUAGES",
+            default="en,zh,ko,ja",
+        ).split(",")
+        if part.strip()
+    )
+    if language
+)
 SPEAKER_COLORS = ["#FFB703", "#56CFE1", "#EF476F", "#90BE6D"]
 
 

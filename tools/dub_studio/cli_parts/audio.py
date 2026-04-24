@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import tempfile
+import threading
+import unicodedata
 
 from .common import *
 from .analysis import (
@@ -17,6 +20,41 @@ from .runtime import (
     temporarily_disable_dead_local_proxies,
     temporarily_use_workspace_torch_home,
 )
+
+
+def clamp_background_music_volume(value: Any) -> float:
+    try:
+        return max(0.0, min(float(value), 1.0))
+    except Exception:
+        return 0.0
+
+
+def append_looped_background_music_input(
+    command: list[str],
+    filter_parts: list[str],
+    *,
+    background_music_path: Path | None,
+    background_music_volume: float,
+    target_duration_ms: int,
+    input_index: int,
+    label: str = "bgm",
+) -> tuple[int, str | None]:
+    resolved_path = Path(background_music_path).expanduser() if background_music_path else None
+    safe_volume = clamp_background_music_volume(background_music_volume)
+    if (
+        resolved_path is None
+        or safe_volume <= 0.0
+        or target_duration_ms <= 0
+        or not resolved_path.exists()
+        or not resolved_path.is_file()
+    ):
+        return input_index, None
+    command.extend(["-stream_loop", "-1", "-i", str(resolved_path)])
+    filter_parts.append(
+        f"[{input_index}:a]atrim=0:{max(target_duration_ms, 200) / 1000:.3f},"
+        f"asetpts=N/SR/TB,volume={safe_volume:.3f}[{label}]"
+    )
+    return input_index + 1, f"[{label}]"
 
 def extract_video_clip(video_path: Path, output_path: Path, start_ms: int, duration_ms: int) -> None:
     from .render import choose_video_codec
@@ -53,22 +91,98 @@ def create_intro_audio(
     has_audio: bool,
     use_background_audio: bool,
     background_volume: float,
+    background_music_path: Path | None = None,
+    background_music_volume: float = 0.0,
 ) -> None:
-    if not has_audio or not use_background_audio:
-        run(["ffmpeg", "-y", "-i", str(intro_voice_path), "-c:a", "pcm_s16le", str(output_path)], timeout=60.0)
+    background_bed_path: Path | None = None
+    if has_audio and use_background_audio:
+        try:
+            background_bed_path = separate_background_audio(
+                video_path=video_clip_path,
+                output_dir=output_path.parent / "intro_background",
+                phase="render",
+                progress=0.875,
+            )
+        except Exception:
+            background_bed_path = None
+    wants_background_bed = bool(background_bed_path and background_bed_path.exists())
+    wants_background_music = (
+        background_music_path is not None
+        and Path(background_music_path).expanduser().exists()
+        and clamp_background_music_volume(background_music_volume) > 0.0
+    )
+    if not wants_background_bed and not wants_background_music:
+        run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(intro_voice_path),
+                "-af",
+                stable_audio_filter_chain(),
+                "-ac",
+                str(STABLE_AUDIO_CHANNELS),
+                "-ar",
+                str(STABLE_AUDIO_SAMPLE_RATE),
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+            timeout=60.0,
+        )
         return
+    target_duration_ms = 0
+    try:
+        target_duration_ms = max(
+            ffprobe_duration_ms(video_clip_path),
+            ffprobe_audio_duration_ms(intro_voice_path),
+        )
+    except Exception:
+        target_duration_ms = ffprobe_audio_duration_ms(intro_voice_path)
+    command = ["ffmpeg", "-y"]
+    filter_parts: list[str] = []
+    mix_inputs: list[str] = []
+    input_index = 0
+    if wants_background_bed:
+        command.extend(["-i", str(background_bed_path)])
+        filter_parts.append(
+            f"[{input_index}:a]volume={max(min(background_volume, 0.3), 0.0):.3f}[bed]"
+        )
+        mix_inputs.append("[bed]")
+        input_index += 1
+    command.extend(["-i", str(intro_voice_path)])
+    mix_inputs.append(f"[{input_index}:a]")
+    input_index += 1
+    input_index, background_music_label = append_looped_background_music_input(
+        command,
+        filter_parts,
+        background_music_path=background_music_path,
+        background_music_volume=background_music_volume,
+        target_duration_ms=target_duration_ms,
+        input_index=input_index,
+        label="intro_bgm",
+    )
+    if background_music_label:
+        mix_inputs.append(background_music_label)
+    if len(mix_inputs) == 1:
+        filter_parts.append(f"{mix_inputs[0]}anull[mix]")
+    else:
+        filter_parts.append(
+            "".join(mix_inputs)
+            + f"amix=inputs={len(mix_inputs)}:normalize=0:duration=longest:dropout_transition=0[mix]"
+        )
+    filter_parts.append(f"[mix]{stable_audio_filter_chain()}[aout]")
     run(
         [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(video_clip_path),
-            "-i",
-            str(intro_voice_path),
+            *command,
             "-filter_complex",
-            f"[0:a]volume={max(min(background_volume, 0.3), 0.0):.3f}[bed];[bed][1:a]amix=inputs=2:normalize=0:duration=longest[aout]",
+            ";".join(filter_parts),
             "-map",
             "[aout]",
+            "-ac",
+            str(STABLE_AUDIO_CHANNELS),
+            "-ar",
+            str(STABLE_AUDIO_SAMPLE_RATE),
             "-c:a",
             "pcm_s16le",
             str(output_path),
@@ -239,6 +353,24 @@ def smooth_rate_transition(
     return format_rate_percent(current_percent, timing_mode=timing_mode, intro=intro)
 
 
+def _safe_unlink(path: Path, *, retries: int = 5, delay: float = 0.3) -> None:
+    """Delete a file, retrying on Windows file-lock errors (WinError 32)."""
+    for i in range(retries):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if i < retries - 1:
+                time.sleep(delay * (i + 1))
+            # Last attempt: ignore if still locked — the next attempt
+            # will use a different temp path anyway.
+
+
+_EDGE_TTS_REQUEST_LOCK = threading.Lock()
+_EDGE_TTS_LAST_REQUEST_AT = 0.0
+_EDGE_TTS_MIN_REQUEST_GAP_SECONDS = 2.0
+
+
 async def _generate_tts_async(
     text: str,
     voice: str,
@@ -252,19 +384,214 @@ async def _generate_tts_async(
     ensure_edge_tts_runtime(phase="render", step="prepare", progress=0.03)
     import edge_tts
     with temporarily_disable_dead_local_proxies():
+        # edge-tts v7.2.8: boundary must be "SentenceBoundary" or "WordBoundary"
+        # (None is no longer accepted). connect_timeout and receive_timeout
+        # replace the old external asyncio.wait_for wrapping for more
+        # reliable per-socket-operation control.
         communicate = edge_tts.Communicate(
             text=text,
             voice=voice,
             rate=rate,
             pitch=pitch,
             volume=volume,
-            boundary="SentenceBoundary" if use_boundary else None,
+            boundary="SentenceBoundary" if use_boundary else "WordBoundary",
+            connect_timeout=min(EDGE_TTS_TIMEOUT, 15),
+            receive_timeout=EDGE_TTS_TIMEOUT,
         )
-        await asyncio.wait_for(communicate.save(str(output_path)), timeout=EDGE_TTS_TIMEOUT)
+        await asyncio.wait_for(communicate.save(str(output_path)), timeout=EDGE_TTS_TIMEOUT + 10)
+
+
+def _save_edge_tts_audio(
+    text: str,
+    voice: str,
+    rate: str,
+    output_path: Path,
+    *,
+    pitch: str,
+    volume: str,
+    use_boundary: bool,
+) -> None:
+    global _EDGE_TTS_LAST_REQUEST_AT
+    with _EDGE_TTS_REQUEST_LOCK:
+        elapsed = time.monotonic() - _EDGE_TTS_LAST_REQUEST_AT
+        if elapsed < _EDGE_TTS_MIN_REQUEST_GAP_SECONDS:
+            time.sleep(_EDGE_TTS_MIN_REQUEST_GAP_SECONDS - elapsed)
+        try:
+            asyncio.run(
+                _generate_tts_async(
+                    text,
+                    voice,
+                    rate,
+                    output_path,
+                    pitch=pitch,
+                    volume=volume,
+                    use_boundary=use_boundary,
+                )
+            )
+        finally:
+            _EDGE_TTS_LAST_REQUEST_AT = time.monotonic()
+
+
+def warm_up_edge_tts(voice: str = "vi-VN-NamMinhNeural") -> bool:
+    """Make a warm-up TTS call to prime Edge TTS service. Returns True on success."""
+    try:
+        tmp_dir = Path(tempfile.gettempdir())
+        warm_up_path = tmp_dir / f"edge_tts_warmup_{threading.get_ident()}.mp3"
+        _save_edge_tts_audio(
+            text="Xin chao.",
+            voice=voice,
+            rate="+0%",
+            output_path=warm_up_path,
+            pitch="+0Hz",
+            volume="+0%",
+            use_boundary=False,
+        )
+        _safe_unlink(warm_up_path)
+        return True
+    except Exception:
+        return False
+
+
+def _ffmpeg_audio_codec_args_for_path(output_path: Path) -> list[str]:
+    suffix = output_path.suffix.lower()
+    if suffix == ".wav":
+        return ["-c:a", "pcm_s16le"]
+    if suffix in {".m4a", ".aac"}:
+        return ["-c:a", "aac", "-b:a", "192k"]
+    return ["-c:a", "libmp3lame", "-b:a", "192k"]
+
+
+def split_edge_tts_text_for_retry(text: str, *, max_chunk_chars: int = 64) -> list[str]:
+    clean = ensure_edge_tts_terminal_punctuation(normalize_text(text))
+    if not clean:
+        return []
+    parts = [
+        normalize_text(part)
+        for part in re.split(r"(?<=[.!?…])\s+|(?<=,)\s+", clean)
+        if normalize_text(part)
+    ]
+    if len(parts) <= 1 and len(clean) <= max_chunk_chars:
+        return [clean]
+
+    chunks: list[str] = []
+    current = ""
+    for part in parts or [clean]:
+        candidate = normalize_text(f"{current} {part}" if current else part)
+        if current and len(candidate) > max_chunk_chars:
+            chunks.append(ensure_edge_tts_terminal_punctuation(current))
+            current = part
+        else:
+            current = candidate
+    if current:
+        chunks.append(ensure_edge_tts_terminal_punctuation(current))
+
+    final_chunks: list[str] = []
+    for chunk in chunks or [clean]:
+        if len(chunk) <= max_chunk_chars:
+            final_chunks.append(chunk)
+            continue
+        words = chunk.split()
+        current_words: list[str] = []
+        for word in words:
+            candidate = " ".join([*current_words, word]).strip()
+            if current_words and len(candidate) >= max_chunk_chars:
+                final_chunks.append(
+                    ensure_edge_tts_terminal_punctuation(" ".join(current_words))
+                )
+                current_words = [word]
+            else:
+                current_words.append(word)
+        if current_words:
+            final_chunks.append(
+                ensure_edge_tts_terminal_punctuation(" ".join(current_words))
+            )
+
+    return [chunk for chunk in final_chunks if chunk]
+
+
+def synthesize_edge_tts_chunked(
+    text: str,
+    *,
+    edge_voice: str,
+    rate: str,
+    output_path: Path,
+    pitch: str,
+    volume: str,
+) -> bool:
+    last_error: Exception | None = None
+    for max_chunk_chars in (64, 48, 32):
+        chunks = split_edge_tts_text_for_retry(text, max_chunk_chars=max_chunk_chars)
+        if len(chunks) <= 1:
+            continue
+
+        temp_parts: list[Path] = []
+        concat_list_path: Path | None = None
+        try:
+            for index, chunk in enumerate(chunks, start=1):
+                if index > 1:
+                    time.sleep(0.8)
+                part_path = output_path.with_name(
+                    f"{output_path.stem}.chunk{index:02d}{output_path.suffix}"
+                )
+                _safe_unlink(part_path)
+                _save_edge_tts_audio(
+                    chunk,
+                    edge_voice,
+                    rate,
+                    part_path,
+                    pitch=pitch,
+                    volume=volume,
+                    use_boundary=False,
+                )
+                validate_generated_audio_file(part_path, context=f"Edge TTS chunk {index}")
+                temp_parts.append(part_path)
+
+            concat_list_fd, concat_list_name = tempfile.mkstemp(
+                prefix="edge_tts_concat_",
+                suffix=".txt",
+                dir=str(output_path.parent),
+            )
+            os.close(concat_list_fd)
+            concat_list_path = Path(concat_list_name)
+            concat_list_path.write_text(
+                "\n".join(f"file '{part.name}'" for part in temp_parts),
+                encoding="utf-8",
+            )
+            run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(concat_list_path),
+                    *_ffmpeg_audio_codec_args_for_path(output_path),
+                    str(output_path.resolve()),
+                ],
+                cwd=output_path.parent,
+                timeout=90.0,
+            )
+            validate_generated_audio_file(output_path, context="Edge TTS chunk merge")
+            return True
+        except Exception as exc:
+            last_error = exc
+            _safe_unlink(output_path)
+            time.sleep(2.5)
+        finally:
+            if concat_list_path is not None:
+                concat_list_path.unlink(missing_ok=True)
+            for part in temp_parts:
+                _safe_unlink(part)
+
+    if last_error is not None:
+        raise last_error
+    return False
 
 
 def _normalize_edge_tts_text(text: str, *, preserve_pauses: bool) -> str:
-    clean = normalize_text(text).replace("\ufeff", "")
+    clean = unicodedata.normalize("NFC", normalize_text(text).replace("\ufeff", ""))
     clean = re.sub(r"[\u200b-\u200f\u2060]", "", clean)
     clean = (
         clean.replace("“", '"')
@@ -339,6 +666,27 @@ def build_edge_tts_safe_rewrites(text: str) -> list[str]:
             normalized = normalize_text(candidate)
             if normalized and normalized not in rewrites:
                 rewrites.append(normalized)
+    punctuation = ""
+    body = clean
+    while body.endswith(("...", ".", "?", "!")):
+        if body.endswith("..."):
+            punctuation = "..." + punctuation
+            body = body[:-3].rstrip()
+            break
+        punctuation = body[-1] + punctuation
+        body = body[:-1].rstrip()
+    if body.count(",") == 1 and not re.search(r"\d", body):
+        left, right = [part.strip(" ,;:") for part in body.split(",", 1)]
+        if len(left.split()) >= 2 and len(right.split()) >= 2:
+            for candidate in (
+                f"{left} và {right}",
+                f"{left}, và {right}",
+            ):
+                normalized = normalize_text(candidate)
+                if punctuation:
+                    normalized = f"{normalized}{punctuation}"
+                if normalized and normalized not in rewrites:
+                    rewrites.append(normalized)
     return rewrites
 
 
@@ -381,6 +729,46 @@ def edge_tts_output_looks_hallucinated(text: str, clip_ms: int) -> bool:
     if words <= 8 or chars <= 42:
         return clip_ms > max(int(expected_ms * 1.75), expected_ms + 1600)
     return clip_ms > max(int(expected_ms * 1.60), expected_ms + 2000)
+
+
+def resolve_edge_voice_candidates(candidate: str) -> list[str]:
+    primary_voice = resolve_edge_voice_name(candidate)
+    if not primary_voice:
+        return []
+    candidates: list[str] = [primary_voice]
+    if primary_voice == "vi-VN-NamMinhNeural":
+        candidates.append("vi-VN-HoaiMyNeural")
+    elif primary_voice == "vi-VN-HoaiMyNeural":
+        candidates.append("vi-VN-NamMinhNeural")
+    unique_candidates: list[str] = []
+    seen: set[str] = set()
+    for voice_name in candidates:
+        if voice_name and voice_name not in seen:
+            seen.add(voice_name)
+            unique_candidates.append(voice_name)
+    return unique_candidates
+
+
+def is_edge_no_audio_error(error: Exception | str) -> bool:
+    """Check for the NoAudioReceived error from edge-tts v7.x."""
+    try:
+        from edge_tts.exceptions import NoAudioReceived
+        if isinstance(error, NoAudioReceived):
+            return True
+    except ImportError:
+        pass
+    return "No audio was received" in str(error or "")
+
+
+def is_edge_drm_error(error: Exception | str) -> bool:
+    """Check for DRM/SkewAdjustment errors from edge-tts v7.2.x."""
+    try:
+        from edge_tts.exceptions import SkewAdjustmentError
+        if isinstance(error, SkewAdjustmentError):
+            return True
+    except ImportError:
+        pass
+    return "SkewAdjustment" in str(error or "") or "403" in str(error or "")
 
 
 def synthesize_tts(
@@ -431,37 +819,42 @@ def synthesize_tts(
                 flush=True,
             )
 
-    edge_voice = resolve_edge_voice_name(selected_voice)
     edge_text = ensure_edge_tts_terminal_punctuation(_normalize_edge_tts_text(text, preserve_pauses=True))
     sanitized_edge_text = ensure_edge_tts_terminal_punctuation(sanitize_edge_tts_text(text))
     stripped_filler_text = ensure_edge_tts_terminal_punctuation(strip_trailing_vietnamese_filler(edge_text))
     if not edge_text:
         raise RuntimeError("Edge TTS synthesis skipped because spoken text is empty after cleanup.")
 
-    temp_output_path = output_path.with_name(f"{output_path.stem}.tmp{output_path.suffix}")
-    temp_output_path.unlink(missing_ok=True)
     last_error = "unknown error"
+    edge_voice_candidates = resolve_edge_voice_candidates(selected_voice)
 
-    for attempt in range(4):  # Increased to 4 attempts for more fallback options
-        current_text = edge_text
-        current_use_boundary = True
+    for voice_index, edge_voice in enumerate(edge_voice_candidates):
+        for attempt in range(4):  # Increased to 4 attempts for more fallback options
+            current_text = edge_text
+            current_use_boundary = True
 
-        # Fallback strategies
-        if attempt == 1:
-            # Attempt 2: retry with the same text but without boundary metadata.
-            current_use_boundary = False
-        elif attempt == 2:
-            # Attempt 3: drop only the trailing filler / extra polish, keep pauses.
-            current_text = stripped_filler_text or edge_text
-            current_use_boundary = False
-        elif attempt == 3:
-            # Attempt 4: last resort with the sanitized variant and neutral params.
-            current_text = sanitized_edge_text or edge_text
-            current_use_boundary = False
+            # Fallback strategies
+            if attempt == 1:
+                # Attempt 2: retry with the same text but without boundary metadata.
+                current_use_boundary = False
+            elif attempt == 2:
+                # Attempt 3: drop only the trailing filler / extra polish, keep pauses.
+                current_text = stripped_filler_text or edge_text
+                current_use_boundary = False
+            elif attempt == 3:
+                # Attempt 4: last resort with the sanitized variant and neutral params.
+                current_text = sanitized_edge_text or edge_text
+                current_use_boundary = False
 
-        try:
-            asyncio.run(
-                _generate_tts_async(
+            # Use a unique temp path per attempt to avoid WinError 32
+            # (file still locked by a previous asyncio.run / edge-tts websocket).
+            temp_output_path = output_path.with_name(
+                f"{output_path.stem}.tmp{attempt}{output_path.suffix}"
+            )
+            _safe_unlink(temp_output_path)
+
+            try:
+                _save_edge_tts_audio(
                     current_text,
                     edge_voice,
                     rate if attempt < 3 else "+0%",
@@ -470,25 +863,70 @@ def synthesize_tts(
                     volume=volume if attempt < 3 else "+0%",
                     use_boundary=current_use_boundary,
                 )
-            )
-            validate_generated_audio_file(temp_output_path, context="Edge TTS synthesis")
-            clip_ms = ffprobe_audio_duration_ms(temp_output_path)
-            if edge_tts_output_looks_hallucinated(current_text, clip_ms):
-                raise RuntimeError(
-                    f"Edge TTS output looks hallucinated ({clip_ms}ms for {len(current_text.split())} words)"
-                )
-            temp_output_path.replace(output_path)
-            return
-        except Exception as exc:
-            last_error = str(exc)
-            temp_output_path.unlink(missing_ok=True)
-            if attempt < 3:
-                safe_print(
-                    f"Edge TTS retry {attempt + 2}/4 for voice {edge_voice}: {last_error} (Text length: {len(current_text)})"
-                )
-                time.sleep(0.6 * (attempt + 1))
+                validate_generated_audio_file(temp_output_path, context="Edge TTS synthesis")
+                clip_ms = ffprobe_audio_duration_ms(temp_output_path)
+                if edge_tts_output_looks_hallucinated(current_text, clip_ms):
+                    raise RuntimeError(
+                        f"Edge TTS output looks hallucinated ({clip_ms}ms for {len(current_text.split())} words)"
+                    )
+                temp_output_path.replace(output_path)
+                return
+            except Exception as exc:
+                last_error = str(exc)
+                _safe_unlink(temp_output_path)
+                no_audio_error = is_edge_no_audio_error(exc)
+                drm_error = is_edge_drm_error(exc)
 
-    raise RuntimeError(f"Edge TTS synthesis failed for voice {edge_voice}: {last_error}")
+                # edge-tts v7.2.x: DRM 403 errors may self-correct after
+                # the library adjusts clock skew internally.  A short pause
+                # and retry is the recommended approach.
+                if drm_error and attempt < 3:
+                    safe_print(
+                        f"Edge TTS DRM/403 error (attempt {attempt + 1}/4), retrying after clock-skew adjustment...",
+                        flush=True,
+                    )
+                    time.sleep(3.0)
+                    continue
+
+                if no_audio_error and attempt >= 1:
+                    try:
+                        if synthesize_edge_tts_chunked(
+                            current_text,
+                            edge_voice=edge_voice,
+                            rate=rate if attempt < 3 else "+0%",
+                            output_path=temp_output_path,
+                            pitch=pitch if attempt < 3 else "+0Hz",
+                            volume=volume if attempt < 3 else "+0%",
+                        ):
+                            temp_output_path.replace(output_path)
+                            return
+                    except Exception as chunk_exc:
+                        last_error = f"{last_error} | chunked_retry={chunk_exc}"
+                if attempt < 3 and not (no_audio_error and attempt >= 1):
+                    safe_print(
+                        f"Edge TTS retry {attempt + 2}/4 for voice {edge_voice}: {last_error} (Text length: {len(current_text)})"
+                    )
+                    time.sleep(2.5 * (attempt + 1))
+                if no_audio_error and attempt >= 1:
+                    safe_print(
+                        f"Edge TTS voice {edge_voice} tra ve rong cho {speaker_id}, thu lai bang cach chia cau nhung van giu nguyen voice.",
+                        flush=True,
+                    )
+                    if attempt < 3:
+                        time.sleep(3.0 * (attempt + 1))
+                        continue
+                    break
+
+        if voice_index + 1 < len(edge_voice_candidates):
+            safe_print(
+                f"Edge TTS voice fallback: {edge_voice} failed for {speaker_id}, trying {edge_voice_candidates[voice_index + 1]}",
+                flush=True,
+            )
+            time.sleep(3.5)
+
+    raise RuntimeError(
+        f"Edge TTS synthesis failed after trying voices {', '.join(edge_voice_candidates)}: {last_error}"
+    )
 
 
 def build_atempo_filter(speed_factor: float) -> str:
@@ -704,6 +1142,7 @@ def synthesize_timed_tts_clip(
     seen_rates: set[str] = set()
     ultra_tight = is_ultra_tight_mode(timing_mode)
     text_candidates = build_tts_text_candidates(spoken_text, translated)
+    terminal_synthesis_error: Exception | None = None
 
     for _ in range(4 if ultra_tight else 3):
         if rate in seen_rates:
@@ -728,6 +1167,7 @@ def synthesize_timed_tts_clip(
             fit_key = hashlib.sha1(
                 f"{cache_key}|{target_ms}|{timing_mode}".encode("utf-8")
             ).hexdigest()[:12]
+            prepared_clip = tts_dir / f"{index:04d}_{cache_key}_timeline.wav"
             fitted_clip = tts_dir / f"{index:04d}_{cache_key}_{fit_key}.wav"
             if raw_clip.exists() and raw_clip.stat().st_size <= 0:
                 raw_clip.unlink(missing_ok=True)
@@ -749,7 +1189,8 @@ def synthesize_timed_tts_clip(
                             flush=True,
                         )
                     continue
-            raw_ms = ffprobe_audio_duration_ms(raw_clip)
+            prepare_tts_clip_for_timeline(raw_clip, prepared_clip)
+            raw_ms = ffprobe_audio_duration_ms(prepared_clip)
             cached_fitted_ms = 0
             if TTS_FIT_CACHE_ENABLED and fitted_clip.exists():
                 try:
@@ -761,7 +1202,7 @@ def synthesize_timed_tts_clip(
             clip_ms = (
                 cached_fitted_ms
                 if cached_fitted_ms > 0
-                else fit_audio_length_with_mode(raw_clip, fitted_clip, target_ms, timing_mode)
+                else fit_audio_length_with_mode(prepared_clip, fitted_clip, target_ms, timing_mode)
             )
             fit_error = abs(clip_ms - target_ms)
             pressure_penalty = abs(math.log(max(raw_ms / max(target_ms, 1), 0.001))) * (220 if ultra_tight else 180)
@@ -778,8 +1219,7 @@ def synthesize_timed_tts_clip(
             }
             break
         if rate_candidate is None:
-            if last_synthesis_error is not None:
-                raise last_synthesis_error
+            terminal_synthesis_error = last_synthesis_error
             break
         candidate = rate_candidate
         if best is None or candidate["score"] < best["score"]:
@@ -801,6 +1241,58 @@ def synthesize_timed_tts_clip(
         rate = next_rate
 
     if best is None:
+        direct_fallback_text = ensure_edge_tts_terminal_punctuation(
+            normalize_text(translated or spoken_text)
+        )
+        if direct_fallback_text:
+            try:
+                cache_key = hashlib.sha1(
+                    f"{speaker_id}|{voice}|direct|{direct_fallback_text}".encode("utf-8")
+                ).hexdigest()[:16]
+                raw_extension = resolve_tts_output_extension(
+                    voice=voice,
+                    speaker_id=speaker_id,
+                    job_id=job_id,
+                )
+                raw_stem = f"{index:04d}_{cache_key}"
+                if raw_extension == ".wav":
+                    raw_clip = tts_dir / f"{raw_stem}_raw{raw_extension}"
+                else:
+                    raw_clip = tts_dir / f"{raw_stem}{raw_extension}"
+                fit_key = hashlib.sha1(
+                    f"{cache_key}|{target_ms}|{timing_mode}".encode("utf-8")
+                ).hexdigest()[:12]
+                prepared_clip = tts_dir / f"{index:04d}_{cache_key}_timeline.wav"
+                fitted_clip = tts_dir / f"{index:04d}_{cache_key}_{fit_key}.wav"
+                synthesize_tts(
+                    direct_fallback_text,
+                    voice,
+                    "+0%",
+                    raw_clip,
+                    pitch="+0Hz",
+                    volume="+0%",
+                    speaker_id=speaker_id,
+                    job_id=job_id,
+                )
+                prepare_tts_clip_for_timeline(raw_clip, prepared_clip)
+                clip_ms = fit_audio_length_with_mode(
+                    prepared_clip,
+                    fitted_clip,
+                    target_ms,
+                    timing_mode,
+                )
+                return (
+                    fitted_clip,
+                    int(clip_ms),
+                    "+0%",
+                    "+0Hz",
+                    "+0%",
+                    direct_fallback_text,
+                )
+            except Exception as exc:
+                terminal_synthesis_error = exc
+        if terminal_synthesis_error is not None:
+            raise terminal_synthesis_error
         raise RuntimeError("Could not synthesize a timed TTS clip.")
     return (
         Path(best["path"]),
@@ -810,6 +1302,56 @@ def synthesize_timed_tts_clip(
         str(best["volume"]),
         str(best["spokenText"]),
     )
+
+
+def prepare_tts_clip_for_timeline(source_path: Path, output_path: Path) -> Path:
+    if output_path.exists() and output_path.stat().st_size > 0:
+        try:
+            ffprobe_audio_duration_ms(output_path)
+            return output_path
+        except Exception:
+            output_path.unlink(missing_ok=True)
+    trim_boundaries = source_path.suffix.lower() in {".mp3", ".aac", ".m4a"}
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-af",
+        stable_audio_filter_chain(trim_boundaries=trim_boundaries),
+        "-ac",
+        str(STABLE_AUDIO_CHANNELS),
+        "-ar",
+        str(STABLE_AUDIO_SAMPLE_RATE),
+        "-c:a",
+        "pcm_s16le",
+        str(output_path),
+    ]
+    try:
+        run(command, timeout=60.0)
+    except Exception:
+        if not trim_boundaries:
+            raise
+        run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source_path),
+                "-af",
+                stable_audio_filter_chain(),
+                "-ac",
+                str(STABLE_AUDIO_CHANNELS),
+                "-ar",
+                str(STABLE_AUDIO_SAMPLE_RATE),
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+            timeout=60.0,
+        )
+    validate_generated_audio_file(output_path, context="Prepared TTS clip")
+    return output_path
 
 
 def _tts_provider_for_voice(voice: str) -> str:
@@ -829,7 +1371,16 @@ def _run_tts_chain(
 ) -> list[dict[str, Any]]:
     chain_results: list[dict[str, Any]] = []
     previous_rate: str | None = None
-    for item in items:
+
+    # Warm up Edge TTS service before starting the chain
+    if items and items[0].get("provider") == "edge":
+        warm_up_edge_tts(items[0].get("voice", "vi-VN-NamMinhNeural"))
+
+    for chain_index, item in enumerate(items):
+        # Throttle between consecutive Edge TTS requests to avoid
+        # rate-limiting from Microsoft's service (NoAudioReceived).
+        if chain_index > 0 and item.get("provider") == "edge":
+            time.sleep(0.5)
         emit_progress(
             phase="render",
             step="tts",
@@ -839,19 +1390,47 @@ def _run_tts_chain(
                 f" · {item['speaker_id']} · {item['voice']}"
             ),
         )
-        fitted_clip, clip_ms, rate, pitch, volume, spoken_text = synthesize_timed_tts_clip(
-            index=item["index"],
-            speaker_id=item["speaker_id"],
-            voice=item["voice"],
-            translated=item["spoken_text"],
-            source_text=item["source_text"],
-            delivery=item["delivery"],
-            target_ms=item["target_ms"],
-            timing_mode=timing_mode,
-            tts_dir=tts_dir,
-            previous_rate=previous_rate,
-            job_id=job_id,
-        )
+        try:
+            fitted_clip, clip_ms, rate, pitch, volume, spoken_text = synthesize_timed_tts_clip(
+                index=item["index"],
+                speaker_id=item["speaker_id"],
+                voice=item["voice"],
+                translated=item["spoken_text"],
+                source_text=item["source_text"],
+                delivery=item["delivery"],
+                target_ms=item["target_ms"],
+                timing_mode=timing_mode,
+                tts_dir=tts_dir,
+                previous_rate=previous_rate,
+                job_id=job_id,
+            )
+        except Exception as exc:
+            safe_print(
+                f"  [!] TTS thất bại cho segment {item['index']}: {exc} — tạo clip im thay thế",
+                flush=True,
+            )
+            target_ms = int(item["target_ms"])
+            silent_duration = max(target_ms / 1000.0, 0.05)
+            silent_clip = tts_dir / f"{item['index']:04d}_silent_fallback.wav"
+            run(
+                [
+                    "ffmpeg", "-y",
+                    "-f", "lavfi",
+                    "-t", f"{silent_duration:.3f}",
+                    "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                    "-ac", str(STABLE_AUDIO_CHANNELS),
+                    "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
+                    "-c:a", "pcm_s16le",
+                    str(silent_clip),
+                ],
+                timeout=30.0,
+            )
+            fitted_clip = silent_clip
+            clip_ms = int(target_ms)
+            rate = "+0%"
+            pitch = "+0Hz"
+            volume = "+0%"
+            spoken_text = str(item.get("spoken_text") or item.get("translated") or "")
         previous_rate = rate
         chain_results.append(
             {
@@ -1204,6 +1783,10 @@ def create_dub_audio(
                 f"{duration_seconds:.3f}",
                 "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-ac",
+                str(STABLE_AUDIO_CHANNELS),
+                "-ar",
+                str(STABLE_AUDIO_SAMPLE_RATE),
                 "-c:a",
                 "pcm_s16le",
                 str(dub_audio_path),
@@ -1213,7 +1796,8 @@ def create_dub_audio(
 
     filter_parts.append(
         "".join(mix_inputs)
-        + f"amix=inputs={len(mix_inputs)}:normalize=0:duration=longest:dropout_transition=0[dub]"
+        + f"amix=inputs={len(mix_inputs)}:normalize=0:duration=longest:dropout_transition=0[mix];"
+        + f"[mix]{stable_audio_filter_chain()}[dub]"
     )
     emit_progress(
         phase="render",
@@ -1236,6 +1820,10 @@ def create_dub_audio(
             ";".join(filter_parts),
             "-map",
             "[dub]",
+            "-ac",
+            str(STABLE_AUDIO_CHANNELS),
+            "-ar",
+            str(STABLE_AUDIO_SAMPLE_RATE),
             "-c:a",
             "pcm_s16le",
             str(dub_audio_path),
@@ -1463,7 +2051,8 @@ def prepare_background_audio_track(
         return background_audio_path, warnings
     except Exception as exc:
         warnings.append(
-            "Không tách được lời gốc khỏi nhạc nền hoàn toàn, sẽ fallback sang trộn audio gốc mức rất thấp: "
+            "Không tách được lời gốc khỏi nhạc nền hoàn toàn, sẽ bỏ audio nền gốc và chỉ giữ voice mới"
+            " cùng nhạc nền bổ sung (nếu có): "
             f"{normalize_text(str(exc))[:180]}"
         )
         return None, warnings
@@ -1477,48 +2066,73 @@ def create_final_audio(
     audio_mix_mode: str,
     keep_original_audio: bool,
     background_audio_path: Path | None = None,
+    background_music_path: Path | None = None,
+    background_music_volume: float = 0.0,
 ) -> None:
     normalized_mode = normalize_audio_mix_mode(audio_mix_mode, keep_original_audio=keep_original_audio)
+    target_duration_ms = max(
+        ffprobe_duration_ms(video_path),
+        ffprobe_audio_duration_ms(dub_audio_path),
+    )
+    command = ["ffmpeg", "-y"]
+    filter_parts: list[str] = []
+    mix_inputs: list[str] = []
+    input_index = 0
+    input_index, background_music_label = append_looped_background_music_input(
+        command,
+        filter_parts,
+        background_music_path=background_music_path,
+        background_music_volume=background_music_volume,
+        target_duration_ms=target_duration_ms,
+        input_index=input_index,
+        label="bgm",
+    )
+    if background_music_label:
+        mix_inputs.append(background_music_label)
     if normalized_mode == "preserve_background" and background_audio_path and background_audio_path.exists():
-        run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(background_audio_path),
-                "-i",
-                str(dub_audio_path),
-                "-filter_complex",
-                f"[0:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed];[bed][1:a]amix=inputs=2:normalize=0:duration=longest:dropout_transition=0[aout]",
-                "-map",
-                "[aout]",
-                "-c:a",
-                "pcm_s16le",
-                str(output_path),
-            ],
-            timeout=180.0,
+        command.extend(["-i", str(background_audio_path)])
+        filter_parts.append(
+            f"[{input_index}:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
         )
-        return
-    if normalized_mode in {"preserve_background", "preserve_original_low"} and keep_original_audio:
-        run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(video_path),
-                "-i",
-                str(dub_audio_path),
-                "-filter_complex",
-                f"[0:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig];[orig][1:a]amix=inputs=2:normalize=0:duration=longest:dropout_transition=0[aout]",
-                "-map",
-                "[aout]",
-                "-c:a",
-                "pcm_s16le",
-                str(output_path),
-            ]
+        mix_inputs.append("[bed]")
+        input_index += 1
+    elif normalized_mode == "preserve_original_low" and keep_original_audio:
+        has_video_audio = False
+        try:
+            has_video_audio = bool(get_video_meta(video_path).get("hasAudio"))
+        except Exception:
+            has_video_audio = False
+        if has_video_audio:
+            command.extend(["-i", str(video_path)])
+            filter_parts.append(
+                f"[{input_index}:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
+            )
+            mix_inputs.append("[orig]")
+            input_index += 1
+    command.extend(["-i", str(dub_audio_path)])
+    mix_inputs.append(f"[{input_index}:a]")
+    if len(mix_inputs) == 1:
+        filter_parts.append(f"{mix_inputs[0]}anull[mix]")
+    else:
+        filter_parts.append(
+            "".join(mix_inputs)
+            + f"amix=inputs={len(mix_inputs)}:normalize=0:duration=longest:dropout_transition=0[mix]"
         )
-        return
-    if not keep_original_audio:
-        run(["ffmpeg", "-y", "-i", str(dub_audio_path), "-c:a", "pcm_s16le", str(output_path)], timeout=120.0)
-        return
-    run(["ffmpeg", "-y", "-i", str(dub_audio_path), "-c:a", "pcm_s16le", str(output_path)], timeout=120.0)
+    filter_parts.append(f"[mix]{stable_audio_filter_chain()}[aout]")
+    run(
+        [
+            *command,
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[aout]",
+            "-ac",
+            str(STABLE_AUDIO_CHANNELS),
+            "-ar",
+            str(STABLE_AUDIO_SAMPLE_RATE),
+            "-c:a",
+            "pcm_s16le",
+            str(output_path),
+        ],
+        timeout=240.0 if background_music_label else 180.0,
+    )

@@ -224,7 +224,7 @@ def add_video_to_draft(
         target_timerange=trange(start=video['start'], duration=display_duration),
         source_timerange=trange(start=0, duration=min(video_material.duration, display_duration)),
         speed=speed,
-        volume=video.get('volume', 1.0),
+        volume=video.get('volume', 0.0),
         clip_settings=clip_settings
     )
 

@@ -8,6 +8,14 @@ from typing import Any
 from PyQt6.QtCore import QProcess, QProcessEnvironment, pyqtSignal
 from PyQt6.QtWidgets import QWidget
 
+try:
+    from PyQt6 import sip as _sip
+except ImportError:
+    try:
+        import sip as _sip  # type: ignore
+    except ImportError:
+        _sip = None
+
 from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT
 from gui.utils import (
     append_job_log,
@@ -33,6 +41,32 @@ class DubStudioJobController(QWidget):
         super().__init__()
         self.jobs: dict[str, dict[str, Any]] = {}
         self.active_job_id: str | None = None
+        self._destroyed = False
+
+    def _is_alive(self) -> bool:
+        """Return True if the underlying C++ QWidget has not been deleted."""
+        if self._destroyed:
+            return False
+        if _sip is not None:
+            try:
+                return not _sip.isdeleted(self)
+            except Exception:
+                pass
+        try:
+            # Probe: accessing objectName() will throw if deleted.
+            self.objectName()
+            return True
+        except RuntimeError:
+            self._destroyed = True
+            return False
+
+    def _safe_emit(self, signal, *args) -> None:
+        """Emit a signal only if the C++ object is still alive."""
+        if self._is_alive():
+            try:
+                signal.emit(*args)
+            except RuntimeError:
+                pass
 
     def _get_running_job_id(self) -> str | None:
         if not self.active_job_id:
@@ -61,9 +95,9 @@ class DubStudioJobController(QWidget):
         append_job_log(job, message, "error")
         if self.active_job_id == job_id:
             self.active_job_id = None
-        self.status_changed.emit(job_id, self.get_job_status(job_id))
+        self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
         if emit_signal:
-            self.job_failed.emit(job_id, message)
+            self._safe_emit(self.job_failed, job_id, message)
 
     def analyze_video(
         self, input_path: str, options: dict[str, Any] | None = None
@@ -137,7 +171,7 @@ class DubStudioJobController(QWidget):
             ),
         }
         effective = build_effective_analysis(job) or {}
-        self.status_changed.emit(job_id, self.get_job_status(job_id))
+        self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
         return effective
 
     def render_video(self, job_id: str, render_options: dict[str, Any]) -> None:
@@ -218,7 +252,7 @@ class DubStudioJobController(QWidget):
         job["process"] = None
         job["status"] = "cancelled"
         append_job_log(job, "Job cancelled by user.", "warn")
-        self.status_changed.emit(active_job_id, self.get_job_status(active_job_id))
+        self._safe_emit(self.status_changed, active_job_id, self.get_job_status(active_job_id))
         self.active_job_id = None
 
     def _start_process(
@@ -260,7 +294,7 @@ class DubStudioJobController(QWidget):
         append_job_log(job, f"Starting {mode} pipeline.")
         self.active_job_id = job_id
         process.start()
-        self.status_changed.emit(job_id, self.get_job_status(job_id))
+        self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
 
     def _drain_output(self, job_id: str, stream: str) -> None:
         job = self.jobs.get(job_id)
@@ -296,7 +330,7 @@ class DubStudioJobController(QWidget):
                 payload = json.loads(line.split("PROGRESS::", 1)[1])
             except json.JSONDecodeError:
                 append_job_log(job, f"Malformed progress payload: {line}", "warn")
-                self.status_changed.emit(job_id, self.get_job_status(job_id))
+                self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
                 return
             job["phase"] = payload.get("phase", job.get("phase"))
             job["step"] = payload.get("step", job.get("step"))
@@ -320,7 +354,7 @@ class DubStudioJobController(QWidget):
             if not should_capture_process_log_line(line, stream):
                 return
             append_job_log(job, line, classify_process_log_line(line, stream))
-        self.status_changed.emit(job_id, self.get_job_status(job_id))
+        self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
 
     def _handle_process_error(self, job_id: str, error: QProcess.ProcessError) -> None:
         job = self.jobs.get(job_id)
@@ -339,7 +373,7 @@ class DubStudioJobController(QWidget):
         if error != QProcess.ProcessError.UnknownError:
             job["lastError"] = error_message
             append_job_log(job, error_message, "error")
-            self.status_changed.emit(job_id, self.get_job_status(job_id))
+            self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
 
     def _handle_process_finished(
         self, job_id: str, code: int, result_file: Path, mode: str
@@ -354,10 +388,10 @@ class DubStudioJobController(QWidget):
         if job.get("cancelRequested"):
             job["status"] = "cancelled"
             job["progress"] = 0.0
-            self.status_changed.emit(job_id, self.get_job_status(job_id))
+            self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
             return
         if code != 0 and job.get("status") == "error" and job.get("lastError"):
-            self.status_changed.emit(job_id, self.get_job_status(job_id))
+            self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
             return
         if code != 0:
             message = job.get("lastError") or f"Pipeline failed with exit code {code}."
@@ -385,11 +419,25 @@ class DubStudioJobController(QWidget):
             job["warnings"] = payload.get("warnings") or []
             job["status"] = "success"
             job["progress"] = 1.0
-            self.analysis_ready.emit(job_id, build_effective_analysis(job))
+            self._safe_emit(self.analysis_ready, job_id, build_effective_analysis(job))
         else:
             job["renderResult"] = payload
             job["warnings"] = payload.get("warnings") or []
             job["status"] = "success"
             job["progress"] = 1.0
-            self.render_ready.emit(job_id, payload)
-        self.status_changed.emit(job_id, self.get_job_status(job_id))
+            self._safe_emit(self.render_ready, job_id, payload)
+        self._safe_emit(self.status_changed, job_id, self.get_job_status(job_id))
+
+    def cleanup(self) -> None:
+        """Forcefully stop any running processes before the controller is destroyed."""
+        for job in self.jobs.values():
+            process = job.get("process")
+            if process is not None:
+                try:
+                    process.kill()
+                    process.waitForFinished(2000)
+                except Exception:
+                    pass
+                job["process"] = None
+        self.active_job_id = None
+        self._destroyed = True

@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox,
 
 from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS
 from gui.utils import ensure_dir, normalize_preview_text, repair_mojibake_text
+from .helpers import SafeComboBox
 
 
 class WindowVoiceMixin:
@@ -59,7 +60,7 @@ class WindowVoiceMixin:
                 f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s • {'Đã có mẫu để clone VieNeu-TTS' if speaker.get('voiceCloneReady') else 'Chưa có mẫu speaker để clone VieNeu-TTS'}"
             )
             detail_label.setObjectName("SectionHint")
-            combo = QComboBox()
+            combo = SafeComboBox()
             for value, text in self._voice_options_for_speaker(speaker):
                 combo.addItem(text, value)
             selected_voice = (

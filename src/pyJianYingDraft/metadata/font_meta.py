@@ -7,7 +7,7 @@ class FontType(EffectEnum):
     """FontResourceType"""
 
     # Free effects
-    _3D_ = EffectMeta("3D 만화", False, "6841117833447870990", "20402387", "9d79db0486d90980a54240b3313ea156", [])
+    Font3D = EffectMeta("3D 만화", False, "6841117833447870990", "20402387", "9d79db0486d90980a54240b3313ea156", [])
     A1 = EffectMeta("A1明朝", False, "7246698168547545602", "20403949", "6eca3b3507bab16aac9ad557fa17a46e", [])
     AlexBrush = EffectMeta("AlexBrush", False, "7241838813960475173", "14864426", "6be278d4aef1173e6ca44f9ff96f913a", [])
     Alice_Regular = EffectMeta("Alice-Regular", False, "7238874837500826170", "14443129", "2d35398aea443c50ab0f28f32492311d", [])

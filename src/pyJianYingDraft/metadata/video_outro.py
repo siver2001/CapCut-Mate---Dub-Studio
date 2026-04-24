@@ -48,7 +48,7 @@ class OutroType(EffectEnum):
     GhostBlur            = AnimationMeta("Ghost Blur", True, 1.500, "7434746460182155827", "89406876", "3ee97e0d0ed3a62f4b0d3a218e669418")
     Paddle               = AnimationMeta("Paddle", True, 0.800, "7226632692354257445", "12811717", "f30ab9f83934eafedb4ee01a3d87a995")
     AreaColorBlockSlide  = AnimationMeta("Area Color Block Slide", True, 2.000, "7436273288604553755", "90036504", "0f266778630aeea62a69ed0dd471fff5")
-    CrossVibrate         = AnimationMeta("Cross Vibrate", True, 0.533, "7352824282289803814", "54685998", "969e17d5d65494d0b10b9111d66802d8")
+    CrossVibrate_II      = AnimationMeta("Cross Vibrate II", True, 0.533, "7352824282289803814", "54685998", "969e17d5d65494d0b10b9111d66802d8")
     CardLightSweep       = AnimationMeta("Card Light Sweep", True, 1.830, "7437386424036381211", "90546052", "e2711c17d261ee1aef022bbb2110be51")
     GlowRectangle        = AnimationMeta("Glow Rectangle", True, 1.133, "7346510998771077659", "51093596", "ccac330a683da920a9638b597ce1f869")
     VariableSpeedExpand  = AnimationMeta("Variable Speed Expand", True, 1.000, "7450031573958660617", "97484974", "430709c96a8a5fb7cc6e7d36f5babf5b")

@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
 )
 
-from gui.config import DEFAULT_OUTPUT_DIR, ROOT, VOICE_LABELS, VOICE_OPTIONS
+from gui.config import BOX_STYLE_PRESETS, DEFAULT_OUTPUT_DIR, FONT_OPTIONS, ROOT, VOICE_LABELS, VOICE_OPTIONS
 from gui.utils import (
     default_settings,
     ensure_dir,
@@ -76,7 +76,9 @@ class WindowWorkflowMixin:
         if switch_to_preview_tab and hasattr(self, "main_tabs") and hasattr(
             self, "preview_page"
         ):
-            self.main_tabs.setCurrentWidget(self.preview_page)
+            _tabs = getattr(self, "main_tabs", None)
+            if _tabs is not None:
+                _tabs.setCurrentWidget(self.preview_page)
         if refresh_all:
             self.refresh_all()
         else:
@@ -233,21 +235,27 @@ class WindowWorkflowMixin:
 
     def sync_output_directory_inputs(self, selected: str) -> None:
         value = selected.strip()
-        self.output_folder_quick_edit.blockSignals(True)
-        self.output_dir_edit.blockSignals(True)
+        if hasattr(self, "output_folder_quick_edit"):
+            self.output_folder_quick_edit.blockSignals(True)
+        if hasattr(self, "output_dir_edit"):
+            self.output_dir_edit.blockSignals(True)
         if hasattr(self, "batch_output_dir_edit"):
             self.batch_output_dir_edit.blockSignals(True)
         
-        self.output_folder_quick_edit.setText(value)
-        self.output_dir_edit.setText(value)
+        if hasattr(self, "output_folder_quick_edit"):
+            self.output_folder_quick_edit.setText(value)
+        if hasattr(self, "output_dir_edit"):
+            self.output_dir_edit.setText(value)
         
         if hasattr(self, "batch_output_dir_edit"):
             self.batch_output_dir_edit.setText(value)
         if hasattr(self, "_batch_output_dir"):
             self._batch_output_dir = value
 
-        self.output_folder_quick_edit.blockSignals(False)
-        self.output_dir_edit.blockSignals(False)
+        if hasattr(self, "output_folder_quick_edit"):
+            self.output_folder_quick_edit.blockSignals(False)
+        if hasattr(self, "output_dir_edit"):
+            self.output_dir_edit.blockSignals(False)
         if hasattr(self, "batch_output_dir_edit"):
             self.batch_output_dir_edit.blockSignals(False)
 
@@ -265,6 +273,16 @@ class WindowWorkflowMixin:
         candidate = Path(raw_path.strip()) if raw_path.strip() else fallback
         ensure_dir(candidate)
         return candidate
+
+    def _resolve_output_directory(self, raw_path: str | None = None) -> Path:
+        raw_value = str(raw_path or "").strip()
+        output_dir = Path(raw_value).expanduser() if raw_value else DEFAULT_OUTPUT_DIR
+        if output_dir.exists() and not output_dir.is_dir():
+            raise RuntimeError(
+                f"Đường dẫn output đang trỏ tới một file, không phải thư mục:\n{output_dir}"
+            )
+        ensure_dir(output_dir)
+        return output_dir.resolve()
 
     def _current_render_preview_path(self) -> str:
         render_result = (
@@ -304,9 +322,7 @@ class WindowWorkflowMixin:
         output_targets = options.get("outputTargets") or {}
         if not any(bool(value) for value in output_targets.values()):
             raise RuntimeError("Hãy bật ít nhất một định dạng output trước khi render.")
-        output_dir = Path(
-            str(options.get("outputDirectory") or "").strip() or str(DEFAULT_OUTPUT_DIR)
-        )
+        output_dir = self._resolve_output_directory(options.get("outputDirectory"))
         options["outputDirectory"] = str(output_dir)
         self.settings["outputDirectory"] = str(output_dir)
         self.sync_output_directory_inputs(str(output_dir))
@@ -374,7 +390,9 @@ class WindowWorkflowMixin:
             return
         self.last_output_path = str(video_path)
         if hasattr(self, "main_tabs") and hasattr(self, "render_page"):
-            self.main_tabs.setCurrentWidget(self.render_page)
+            _tabs = getattr(self, "main_tabs", None)
+            if _tabs is not None:
+                _tabs.setCurrentWidget(self.render_page)
         self.render_preview_player.stop()
         self.render_preview_player.setSource(QUrl.fromLocalFile(str(video_path)))
         self._apply_render_preview_audio_state()
@@ -852,6 +870,43 @@ class WindowWorkflowMixin:
         self.sync_widgets_from_settings()
         self.refresh_preview()
 
+    def on_font_group_changed(self) -> None:
+        self.settings["subtitlePreset"]["fontGroup"] = str(
+            self.font_group_combo.currentData() or "all"
+        )
+        self.on_basic_settings_changed()
+
+    def apply_box_style_preset(self, preset_name: str) -> None:
+        preset = BOX_STYLE_PRESETS.get(str(preset_name) or "")
+        if not preset:
+            return
+        self.settings["subtitlePreset"].update(preset)
+        self.sync_widgets_from_settings()
+        self.refresh_preview()
+
+    def on_box_style_changed(self) -> None:
+        self.apply_box_style_preset(str(self.box_style_combo.currentData() or ""))
+        self.refresh_preview()
+
+    def on_box_style_detail_changed(self) -> None:
+        self.on_basic_settings_changed()
+        self.refresh_preview()
+
+    def choose_background_music_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chon file nhac nen",
+            "",
+            "Audio (*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus *.wma)",
+        )
+        if not path:
+            return
+        self.background_music_path_edit.setText(path)
+        self.background_music_enabled_check.setChecked(True)
+        self.settings.setdefault("backgroundMusic", {})["path"] = path
+        self.settings["backgroundMusic"]["enabled"] = True
+        self.on_basic_settings_changed()
+
     def on_cleanup_region_dragged(self, region: dict[str, int]) -> None:
         self.settings["subtitleRegion"] = {
             "x": int(region.get("x", 0)),
@@ -973,7 +1028,10 @@ class WindowWorkflowMixin:
         self.settings["keepOriginalAudio"] = self.keep_original_audio_check.isChecked()
         self.settings["outputTargets"]["mp4"] = self.output_mp4_check.isChecked()
         self.settings["outputTargets"]["draft"] = self.output_draft_check.isChecked()
-        self.settings["outputDirectory"] = self.output_dir_edit.text().strip()
+        output_directory = self.output_dir_edit.text().strip()
+        if not output_directory and hasattr(self, "output_folder_quick_edit"):
+            output_directory = self.output_folder_quick_edit.text().strip()
+        self.settings["outputDirectory"] = output_directory
         self.settings["draftRoot"] = self.draft_dir_edit.text().strip()
         self.settings["subtitleRegion"] = {
             "x": int(self.region_x_spin.value()),

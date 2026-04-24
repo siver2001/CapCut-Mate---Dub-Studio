@@ -412,13 +412,69 @@ def warmup_ollama_model(*, phase: str, progress: float) -> None:
             "temperature": 0.0,
         },
     }
-    result = _ollama_stream_generate(
-        payload,
-        connect_timeout=15.0,
-        stall_timeout=float(OLLAMA_WARMUP_TIMEOUT),
-    )
-    if not result:
-        raise RuntimeError(f"Ollama warm-up trả về payload không hợp lệ cho model {OLLAMA_MODEL}.")
+    try:
+        result = _ollama_stream_generate(
+            payload,
+            connect_timeout=15.0,
+            stall_timeout=float(OLLAMA_WARMUP_TIMEOUT),
+        )
+        if not result:
+            safe_print(
+                f"[warn] Ollama warm-up trả về rỗng cho model {OLLAMA_MODEL}, sẽ fallback khi dịch.",
+                flush=True,
+            )
+    except OllamaResourceError as exc:
+        safe_print(
+            f"[warn] Ollama warm-up thất bại do hết RAM: {str(exc)[:200]}. "
+            f"Sẽ tự động fallback sang Microsoft Translator khi dịch.",
+            flush=True,
+        )
+        emit_progress(
+            phase=phase,
+            step="translate",
+            progress=progress,
+            message=f"Model {OLLAMA_MODEL} quá lớn cho RAM hiện tại, sẽ dùng fallback translator",
+            extra={"warning": str(exc)[:180]},
+        )
+
+
+class OllamaResourceError(RuntimeError):
+    """Raised when Ollama cannot load the model due to insufficient memory/resources.
+
+    This error is non-retriable — retrying will always produce the same 500.
+    """
+    pass
+
+
+def _parse_ollama_http_error(resp: requests.Response) -> str:
+    """Try to extract a human-readable error from an Ollama HTTP error response."""
+    try:
+        body = resp.json()
+        return body.get("error", resp.text[:300])
+    except Exception:
+        try:
+            return resp.text[:300]
+        except Exception:
+            return f"HTTP {resp.status_code}"
+
+
+_RESOURCE_ERROR_PATTERNS = (
+    "requires more system memory",
+    "requires more memory",
+    "out of memory",
+    "not enough memory",
+    "insufficient memory",
+    "CUDA out of memory",
+    "VRAM",
+    "model not found",
+    "model requires",
+)
+
+
+def _is_resource_error(message: str) -> bool:
+    """Return True if the error message indicates a non-retriable resource problem."""
+    lowered = message.lower()
+    return any(pattern.lower() in lowered for pattern in _RESOURCE_ERROR_PATTERNS)
 
 
 def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, stall_timeout: float = 60.0) -> str:
@@ -438,7 +494,15 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
         timeout=(connect_timeout, stall_timeout),
         stream=True,
     )
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        error_detail = _parse_ollama_http_error(resp)
+        if _is_resource_error(error_detail):
+            raise OllamaResourceError(
+                f"Ollama không thể tải model {payload.get('model', '?')}: {error_detail}. "
+                f"Hãy đóng bớt ứng dụng để giải phóng RAM, hoặc dùng model nhỏ hơn "
+                f"(ví dụ: gemma3:4b, gemma4:e2b). Thiết lập trong file .env: DUB_OLLAMA_MODEL=gemma3:4b"
+            )
+        resp.raise_for_status()
 
     fragments: list[str] = []
     done_reason = None
@@ -451,7 +515,13 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
             continue
             
         if chunk.get("error"):
-            raise RuntimeError(f"Ollama API Error: {chunk['error']}")
+            error_msg = chunk["error"]
+            if _is_resource_error(error_msg):
+                raise OllamaResourceError(
+                    f"Ollama lỗi tài nguyên: {error_msg}. "
+                    f"Hãy đóng bớt ứng dụng hoặc đổi model nhỏ hơn trong .env."
+                )
+            raise RuntimeError(f"Ollama API Error: {error_msg}")
             
         token = chunk.get("response", "")
         if token:
@@ -491,6 +561,11 @@ def run_ollama_prompt(prompt: str, *, max_tokens: int = 2048, temperature: float
             "temperature": OLLAMA_TEMP if temperature is None else temperature,
         },
     }
+    # Qwen3 defaults to reasoning mode and can spend the whole token budget
+    # inside the `thinking` channel, leaving `response` empty for our JSON parser.
+    # Force non-thinking mode so translation/render prompts return usable JSON.
+    if normalize_text(OLLAMA_MODEL).lower().startswith("qwen3"):
+        payload["think"] = False
     if OLLAMA_KEEP_ALIVE:
         payload["keep_alive"] = OLLAMA_KEEP_ALIVE
 
@@ -522,14 +597,24 @@ def run_ollama_prompt(prompt: str, *, max_tokens: int = 2048, temperature: float
             elapsed = time.monotonic() - started_at
             safe_print(f"[info] Ollama hoàn tất trong {elapsed:.1f}s (JSON response: {len(output)} ký tự).", flush=True)
             return output
+        except OllamaResourceError:
+            # Non-retriable: model cannot fit in memory. Stop immediately.
+            raise
         except Exception as exc:
             last_exc = exc
             elapsed = time.monotonic() - started_at
+            error_str = str(exc)
             safe_print(
                 f"[warn] Ollama lỗi lần {attempt + 1}: {type(exc).__name__}: "
-                f"{str(exc)[:200]} (sau {elapsed:.1f}s)",
+                f"{error_str[:200]} (sau {elapsed:.1f}s)",
                 flush=True,
             )
+            # If the error message itself indicates a resource problem, don't retry
+            if _is_resource_error(error_str):
+                raise OllamaResourceError(
+                    f"Ollama không đủ tài nguyên: {error_str[:300]}. "
+                    f"Hãy đóng bớt ứng dụng hoặc dùng model nhỏ hơn (DUB_OLLAMA_MODEL=gemma3:4b)."
+                ) from exc
             if attempt < max_retries:
                 backoff = min(3.0 * (attempt + 1), 10.0)
                 time.sleep(backoff)
@@ -564,7 +649,7 @@ def translation_batch_progress(end_index: int, total: int) -> float:
     return 0.32 + (min(end_index, safe_total) / safe_total) * 0.12
 
 
-TRANSLATION_PROMPT_VERSION = 4
+TRANSLATION_PROMPT_VERSION = 5
 
 
 def translation_progress_message(*, provider_label: str, start: int, end_index: int, total: int, note: str = "") -> str:
@@ -606,12 +691,22 @@ def apply_localized_result(
     localized: dict[str, Any],
     source_text: str,
 ) -> dict[str, str]:
-    translated_text = prefer_minh_cau_pair(
-        normalize_text(localized.get("translatedText") or source_text),
+    best_translated = pick_best_localized_text(
+        localized.get("translatedText") or "",
+        localized.get("spokenText") or "",
         item.get("sourceText") or source_text,
     )
+    translated_text = prefer_minh_cau_pair(
+        best_translated,
+        item.get("sourceText") or source_text,
+    )
+    spoken_seed = pick_best_localized_text(
+        localized.get("spokenText") or "",
+        translated_text,
+        item.get("sourceText") or "",
+    )
     spoken_text = build_spoken_text(
-        localized.get("spokenText") or translated_text,
+        spoken_seed or translated_text,
         item.get("sourceText") or "",
         delivery=localized.get("delivery") or "neutral",
     )
@@ -632,7 +727,7 @@ def fallback_translate_items(
     source_hint: str,
     use_llama_cpp: bool,
 ) -> list[dict[str, str]]:
-    from .translation import localize_batch_via_llama_cpp, translate_via_google
+    from .translation import localize_batch_via_llama_cpp, translate_via_microsoft
 
     if use_llama_cpp:
         try:
@@ -642,16 +737,26 @@ def fallback_translate_items(
     localized_items: list[dict[str, str]] = []
     for text, source_item in zip(texts, batch):
         try:
-            translated = translate_via_google(text, source_hint, "vi") if text else ""
+            translated = translate_via_microsoft(text, source_hint, "vi") if text else ""
         except Exception:
             translated = ""
-            
-        translated = prefer_minh_cau_pair(translated or text, source_item.get("sourceText") or "")
-        spoken = build_spoken_text(translated or text, source_item.get("sourceText") or "")
+        source_text = source_item.get("sourceText") or ""
+        translated_seed = pick_best_localized_text(
+            translated,
+            source_item.get("spokenText") or "",
+            source_text,
+        )
+        translated = prefer_minh_cau_pair(translated_seed, source_text)
+        spoken_seed = pick_best_localized_text(
+            source_item.get("spokenText") or "",
+            translated,
+            source_text,
+        )
+        spoken = build_spoken_text(spoken_seed or translated, source_text) if (spoken_seed or translated) else ""
         localized_items.append(
             {
-                "translatedText": translated or text,
-                "spokenText": spoken or translated or text,
+                "translatedText": translated,
+                "spokenText": spoken or translated,
                 "delivery": "neutral",
             }
         )
@@ -673,6 +778,26 @@ def localize_batch_via_ollama_resilient(
     texts = [normalize_text(item.get("sourceText") or "") for item in batch]
     try:
         return localize_batch_via_ollama(batch, source_hint, target_language)
+    except OllamaResourceError as exc:
+        # Non-retriable: model cannot fit in memory. Skip all retries, go to fallback.
+        safe_print(
+            f"[warn] Ollama không đủ tài nguyên cho cụm {label}, chuyển sang fallback: "
+            f"{str(exc)[:200]}",
+            flush=True,
+        )
+        emit_progress(
+            phase=phase,
+            step="translate",
+            progress=progress_hint,
+            message=f"Ollama hết RAM ở cụm {label}, đang dùng Microsoft Translator thay thế",
+            extra={"warning": normalize_text(str(exc))[:180]},
+        )
+        return fallback_translate_items(
+            batch,
+            texts=texts,
+            source_hint=source_hint,
+            use_llama_cpp=llama_cpp_available,
+        )
     except Exception as exc:
         if len(batch) == 1:
             extended_timeout = min(
@@ -1041,7 +1166,9 @@ def ensure_whisperx_runtime(*, phase: str, step: str, progress: float) -> None:
         step=step,
         progress=min(progress + 0.01, 0.99),
     )
-    preload_languages = list(dict.fromkeys([*LANGUAGE_OPTIONS, "vi"]))
+    preload_languages = list(
+        dict.fromkeys(language for language in WHISPERX_PRELOAD_ALIGN_LANGUAGES if language)
+    )
     for index, language_code in enumerate(preload_languages, start=1):
         ensure_whisperx_align_cache(
             language_code=language_code,
@@ -1064,8 +1191,10 @@ def ensure_whisperx_runtime(*, phase: str, step: str, progress: float) -> None:
 
 
 def ensure_edge_tts_runtime(*, phase: str, step: str, progress: float) -> None:
+    # Pin to >=7.2.8 for DRM fixes, CBR offset compensation,
+    # SentenceBoundary default, and proper connect_timeout/receive_timeout.
     ensure_python_packages(
-        [("edge_tts", "edge-tts")],
+        [("edge_tts", "edge-tts>=7.2.8")],
         phase=phase,
         step=step,
         progress=progress,
@@ -1160,8 +1289,6 @@ def prepare_runtime(target: str) -> None:
         ensure_edge_tts_runtime(phase="render", step="prepare", progress=0.03)
         if DUB_SOURCE_SEPARATION_ENABLED:
             ensure_source_separation_runtime(phase="render", step="prepare", progress=0.04)
-        if DUB_USE_VIENEU:
-            ensure_vieneu_runtime(phase="render", step="prepare", progress=0.05)
         if DUB_TRANSLATE_PROVIDER in {"ollama", "auto"}:
             ensure_ollama_runtime(
                 required=DUB_TRANSLATE_PROVIDER == "ollama",

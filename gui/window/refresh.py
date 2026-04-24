@@ -22,9 +22,19 @@ class WindowRefreshMixin:
             "cleanup_combo",
             "subtitle_enabled_combo",
             "subtitle_position_combo",
+            "font_group_combo",
             "font_combo",
+            "font_size_spin",
             "font_color_btn",
             "stroke_color_btn",
+            "subtitle_box_check",
+            "box_style_combo",
+            "box_layout_combo",
+            "box_radius_spin",
+            "box_border_width_spin",
+            "box_fill_opacity_spin",
+            "box_fill_color_btn",
+            "box_border_color_btn",
             "stroke_width_spin",
             "max_words_spin",
             "intro_enabled_check",
@@ -33,6 +43,10 @@ class WindowRefreshMixin:
             "intro_background_check",
             "intro_background_volume_spin",
             "keep_original_audio_check",
+            "background_music_enabled_check",
+            "background_music_path_edit",
+            "background_music_choose_btn",
+            "background_music_volume_spin",
             "output_mp4_check",
             "output_draft_check",
             "output_dir_edit",
@@ -62,28 +76,34 @@ class WindowRefreshMixin:
                 button.setEnabled(not running)
 
     def compute_preview_text(self) -> str:
+        best_candidate = ""
         for item in (self.effective_analysis or self.analysis or {}).get(
             "subtitleTimeline", []
-        ):
+        )[:18]:
             candidate = normalize_preview_text(item.get("text"))
-            if len(candidate) >= 8:
-                return repair_mojibake_text(candidate)
+            if 18 <= len(candidate) <= 120 and len(candidate) > len(best_candidate):
+                best_candidate = candidate
         for segment in (self.effective_analysis or self.analysis or {}).get(
             "segments", []
-        ):
+        )[:18]:
             candidate = normalize_preview_text(
                 segment.get("translatedText") or segment.get("sourceText")
             )
-            if len(candidate) >= 8:
-                return repair_mojibake_text(candidate)
-        return "Xem trước vietsub mới ngay trên khung video"
+            if 18 <= len(candidate) <= 120 and len(candidate) > len(best_candidate):
+                best_candidate = candidate
+        if best_candidate:
+            return repair_mojibake_text(best_candidate)
+        return "Đây là preview subtitle để xem màu chữ, cỡ chữ, cách xuống dòng và kiểu box trên video."
 
     def refresh_preview(self) -> None:
-        self.preview_canvas.update_state(
-            self.preview_media_analysis or self.effective_analysis or self.analysis,
-            self.settings,
-            self.compute_preview_text(),
-        )
+        analysis = self.preview_media_analysis or self.effective_analysis or self.analysis
+        text = self.compute_preview_text()
+        preview_canvas = getattr(self, "preview_canvas", None)
+        if preview_canvas is not None:
+            preview_canvas.update_state(analysis, self.settings, text)
+        full_canvas = getattr(self, "_preview_canvas_full", None)
+        if full_canvas is not None:
+            full_canvas.update_state(analysis, self.settings, text)
 
     def refresh_status_only(self) -> None:
         status = self.job_status or {}
@@ -181,26 +201,29 @@ class WindowRefreshMixin:
     def refresh_all(self) -> None:
         analysis = self.effective_analysis or self.analysis or {}
         self.refresh_preview()
+        if hasattr(self, "refresh_style_preview_card"):
+            self.refresh_style_preview_card()
         self.refresh_status_only()
-        self.summary_labels["sourceLanguage"].setText(
-            str(analysis.get("sourceLanguage") or "--")
-        )
-        self.summary_labels["speakers"].setText(
-            str(len(analysis.get("speakers") or []))
-        )
         voice_layout = analysis.get("voiceLayout")
-        self.summary_labels["voiceLayout"].setText(
-            repair_mojibake_text(
-                "Giọng chung"
-                if voice_layout == "single_voice"
-                else "Nhiều nhân vật"
-                if voice_layout == "multi_character"
-                else "--"
+        if hasattr(self, "summary_labels"):
+            self.summary_labels["sourceLanguage"].setText(
+                str(analysis.get("sourceLanguage") or "--")
             )
-        )
-        self.summary_labels["cleanupMode"].setText(
-            str((analysis.get("subtitleRegion") or {}).get("cleanupMode") or "--")
-        )
+            self.summary_labels["speakers"].setText(
+                str(len(analysis.get("speakers") or []))
+            )
+            self.summary_labels["voiceLayout"].setText(
+                repair_mojibake_text(
+                    "Giọng chung"
+                    if voice_layout == "single_voice"
+                    else "Nhiều nhân vật"
+                    if voice_layout == "multi_character"
+                    else "--"
+                )
+            )
+            self.summary_labels["cleanupMode"].setText(
+                str((analysis.get("subtitleRegion") or {}).get("cleanupMode") or "--")
+            )
         warning_box = getattr(self, "warning_box", None)
         if warning_box is not None:
             warning_box.setPlainText(
@@ -259,11 +282,12 @@ class WindowRefreshMixin:
         preset_label = dict(UI_THEME_OPTIONS).get(
             self.settings.get("uiThemePreset", "cinema"), "Cinema"
         )
-        self._set_chip_display_text(
-            self.sidebar_status_chip,
-            f"Preset: {preset_label}",
-            max_width=180,
-        )
+        if hasattr(self, "sidebar_status_chip"):
+            self._set_chip_display_text(
+                self.sidebar_status_chip,
+                f"Preset: {preset_label}",
+                max_width=180,
+            )
         latest_output_path = self.last_output_path or ""
         output_directory = (
             self.output_dir_edit.text().strip()
@@ -299,7 +323,7 @@ class WindowRefreshMixin:
                 )
             elif latest_output_path:
                 self.output_export_status_label.setText(
-                    "Video render đã sẵn sàng trong hệ thống. Chỉ khi bấm Xuất file thì app mới ghi video ra thư mục bạn chọn."
+                    "Video render nội bộ đã sẵn sàng. App sẽ tự lưu file ra thư mục output đã chọn sau khi render xong."
                 )
             else:
                 self.output_export_status_label.setText(
@@ -461,38 +485,6 @@ class WindowRefreshMixin:
 
     def install_environment(self) -> None:
         self._start_install_environment_process()
-        return
-        import threading
-        import subprocess
-
-        def run_install():
-            self.controller.status_changed.emit("render", "system", 0.0, "Đang kiểm tra và cài đặt Ollama...")
-            try:
-                # 1. Install Ollama via winget
-                install_cmd = "winget install Ollama.Ollama --accept-source-agreements --accept-package-agreements --silent"
-                subprocess.run(install_cmd, shell=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
-                
-                self.controller.status_changed.emit("render", "system", 0.4, "Đang tải model gemma4:e4b (Khoảng 2.5GB - Vui lòng đợi trong ít phút)...")
-                
-                # 2. Pull the model (Ollama runs automatically after installation)
-                pull_cmd = "ollama pull gemma4:e4b"
-                pull_process = subprocess.run(pull_cmd, shell=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                
-                if pull_process.returncode == 0:
-                    self.controller.status_changed.emit("render", "system", 1.0, "Cài đặt thành công! Hệ thống đã sẵn sàng với gemma4:e4b.")
-                else:
-                    self.controller.status_changed.emit("render", "system", 0.0, f"Lỗi kéo model. Mở Ollama lên và gõ lệnh 'ollama pull gemma4:e4b'. Chi tiết lỗi: {pull_process.stderr[:150]}")
-            except Exception as e:
-                self.controller.status_changed.emit("render", "system", 0.0, f"Lỗi: {e}")
-
-        self.install_env_btn.setEnabled(False)
-        self.install_env_btn.setText("Đang cài đặt...")
-        def reset_btn():
-            self.install_env_btn.setEnabled(True)
-            self.install_env_btn.setText("Cài Ollama & Gemma4")
-        self.controller.status_changed.connect(lambda p, s, pr, m: reset_btn() if pr == 1.0 or (pr == 0.0 and s == "system") else None)
-        
-        threading.Thread(target=run_install, daemon=True).start()
 
 
 

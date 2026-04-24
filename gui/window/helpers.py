@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Callable
 
 from PyQt6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt
-from PyQt6.QtGui import QTextOption
+from PyQt6.QtGui import QTextOption, QWheelEvent
 from PyQt6.QtWidgets import (
     QApplication,
+    QAbstractSlider,
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
@@ -25,8 +26,187 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from gui.config import QLabeledSlider, UI_THEME_PRESETS, VOICE_LABELS, qta
-from gui.utils import repair_mojibake_text, safe_qta_icon
+from gui.config import BOX_STYLE_PRESETS, QLabeledSlider, UI_THEME_PRESETS, VOICE_LABELS, qta
+from gui.utils import find_font_option, repair_mojibake_text, safe_qta_icon
+
+
+class SectionWidget(QWidget):
+    """A collapsible section with animated expand/collapse."""
+
+    _EXPANDED_MAX_HEIGHT = 16777215
+
+    def __init__(self, title: str, expanded: bool = True, parent=None) -> None:
+        super().__init__(parent)
+        self._title = title
+        self._expanded = expanded
+        self._content_height = 0
+        self._anim_group: QParallelAnimationGroup | None = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Header button
+        self._header_btn = QPushButton(f"  {title}")
+        self._header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header_btn.setStyleSheet(
+            """
+            QPushButton {
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(148,163,184,0.12);
+                border-radius: 10px;
+                color: #cbd5e1;
+                font-weight: 700;
+                font-size: 12px;
+                padding: 8px 14px;
+                text-align: left;
+                min-height: 20px;
+            }
+            QPushButton:hover {
+                background: rgba(56,189,248,0.12);
+                border-color: rgba(56,189,248,0.35);
+                color: #f1f5f9;
+            }
+            """
+        )
+        self._header_btn.clicked.connect(self._toggle)
+        root.addWidget(self._header_btn)
+
+        # Content container
+        self._content_widget = QWidget()
+        self._content_widget.setStyleSheet("background: transparent; border: none;")
+        self._content_layout = QVBoxLayout(self._content_widget)
+        self._content_layout.setContentsMargins(8, 8, 8, 0)
+        self._content_layout.setSpacing(8)
+        root.addWidget(self._content_widget)
+
+        if not expanded:
+            self._set_content_height_limits(0)
+        else:
+            self._set_content_height_limits(self._EXPANDED_MAX_HEIGHT, minimum=0)
+        self._sync_header()
+
+    @property
+    def content_layout(self) -> QVBoxLayout:
+        return self._content_layout
+
+    def _set_content_height_limits(
+        self, maximum: int, *, minimum: int | None = None
+    ) -> None:
+        if minimum is None:
+            minimum = maximum
+        self._content_widget.setMinimumHeight(max(0, int(minimum)))
+        self._content_widget.setMaximumHeight(max(0, int(maximum)))
+
+    def _natural_content_height(self) -> int:
+        self._content_widget.ensurePolished()
+        self._content_layout.activate()
+        return max(
+            self._content_layout.sizeHint().height(),
+            self._content_widget.sizeHint().height(),
+        )
+
+    def _sync_header(self) -> None:
+        arrow = "-" if self._expanded else "+"
+        self._header_btn.setText(f"  {arrow} {self._title}")
+
+    def _toggle(self) -> None:
+        if self._anim_group:
+            self._anim_group.stop()
+            self._anim_group.deleteLater()
+            self._anim_group = None
+
+        self._content_height = self._natural_content_height()
+        current_height = (
+            self._content_widget.height()
+            if self._content_widget.maximumHeight() > 0
+            else 0
+        )
+        self._expanded = not self._expanded
+        target_height = self._content_height if self._expanded else 0
+        self._sync_header()
+
+        self._set_content_height_limits(current_height)
+
+        self._anim_group = QParallelAnimationGroup(self)
+        for prop in (b"minimumHeight", b"maximumHeight"):
+            anim = QPropertyAnimation(self._content_widget, prop, self)
+            anim.setStartValue(current_height)
+            anim.setEndValue(target_height)
+            anim.setDuration(220)
+            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+            self._anim_group.addAnimation(anim)
+        self._anim_group.finished.connect(self._on_animation_finished)
+        self._anim_group.start()
+
+    def _on_animation_finished(self) -> None:
+        self._content_height = self._natural_content_height()
+        if self._expanded:
+            self._set_content_height_limits(self._EXPANDED_MAX_HEIGHT, minimum=0)
+        else:
+            self._set_content_height_limits(0)
+        self._content_widget.updateGeometry()
+        if self._anim_group:
+            self._anim_group.deleteLater()
+            self._anim_group = None
+
+
+class _WheelGuardMixin:
+    def _allow_wheel_change(self) -> bool:
+        if not self.isEnabled():
+            return False
+        if self.hasFocus():
+            return True
+        view_getter = getattr(self, "view", None)
+        if callable(view_getter):
+            try:
+                popup_view = view_getter()
+            except Exception:
+                popup_view = None
+            if popup_view is not None and popup_view.isVisible():
+                return True
+        if isinstance(self, QAbstractSlider) and self.isSliderDown():
+            return True
+        return False
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if self._allow_wheel_change():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+
+class SafeComboBox(_WheelGuardMixin, QComboBox):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+
+class SafeSpinBox(_WheelGuardMixin, QSpinBox):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+
+class SafeDoubleSpinBox(_WheelGuardMixin, QDoubleSpinBox):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+
+class SafeSlider(_WheelGuardMixin, QSlider):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+
+if QLabeledSlider is not None:
+    class SafeLabeledSlider(_WheelGuardMixin, QLabeledSlider):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+else:  # pragma: no cover
+    SafeLabeledSlider = None
 
 
 class WindowHelpersMixin:
@@ -78,11 +258,13 @@ class WindowHelpersMixin:
                     fixed_item = repair_mojibake_text(current_item)
                     if fixed_item != current_item:
                         widget.setItemText(index, fixed_item)
-        for tab_index in range(self.main_tabs.count()):
-            current_tab = self.main_tabs.tabText(tab_index)
-            fixed_tab = repair_mojibake_text(current_tab)
-            if fixed_tab != current_tab:
-                self.main_tabs.setTabText(tab_index, fixed_tab)
+        _tabs = getattr(self, "main_tabs", None)
+        if _tabs is not None:
+            for tab_index in range(_tabs.count()):
+                current_tab = _tabs.tabText(tab_index)
+                fixed_tab = repair_mojibake_text(current_tab)
+                if fixed_tab != current_tab:
+                    _tabs.setTabText(tab_index, fixed_tab)
 
     def _make_slider(self, minimum: int, maximum: int, value: int, slot) -> QSlider:
         use_superqt = (
@@ -90,7 +272,7 @@ class WindowHelpersMixin:
             and os.environ.get("CAPCUT_ENABLE_SUPERQT") == "1"
             and QLabeledSlider is not None
         )
-        slider_class = QLabeledSlider if use_superqt else QSlider
+        slider_class = SafeLabeledSlider if use_superqt else SafeSlider
         slider = slider_class(Qt.Orientation.Horizontal)
         slider.setRange(minimum, maximum)
         slider.setValue(value)
@@ -99,7 +281,7 @@ class WindowHelpersMixin:
         return slider
 
     def _make_combo(self, options: list[tuple[str, str]], slot) -> QComboBox:
-        combo = QComboBox()
+        combo = SafeComboBox()
         for value, label in options:
             combo.addItem(label, value)
         combo.setMaxVisibleItems(12)
@@ -120,7 +302,7 @@ class WindowHelpersMixin:
         return combo
 
     def _make_region_spin(self) -> QSpinBox:
-        spin = QSpinBox()
+        spin = SafeSpinBox()
         spin.setRange(0, 99999)
         spin.valueChanged.connect(self.on_basic_settings_changed)
         return spin
@@ -168,6 +350,10 @@ class WindowHelpersMixin:
         layout.addWidget(title_label)
         layout.addWidget(hint_label)
         return card, layout
+
+    def _make_section(self, title: str, expanded: bool = True) -> SectionWidget:
+        section = SectionWidget(title, expanded)
+        return section
 
     def _make_stat_card(self, title: str) -> tuple[QFrame, QLabel]:
         card = QFrame()
@@ -322,9 +508,10 @@ class WindowHelpersMixin:
         for widget in self.findChildren(QDoubleSpinBox):
             self._configure_shrinkable_widget(widget)
         self._configure_shrinkable_widget(getattr(self, "main_tabs", None))
-        if hasattr(self, "main_tabs"):
-            for tab_index in range(self.main_tabs.count()):
-                self._configure_shrinkable_widget(self.main_tabs.widget(tab_index))
+        _tabs = getattr(self, "main_tabs", None)
+        if _tabs is not None:
+            for tab_index in range(_tabs.count()):
+                self._configure_shrinkable_widget(_tabs.widget(tab_index))
         for attr_name in (
             "phase_label",
             "step_label",
@@ -355,12 +542,22 @@ class WindowHelpersMixin:
     def _update_color_button_styles(self) -> None:
         font_color = self.settings["subtitlePreset"].get("fontColor", "#ffd200")
         stroke_color = self.settings["subtitlePreset"].get("strokeColor", "#000000")
+        box_fill_color = self.settings["subtitlePreset"].get("boxFillColor", "#77b8ee")
+        box_border_color = self.settings["subtitlePreset"].get("boxBorderColor", "#3b82f6")
         self.font_color_btn.setStyleSheet(
             f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {font_color}, stop:1 #ffffff); color: #0f172a; border: none;"
         )
         self.stroke_color_btn.setStyleSheet(
             f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {stroke_color}, stop:1 #64748b); color: white; border: none;"
         )
+        if hasattr(self, "box_fill_color_btn") and self.box_fill_color_btn is not None:
+            self.box_fill_color_btn.setStyleSheet(
+                f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {box_fill_color}, stop:1 #dbeafe); color: #0f172a; border: none;"
+            )
+        if hasattr(self, "box_border_color_btn") and self.box_border_color_btn is not None:
+            self.box_border_color_btn.setStyleSheet(
+                f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {box_border_color}, stop:1 #64748b); color: white; border: none;"
+            )
 
     def _make_swatch_button(self, key: str, color: str) -> QPushButton:
         button = QPushButton()
@@ -383,6 +580,12 @@ class WindowHelpersMixin:
 
     def apply_palette_color(self, key: str, color: str) -> None:
         self.settings["subtitlePreset"][key] = color
+        if key in {"boxFillColor", "boxBorderColor"}:
+            self.settings["subtitlePreset"]["boxStylePreset"] = "custom"
+            if hasattr(self, "box_style_combo"):
+                self.box_style_combo.blockSignals(True)
+                self._set_combo_value(self.box_style_combo, "custom")
+                self.box_style_combo.blockSignals(False)
         self._update_color_button_styles()
         self.refresh_all()
 
@@ -392,20 +595,40 @@ class WindowHelpersMixin:
             return
         font_option = find_font_option(preset["fontFamily"])
         self.settings["uiThemePreset"] = preset_key
-        self.settings["subtitlePreset"].update(
-            {
-                "fontFamily": font_option["value"],
-                "fontFamilyLabel": font_option["label"],
-                "fontFamilyName": font_option["fontFamilyName"],
-                "cssFontFamily": font_option["cssFontFamily"],
-                "assFontName": font_option["assFontName"],
-                "draftFontKey": font_option["draftFontKey"],
-                "fontColor": preset["fontColor"],
-                "strokeColor": preset["strokeColor"],
-                "strokeWidth": preset["strokeWidth"],
-                "positionPreset": preset["positionPreset"],
-            }
-        )
+        subtitle_updates = {
+            "fontFamily": font_option["value"],
+            "fontFamilyLabel": font_option["label"],
+            "fontFamilyName": font_option["fontFamilyName"],
+            "cssFontFamily": font_option["cssFontFamily"],
+            "assFontName": font_option["assFontName"],
+            "draftFontKey": font_option["draftFontKey"],
+            "fontColor": preset["fontColor"],
+            "strokeColor": preset["strokeColor"],
+            "strokeWidth": preset["strokeWidth"],
+            "positionPreset": preset["positionPreset"],
+            "textEffect": str(preset.get("textEffect", "none")),
+            "boxEnabled": bool(preset.get("boxEnabled", False)),
+        }
+        box_style_preset = str(preset.get("boxStylePreset") or "").strip()
+        if box_style_preset and box_style_preset in BOX_STYLE_PRESETS:
+            subtitle_updates["boxStylePreset"] = box_style_preset
+            subtitle_updates.update(BOX_STYLE_PRESETS[box_style_preset])
+        else:
+            for key in (
+                "boxStylePreset",
+                "boxLayoutMode",
+                "boxFillColor",
+                "boxFillOpacity",
+                "boxBorderColor",
+                "boxBorderOpacity",
+                "boxBorderWidth",
+                "boxRadius",
+                "boxPaddingX",
+                "boxPaddingY",
+            ):
+                if key in preset:
+                    subtitle_updates[key] = preset[key]
+        self.settings["subtitlePreset"].update(subtitle_updates)
         self.settings["sourceSubtitleCleanupMode"] = preset["cleanupMode"]
         self.sync_widgets_from_settings()
         self.refresh_all()

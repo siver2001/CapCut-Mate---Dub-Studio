@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QCloseEvent, QIcon
 
 try:
     from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -106,6 +106,7 @@ class DubStudioWindow(
             self.voice_player.errorOccurred.connect(self._handle_voice_player_error)
 
         self._build_ui()
+        self.sync_widgets_from_settings()
         if (
             self.render_preview_player is not None
             and self.render_preview_audio_output is not None
@@ -133,8 +134,15 @@ class DubStudioWindow(
                 self._on_render_preview_playback_state_changed
             )
         self._configure_responsive_widgets()
-        self.preview_canvas.subtitle_dragged.connect(self.on_preview_subtitle_dragged)
-        self.preview_canvas.cleanup_region_changed.connect(self.on_cleanup_region_dragged)
+        # preview_canvas signals are now connected in _build_ui_compact to _preview_canvas_full
         self._repair_widget_texts()
         self.refresh_all()
         QTimer.singleShot(90, self.play_intro_animation)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Ensure running processes are killed before the window is destroyed."""
+        try:
+            self.controller.cleanup()
+        except Exception:
+            pass
+        super().closeEvent(event)
