@@ -268,11 +268,6 @@ class PreviewCanvas(QWidget):
                 box_fill.setAlphaF(box_fill_opacity)
                 box_border = QColor(str(subtitle_preset.get("boxBorderColor", "#3b82f6")))
                 box_border.setAlphaF(box_border_opacity)
-                if box_border_width > 0:
-                    painter.setPen(QPen(box_border, float(box_border_width)))
-                else:
-                    painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(box_fill)
                 if box_layout_mode == "line" and len(preview_lines) > 1:
                     line_rects: list[QRectF] = []
                     current_top = caption_top
@@ -297,8 +292,19 @@ class PreviewCanvas(QWidget):
                         line_rects.append(line_rect)
                         current_top += line_box_height + max(line_gap - 1, 3)
                     caption_rects = line_rects or [caption_rect]
+                    
+                # Pass 1: Filled background
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(box_fill)
                 for rect in caption_rects:
                     painter.drawRoundedRect(rect, box_radius, box_radius)
+                    
+                # Pass 2: Border outline
+                if box_border_width > 0:
+                    painter.setPen(QPen(box_border, float(box_border_width), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    for rect in caption_rects:
+                        painter.drawRoundedRect(rect, box_radius, box_radius)
             outline_union_rect = QRectF(caption_rects[0])
             for rect in caption_rects[1:]:
                 outline_union_rect = outline_union_rect.united(rect)

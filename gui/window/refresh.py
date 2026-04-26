@@ -138,6 +138,7 @@ class WindowRefreshMixin:
                     "preview_text": text,
                 },
                 self.settings.get("stickerOptions") or {},
+                self.settings.get("watermark") or {},
             )
 
     def refresh_style_preview_card(self) -> None:

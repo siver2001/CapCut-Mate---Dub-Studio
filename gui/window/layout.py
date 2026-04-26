@@ -456,16 +456,11 @@ class WindowLayoutMixin:
         self.background_music_enabled_check.stateChanged.connect(
             self.on_basic_settings_changed
         )
-        self.background_music_volume_spin = SafeDoubleSpinBox()
-        self.background_music_volume_spin.setRange(0.0, 1.0)
-        self.background_music_volume_spin.setSingleStep(0.05)
-        self.background_music_volume_spin.setValue(0.12)
+        self.background_music_volume_spin = self._make_slider(0, 100, 6, self.on_basic_settings_changed)
         self.background_music_volume_spin.setToolTip(
             "Âm lượng riêng cho nhạc nền. Nhạc ngắn sẽ tự lặp tới hết video."
         )
-        self.background_music_volume_spin.valueChanged.connect(
-            self.on_basic_settings_changed
-        )
+        self.background_music_volume_label = QLabel("6%")
         self.background_music_path_edit = QLineEdit()
         self.background_music_path_edit.setReadOnly(True)
         self.background_music_path_edit.setPlaceholderText(
@@ -616,7 +611,12 @@ class WindowLayoutMixin:
         settings_grid.addWidget(self.intro_background_volume_spin, 18, 3)
         settings_grid.addWidget(self.background_music_enabled_check, 19, 0, 1, 2)
         settings_grid.addWidget(self._field_label("Âm lượng nhạc nền"), 19, 2)
-        settings_grid.addWidget(self.background_music_volume_spin, 19, 3)
+        bg_vol_row = QHBoxLayout()
+        bg_vol_row.setContentsMargins(0, 0, 0, 0)
+        bg_vol_row.setSpacing(6)
+        bg_vol_row.addWidget(self.background_music_volume_spin, 1)
+        bg_vol_row.addWidget(self.background_music_volume_label)
+        settings_grid.addLayout(bg_vol_row, 19, 3)
         settings_grid.addWidget(self._field_label("File nhạc nền"), 20, 0)
         background_music_row = QWidget()
         background_music_row_layout = QHBoxLayout(background_music_row)
@@ -888,11 +888,8 @@ class WindowLayoutMixin:
         self.main_keep_original_audio_check.stateChanged.connect(self.on_basic_settings_changed)
         self.main_background_music_enabled_check = QCheckBox("Nhạc nền toàn video")
         self.main_background_music_enabled_check.stateChanged.connect(self.on_basic_settings_changed)
-        self.main_background_music_volume_spin = SafeDoubleSpinBox()
-        self.main_background_music_volume_spin.setRange(0.0, 1.0)
-        self.main_background_music_volume_spin.setSingleStep(0.05)
-        self.main_background_music_volume_spin.setValue(0.12)
-        self.main_background_music_volume_spin.valueChanged.connect(self.on_basic_settings_changed)
+        self.main_background_music_volume_spin = self._make_slider(0, 100, 6, self.on_basic_settings_changed)
+        self.main_background_music_volume_label = QLabel("6%")
         self.main_background_music_path_edit = QLineEdit()
         self.main_background_music_path_edit.setReadOnly(True)
         self.main_background_music_path_edit.setPlaceholderText("Chưa chọn file nhạc nền")
@@ -921,7 +918,12 @@ class WindowLayoutMixin:
         audio_grid.addWidget(self.main_intro_background_volume_spin, 2, 3)
         audio_grid.addWidget(self.main_background_music_enabled_check, 3, 0, 1, 2)
         audio_grid.addWidget(self._field_label("Âm lượng nhạc nền"), 3, 2)
-        audio_grid.addWidget(self.main_background_music_volume_spin, 3, 3)
+        main_bg_vol_row = QHBoxLayout()
+        main_bg_vol_row.setContentsMargins(0, 0, 0, 0)
+        main_bg_vol_row.setSpacing(6)
+        main_bg_vol_row.addWidget(self.main_background_music_volume_spin, 1)
+        main_bg_vol_row.addWidget(self.main_background_music_volume_label)
+        audio_grid.addLayout(main_bg_vol_row, 3, 3)
         audio_grid.addWidget(self._field_label("File nhạc nền"), 4, 0)
         audio_grid.addLayout(bg_music_row, 4, 1, 1, 3)
         audio_grid.addWidget(self._field_label("Giọng lồng tiếng mặc định"), 5, 0)
@@ -1509,6 +1511,37 @@ class WindowLayoutMixin:
         self.batch_log_box.setMinimumHeight(120)
         batch_layout.addWidget(self.batch_log_box)
         batch_page_layout.addWidget(batch_queue_card, 1)
+
+        # Widget compatibility mappings between old UI layout variables and Compact UI variables
+        compatibility_mappings = [
+            ("source_language_combo", "main_source_language_combo"),
+            ("target_language_combo", "main_target_language_combo"),
+            ("speaker_detection_combo", "main_speaker_detection_combo"),
+            ("speaker_count_spin", "main_speaker_count_spin"),
+            ("timing_mode_combo", "main_timing_mode_combo"),
+            ("cleanup_combo", "main_cleanup_combo"),
+            ("intro_enabled_check", "main_intro_enabled_check"),
+            ("intro_duration_spin", "main_intro_duration_spin"),
+            ("intro_voice_combo", "main_intro_voice_combo"),
+            ("intro_background_check", "main_intro_background_check"),
+            ("intro_background_volume_spin", "main_intro_background_volume_spin"),
+            ("keep_original_audio_check", "main_keep_original_audio_check"),
+            ("region_x_spin", "main_region_x_spin"),
+            ("region_y_spin", "main_region_y_spin"),
+            ("region_w_spin", "main_region_w_spin"),
+            ("region_h_spin", "main_region_h_spin"),
+            ("output_mp4_check", "main_output_mp4_check"),
+            ("output_draft_check", "main_output_draft_check"),
+            ("output_dir_edit", "main_output_dir_edit"),
+            ("draft_dir_edit", "main_draft_dir_edit"),
+            ("voice_layout", "main_voice_layout"),
+            ("voice_overview_label", "main_voice_overview_label"),
+            ("background_music_enabled_check", "main_background_music_enabled_check"),
+            ("background_music_volume_spin", "main_background_music_volume_spin"),
+        ]
+        for old, new in compatibility_mappings:
+            if not hasattr(self, old) and hasattr(self, new):
+                setattr(self, old, getattr(self, new))
 
         self._page_stack.addWidget(batch_page)
 

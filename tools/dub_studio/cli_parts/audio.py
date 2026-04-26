@@ -50,7 +50,7 @@ from ..tts.voices import (
 
 def clamp_background_music_volume(value: Any) -> float:
     try:
-        return max(0.0, min(float(value), 1.0))
+        return max(0.0, min(float(value), 2.0))
     except Exception:
         return 0.0
 

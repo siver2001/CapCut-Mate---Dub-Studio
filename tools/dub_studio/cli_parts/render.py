@@ -18,6 +18,8 @@ from .analysis import (
     resolve_valtec_reference_audio,
     resolve_voice_preset,
     subtitle_region_detected,
+    subtitles_from_analysis_segments,
+    build_stable_subtitle_positions,
 )
 from .audio import (
     create_dub_audio,
@@ -206,7 +208,7 @@ def expand_cleanup_region_for_render(
     center_x = int(region.get("centerX", int(region.get("x", 0)) + region_w // 2))
     center_y = int(region.get("centerY", int(region.get("y", 0)) + region_h // 2))
 
-    min_w = min(width, max(int(width * 0.72), region_w + int(width * 0.16)))
+    return {"x": max(int(region.get("x", 0)), 0), "y": max(int(region.get("y", 0)), 0), "w": min(region_w, width), "h": min(region_h, height)}
     min_h = min(height, max(int(height * 0.14), region_h + font_size * 2))
     expanded_w = min(width, max(region_w + int(region_w * 0.7), min_w))
     expanded_h = min(height, max(region_h + int(region_h * 1.6), min_h))
@@ -291,8 +293,8 @@ def burn_subtitles(
             f"subtitles={subtitles_path.relative_to(ROOT).as_posix()}:"
             f"force_style='FontName={font_name},PrimaryColour={primary_color},"
             f"OutlineColour={outline_color if use_unified_box else box_border_color if box_enabled else outline_color},"
-            f"BorderStyle={4 if use_unified_box else 3 if box_enabled else 1},"
-            f"Outline={box_border_width if box_enabled and not use_unified_box else outline},Shadow={box_shadow},"
+            f"BorderStyle={3 if box_enabled else 1},"
+            f"Outline={effective_ass_outline(int(subtitle_preset.get('boxPaddingX', 24)), source_video_meta) if box_enabled else outline},Shadow={box_shadow},"
             f"FontSize={font_size},BackColour={box_fill_color if box_enabled else '&H00000000'},"
             f"MarginV={margin_v},Alignment=2'"
         )
@@ -1701,7 +1703,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     ):
         raise RuntimeError("File nhạc nền đã bật nhưng không còn tồn tại. Hãy chọn lại file audio.")
     background_music_volume = max(
-        0.0, min(float(background_music.get("volume", 0.12)), 1.0)
+        0.0, min(float(background_music.get("volume", 0.12)), 2.0)
     )
     if intro_hook.get("enabled") and is_vieneu_voice_preset(resolve_voice_preset(intro_hook.get("voice") or "")):
         uses_vieneu_voice = True
@@ -1786,11 +1788,18 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
             requested_cleanup_mode
         )
         if requested_cleanup_normalized != "none":
-            dynamic_regions, subtitle_positions = build_dynamic_subtitle_regions(
+            original_subtitles = subtitles_from_analysis_segments(analysis.get("segments") or [])
+            dynamic_regions, _ = build_dynamic_subtitle_regions(
                 input_path,
                 video_meta=analysis["videoMeta"],
-                subtitles=display_subtitles,
+                subtitles=original_subtitles,
                 fallback_region=effective_subtitle_region,
+            )
+            subtitle_positions = build_stable_subtitle_positions(
+                display_subtitles,
+                dynamic_regions=dynamic_regions,
+                fallback_region=effective_subtitle_region,
+                video_meta=analysis["videoMeta"],
             )
             dynamic_regions = filter_dynamic_cleanup_regions(
                 dynamic_regions,

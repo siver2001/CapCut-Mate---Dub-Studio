@@ -51,25 +51,60 @@ class _SubtitleOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
         self.setAutoFillBackground(False)
+        self.setStyleSheet("background: transparent; border: none;")
         self._subtitle_data: dict[str, Any] = {}
         self._sticker_pixmap: QPixmap | None = None
         self._sticker_opts: dict[str, Any] = {}
+        self._watermark_opts: dict[str, Any] = {}
+
+    def _get_video_frame_rect(self) -> QRectF:
+        widget_w = self.width()
+        widget_h = self.height()
+        if widget_w <= 0 or widget_h <= 0:
+            return QRectF(0, 0, widget_w, widget_h)
+
+        video_size = QSizeF(16, 9)
+        try:
+            video_widget = self.parent().parent()
+            if hasattr(video_widget, "_video_item"):
+                native = video_widget._video_item.nativeSize()
+                if native.width() > 0 and native.height() > 0:
+                    video_size = native
+        except Exception:
+            pass
+
+        aspect_ratio = video_size.width() / video_size.height()
+        if widget_w / widget_h > aspect_ratio:
+            frame_h = widget_h
+            frame_w = frame_h * aspect_ratio
+            frame_x = (widget_w - frame_w) / 2
+            frame_y = 0
+        else:
+            frame_w = widget_w
+            frame_h = frame_w / aspect_ratio
+            frame_x = 0
+            frame_y = (widget_h - frame_h) / 2
+            
+        return QRectF(frame_x, frame_y, frame_w, frame_h)
 
     def update_overlay(
         self,
         subtitle_data: dict[str, Any],
         sticker_opts: dict[str, Any],
         sticker_pixmap: QPixmap | None,
+        watermark_opts: dict[str, Any] | None = None,
     ) -> None:
         self._subtitle_data = subtitle_data
         self._sticker_opts = sticker_opts
         self._sticker_pixmap = sticker_pixmap
+        self._watermark_opts = watermark_opts or {}
         self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._paint_sticker(painter)
+        self._paint_watermark(painter)
         self._paint_subtitle(painter)
         painter.end()
 
@@ -82,17 +117,19 @@ class _SubtitleOverlay(QWidget):
         if pixmap is None or pixmap.isNull():
             self._paint_sticker_placeholder(painter)
             return
+            
+        frame_rect = self._get_video_frame_rect()
         scale = float(sticker_opts.get("scale", 1.0))
-        base_w = self.width() // 4
+        base_w = frame_rect.width() // 4
         sw = max(20, int(base_w * scale))
-        sw = min(sw, int(self.width() * 0.5))
+        sw = min(sw, int(frame_rect.width() * 0.5))
         sticker_pm = pixmap.scaledToWidth(sw, Qt.TransformationMode.SmoothTransformation)
         transform_x = max(-1.0, min(float(sticker_opts.get("transform_x", 0.0)), 1.0))
         transform_y = max(-1.0, min(float(sticker_opts.get("transform_y", -0.3)), 1.0))
-        sx = (self.width() - sticker_pm.width()) * ((transform_x + 1.0) * 0.5)
-        sy = (self.height() - sticker_pm.height()) * ((transform_y + 1.0) * 0.5)
-        sx = max(0.0, min(sx, max(self.width() - sticker_pm.width(), 0)))
-        sy = max(0.0, min(sy, max(self.height() - sticker_pm.height(), 0)))
+        sx = frame_rect.left() + (frame_rect.width() - sticker_pm.width()) * ((transform_x + 1.0) * 0.5)
+        sy = frame_rect.top() + (frame_rect.height() - sticker_pm.height()) * ((transform_y + 1.0) * 0.5)
+        sx = max(frame_rect.left(), min(sx, max(frame_rect.right() - sticker_pm.width(), frame_rect.left())))
+        sy = max(frame_rect.top(), min(sy, max(frame_rect.bottom() - sticker_pm.height(), frame_rect.top())))
         painter.drawPixmap(int(sx), int(sy), sticker_pm)
         border_rect = QRectF(sx, sy, sticker_pm.width(), sticker_pm.height())
         painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine))
@@ -104,14 +141,16 @@ class _SubtitleOverlay(QWidget):
         if not sticker_id:
             return
         label = "[Sticker Animated]" if int(sticker_opts.get("sticker_type", 1)) == 2 else "[Sticker]"
+        
+        frame_rect = self._get_video_frame_rect()
         painter.setFont(QFont("Segoe UI", 10))
         metrics = painter.fontMetrics()
-        rect_width = min(max(metrics.horizontalAdvance(label) + 28, 130), max(self.width() - 32, 80))
+        rect_width = min(max(metrics.horizontalAdvance(label) + 28, 130), max(frame_rect.width() - 32, 80))
         rect_height = metrics.height() + 16
         transform_x = max(-1.0, min(float(sticker_opts.get("transform_x", 0.0)), 1.0))
         transform_y = max(-1.0, min(float(sticker_opts.get("transform_y", -0.3)), 1.0))
-        left = (self.width() - rect_width) * ((transform_x + 1.0) * 0.5)
-        top = (self.height() - rect_height) * ((transform_y + 1.0) * 0.5)
+        left = frame_rect.left() + (frame_rect.width() - rect_width) * ((transform_x + 1.0) * 0.5)
+        top = frame_rect.top() + (frame_rect.height() - rect_height) * ((transform_y + 1.0) * 0.5)
         rect = QRectF(left, top, rect_width, rect_height)
         painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
         painter.setBrush(QColor(8, 15, 29, 180))
@@ -119,16 +158,60 @@ class _SubtitleOverlay(QWidget):
         painter.setPen(QColor("#ffffff"))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), label)
 
+    def _paint_watermark(self, painter: QPainter) -> None:
+        watermark = self._watermark_opts
+        if watermark.get("enabled"):
+            frame_rect = self._get_video_frame_rect()
+            path = watermark.get("path")
+            wm_pm = QPixmap(path) if path else QPixmap()
+            scale_factor = float(watermark.get("scale", 0.15))
+            wm_w = max(10.0, frame_rect.width() * scale_factor)
+            
+            if not wm_pm.isNull():
+                wm_pm_scaled = wm_pm.scaledToWidth(int(wm_w), Qt.TransformationMode.SmoothTransformation)
+                wm_h = wm_pm_scaled.height()
+            else:
+                # Draw placeholder
+                wm_w = max(40, int(wm_w))
+                wm_h = max(20, int(wm_w * 0.4))
+                wm_pm_scaled = None
+                
+            pos = watermark.get("position", "top-right")
+            margin = 10
+            
+            if pos == "top-left":
+                wm_x = frame_rect.left() + margin
+                wm_y = frame_rect.top() + margin
+            elif pos == "top-right":
+                wm_x = frame_rect.right() - wm_w - margin
+                wm_y = frame_rect.top() + margin
+            elif pos == "bottom-left":
+                wm_x = frame_rect.left() + margin
+                wm_y = frame_rect.bottom() - wm_h - margin
+            else: # bottom-right
+                wm_x = frame_rect.right() - wm_w - margin
+                wm_y = frame_rect.bottom() - wm_h - margin
+                
+            if wm_pm_scaled:
+                painter.drawPixmap(int(wm_x), int(wm_y), wm_pm_scaled)
+            else:
+                rect = QRectF(wm_x, wm_y, wm_w, wm_h)
+                painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
+                painter.setBrush(QColor(8, 15, 29, 180))
+                painter.drawRoundedRect(rect, 4, 4)
+                painter.setPen(QColor("#ffffff"))
+                painter.setFont(QFont("Segoe UI", max(6, int(wm_h * 0.4))))
+                painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "[Watermark]")
+
     def _paint_subtitle(self, painter: QPainter) -> None:
         subtitle_preset = self._subtitle_data.get("subtitlePreset") or {}
-        if not subtitle_preset.get("enabled", True):
-            return
         current_text = self._subtitle_data.get("current_text") or ""
         if not current_text:
             current_text = self._subtitle_data.get("preview_text") or ""
         if not current_text:
             return
 
+        frame_rect = self._get_video_frame_rect()
         font_option = find_font_option(
             str(subtitle_preset.get("fontFamily") or "arial-bold")
         )
@@ -149,41 +232,35 @@ class _SubtitleOverlay(QWidget):
         content_height = metrics.boundingRect("Ag").height()
         line_gap = max(int(content_height * 0.3), 4)
         box_enabled = bool(subtitle_preset.get("boxEnabled", False))
-        box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()
         box_padding_x = max(int(subtitle_preset.get("boxPaddingX", 24)), 0)
         box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12)), 0)
         box_radius = max(int(subtitle_preset.get("boxRadius", 16)), 0)
         box_border_width = max(int(subtitle_preset.get("boxBorderWidth", 2)), 0)
         box_fill_opacity = max(min(float(subtitle_preset.get("boxFillOpacity", 0.86)), 1.0), 0.0)
         box_border_opacity = max(min(float(subtitle_preset.get("boxBorderOpacity", 1.0)), 1.0), 0.0)
-        max_text_width = self.width() * 0.76
+        max_text_width = frame_rect.width() * 0.76
         text_width = min(
             metrics.horizontalAdvance((current_text or " ").replace("\n", " ")),
             max_text_width,
         )
         caption_height = content_height * len(preview_lines) + line_gap * max(len(preview_lines) - 1, 0)
-        caption_width = max(text_width + box_padding_x * 2, self.width() * 0.22)
+        caption_width = max(text_width + box_padding_x * 2, frame_rect.width() * 0.22)
         caption_height_total = caption_height + box_padding_y * 2
-        if box_enabled and box_layout_mode == "line" and len(preview_lines) > 1:
-            caption_height_total = (
-                len(preview_lines) * (content_height + box_padding_y * 2)
-                + max(line_gap - 1, 3) * (len(preview_lines) - 1)
-            )
         if not box_enabled:
             caption_width += 20
             caption_height_total += 12
-        caption_width = min(caption_width, self.width() * 0.84)
-        caption_left = self.width() / 2 - caption_width * 0.5
+        caption_width = min(caption_width, frame_rect.width() * 0.84)
+        caption_left = frame_rect.left() + frame_rect.width() / 2 - caption_width * 0.5
         placement, offset = self._resolve_placement(
             str(subtitle_preset.get("positionPreset") or "bottom"),
             int(subtitle_preset.get("bottomOffset", 54)),
         )
         if placement == "top":
-            caption_top = offset
+            caption_top = frame_rect.top() + offset
         elif placement == "middle":
-            caption_top = self.height() / 2 - caption_height_total * 0.5
+            caption_top = frame_rect.top() + frame_rect.height() / 2 - caption_height_total * 0.5
         else:
-            caption_top = self.height() - caption_height_total - offset
+            caption_top = frame_rect.bottom() - caption_height_total - offset
         caption_rect = QRectF(caption_left, caption_top, caption_width, caption_height_total)
         caption_rects = [caption_rect]
         if box_enabled:
@@ -191,26 +268,19 @@ class _SubtitleOverlay(QWidget):
             box_fill.setAlphaF(box_fill_opacity)
             box_border = QColor(str(subtitle_preset.get("boxBorderColor", "#3b82f6")))
             box_border.setAlphaF(box_border_opacity)
-            if box_border_width > 0:
-                painter.setPen(QPen(box_border, float(box_border_width)))
-            else:
-                painter.setPen(Qt.PenStyle.NoPen)
+                
+            # Pass 1: Draw filled background with NoPen
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(box_fill)
-            if box_layout_mode == "line" and len(preview_lines) > 1:
-                line_rects: list[QRectF] = []
-                current_top = caption_top
-                min_width = self.width() * 0.24
-                for line in preview_lines:
-                    line_text_width = min(metrics.horizontalAdvance(line or " "), max_text_width)
-                    line_box_width = min(max(line_text_width + box_padding_x * 2, min_width), self.width() * 0.84)
-                    line_box_height = content_height + box_padding_y * 2
-                    line_left = self.width() / 2 - line_box_width * 0.5
-                    line_rect = QRectF(line_left, current_top, line_box_width, line_box_height)
-                    line_rects.append(line_rect)
-                    current_top += line_box_height + max(line_gap - 1, 3)
-                caption_rects = line_rects or [caption_rect]
             for rect in caption_rects:
                 painter.drawRoundedRect(rect, box_radius, box_radius)
+                
+            # Pass 2: Draw border outline on top
+            if box_border_width > 0:
+                painter.setPen(QPen(box_border, float(box_border_width), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                for rect in caption_rects:
+                    painter.drawRoundedRect(rect, box_radius, box_radius)
         stroke_width = max(int(round(float(subtitle_preset.get("strokeWidth", 2)))), 0)
         text_flags = int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap)
         if stroke_width > 0:
@@ -509,6 +579,7 @@ class VideoPreviewWidget(QWidget):
         self,
         subtitle_data: dict[str, Any],
         sticker_opts: dict[str, Any],
+        watermark_opts: dict[str, Any] | None = None,
     ) -> None:
         """
         Update the overlay with new subtitle and sticker settings.
@@ -522,6 +593,7 @@ class VideoPreviewWidget(QWidget):
             or ""
         )
         self._sticker_opts = sticker_opts or {}
+        self._watermark_opts = watermark_opts or {}
         self._load_sticker_pixmap()
         self._update_overlay()
 
@@ -680,7 +752,9 @@ class VideoPreviewWidget(QWidget):
             },
             self._sticker_opts,
             self._sticker_pixmap,
+            self._watermark_opts,
         )
+        self._overlay.raise_()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

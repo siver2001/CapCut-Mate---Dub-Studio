@@ -1959,7 +1959,7 @@ def build_dynamic_subtitle_regions(
         region["confidence"] = round(max(float(region.get("confidence", 0.0)), SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
 
         # Apply minimum padding — just enough to avoid cutting off the edges of subtitle text
-        padded_region = expand_subtitle_region(region, video_meta=video_meta)
+        padded_region = region.copy()
         padded_region["centerX"] = padded_region["x"] + padded_region["w"] // 2
         padded_region["centerY"] = padded_region["y"] + padded_region["h"] // 2
 
@@ -1970,8 +1970,8 @@ def build_dynamic_subtitle_regions(
         gap_after = max(next_start - sub_end, 0)
         lead_ms = min(max(int(gap_before * 0.65), 120), 360)
         trail_ms = min(max(int(gap_after * 0.65), 160), 520)
-        padded_region["startMs"] = max(sub_start - lead_ms, 0)
-        padded_region["endMs"] = max(sub_end + trail_ms, padded_region["startMs"] + 120)
+        padded_region["startMs"] = sub_start
+        padded_region["endMs"] = sub_end
         padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
         padded_region["detected"] = True
         dynamic_regions.append(padded_region)

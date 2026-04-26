@@ -210,8 +210,8 @@ def compose_ass(
             f"Style: DubDefault,{ass_font_name},{font_size},{primary_color},{primary_color},"
             f"{outline_color if use_unified_box else box_border_color if box_enabled else outline_color},"
             f"{box_fill_color if box_enabled else '&H00000000'},"
-            f"{bold_flag},0,0,0,100,100,0,0,{4 if use_unified_box else 3 if box_enabled else 1},"
-            f"{box_border_width if box_enabled and not use_unified_box else outline},{box_shadow},{alignment},0,0,{margin_v},1"
+            f"{bold_flag},0,0,0,100,100,0,0,{3 if box_enabled else 1},"
+            f"{effective_ass_outline(box_padding_x, video_meta) if box_enabled else outline},{box_shadow},{alignment},0,0,{margin_v},1"
         ),
         "",
         "[Events]",

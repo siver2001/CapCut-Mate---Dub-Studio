@@ -1024,8 +1024,14 @@ class WindowWorkflowMixin:
         )
         if not path:
             return
-        self.background_music_path_edit.setText(path)
-        self.background_music_enabled_check.setChecked(True)
+        for attr in ("background_music_path_edit", "main_background_music_path_edit"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setText(path)
+        for attr in ("background_music_enabled_check", "main_background_music_enabled_check"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setChecked(True)
         self.settings.setdefault("backgroundMusic", {})["path"] = path
         self.settings["backgroundMusic"]["enabled"] = True
         self.on_basic_settings_changed()
@@ -1126,25 +1132,35 @@ class WindowWorkflowMixin:
         return voice_mapping
 
     def read_settings_from_widgets(self) -> None:
-        self.settings["sourceLanguage"] = str(self.source_language_combo.currentData())
-        self.settings["targetLanguage"] = str(self.target_language_combo.currentData())
-        self.settings["speakerDetectionMode"] = str(
-            self.speaker_detection_combo.currentData()
-        )
-        self.settings["speakerCount"] = int(self.speaker_count_spin.value())
+        is_page_0 = getattr(self, "_page_stack", None) is not None and self._page_stack.currentIndex() == 0
+        
+        def get_combo_val(main_w, default_w):
+            w = main_w if (is_page_0 and main_w) else default_w
+            return str(w.currentData()) if w else ""
+            
+        def get_spin_val(main_w, default_w):
+            w = main_w if (is_page_0 and main_w) else default_w
+            return w.value() if w else 0
+            
+        def get_check_val(main_w, default_w):
+            w = main_w if (is_page_0 and main_w) else default_w
+            return w.isChecked() if w else False
+
+        self.settings["sourceLanguage"] = get_combo_val(getattr(self, "main_source_language_combo", None), self.source_language_combo)
+        self.settings["targetLanguage"] = get_combo_val(getattr(self, "main_target_language_combo", None), self.target_language_combo)
+        self.settings["speakerDetectionMode"] = get_combo_val(getattr(self, "main_speaker_detection_combo", None), self.speaker_detection_combo)
+        self.settings["speakerCount"] = int(get_spin_val(getattr(self, "main_speaker_count_spin", None), self.speaker_count_spin))
         self.settings["defaultVoice"] = self._selected_default_voice()
-        self.settings["timingMode"] = str(self.timing_mode_combo.currentData())
+        self.settings["timingMode"] = get_combo_val(getattr(self, "main_timing_mode_combo", None), self.timing_mode_combo)
         self.settings["videoCodecMode"] = str(
             self.video_codec_combo.currentData() or "gpu_preferred"
         )
         self.settings["uiThemePreset"] = str(
             self.ui_theme_combo.currentData() or "cinema"
         )
-        self.settings["sourceSubtitleCleanupMode"] = str(
-            self.cleanup_combo.currentData()
-        )
+        self.settings["sourceSubtitleCleanupMode"] = get_combo_val(getattr(self, "main_cleanup_combo", None), self.cleanup_combo)
         self.settings["subtitlePreset"]["enabled"] = (
-            self.subtitle_enabled_combo.currentData() == "on"
+            get_combo_val(None, self.subtitle_enabled_combo) == "on"
         )
         self.settings["subtitlePreset"]["positionPreset"] = str(
             self.subtitle_position_combo.currentData()
@@ -1234,7 +1250,24 @@ class WindowWorkflowMixin:
         self.settings["introHook"]["backgroundVolume"] = float(
             self.intro_background_volume_spin.value()
         )
-        self.settings["keepOriginalAudio"] = self.keep_original_audio_check.isChecked()
+        self.settings["keepOriginalAudio"] = get_check_val(getattr(self, "main_keep_original_audio_check", None), self.keep_original_audio_check)
+        
+        bg_music = self.settings.setdefault("backgroundMusic", {})
+        bg_music["enabled"] = get_check_val(getattr(self, "main_background_music_enabled_check", None), self.background_music_enabled_check)
+        
+        bg_vol_slider = getattr(self, "main_background_music_volume_spin" if is_page_0 else "background_music_volume_spin", None)
+        if bg_vol_slider is not None:
+            slider_val = bg_vol_slider.value()
+            bg_music["volume"] = slider_val / 50.0
+            if hasattr(self, "background_music_volume_label"):
+                self.background_music_volume_label.setText(f"{slider_val}%")
+            if hasattr(self, "main_background_music_volume_label"):
+                self.main_background_music_volume_label.setText(f"{slider_val}%")
+                
+        bg_path_edit = getattr(self, "main_background_music_path_edit" if is_page_0 else "background_music_path_edit", None)
+        if bg_path_edit is not None:
+            bg_music["path"] = bg_path_edit.text().strip()
+
         self.settings["outputTargets"]["mp4"] = self.output_mp4_check.isChecked()
         self.settings["outputTargets"]["draft"] = self.output_draft_check.isChecked()
         output_directory = self.output_dir_edit.text().strip()
@@ -1289,6 +1322,7 @@ class WindowWorkflowMixin:
             "timingMode": self.settings["timingMode"],
             "videoCodecMode": self.settings.get("videoCodecMode", "gpu_preferred"),
             "keepOriginalAudio": self.settings["keepOriginalAudio"],
+            "backgroundMusic": copy.deepcopy(self.settings.get("backgroundMusic", {})),
             "draftRoot": self.settings["draftRoot"],
             "outputDirectory": self.settings["outputDirectory"],
             "watermarkEnabled": self.settings.get("watermark", {}).get("enabled", False),
@@ -1441,7 +1475,17 @@ class WindowWorkflowMixin:
             self.watermark_position_combo,
             self.watermark_scale_slider,
         ]
-        for optional_name in ("default_voice_combo", "default_voice_test_btn"):
+        for optional_name in (
+            "default_voice_combo", "default_voice_test_btn",
+            "main_source_language_combo", "main_target_language_combo",
+            "main_speaker_detection_combo", "main_speaker_count_spin",
+            "main_timing_mode_combo", "main_cleanup_combo",
+            "main_intro_enabled_check", "main_intro_duration_spin",
+            "main_intro_voice_combo", "main_intro_background_check",
+            "main_intro_background_volume_spin", "main_keep_original_audio_check",
+            "background_music_enabled_check", "main_background_music_enabled_check",
+            "background_music_volume_spin", "main_background_music_volume_spin"
+        ):
             widget = getattr(self, optional_name, None)
             if widget is not None:
                 widgets.append(widget)
@@ -1561,6 +1605,26 @@ class WindowWorkflowMixin:
         self.output_draft_check.setChecked(
             bool(self.settings["outputTargets"]["draft"])
         )
+        
+        bg_music = self.settings.get("backgroundMusic", {})
+        bg_enabled = bool(bg_music.get("enabled", False))
+        bg_vol = float(bg_music.get("volume", 0.12))
+        bg_slider_val = int(bg_vol * 50.0)
+        
+        for attr in ("background_music_enabled_check", "main_background_music_enabled_check"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setChecked(bg_enabled)
+                
+        for attr in ("background_music_volume_spin", "main_background_music_volume_spin"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setValue(bg_slider_val)
+                
+        if hasattr(self, "background_music_volume_label"):
+            self.background_music_volume_label.setText(f"{bg_slider_val}%")
+        if hasattr(self, "main_background_music_volume_label"):
+            self.main_background_music_volume_label.setText(f"{bg_slider_val}%")
         self.output_dir_edit.setText(self.settings["outputDirectory"])
         self.output_folder_quick_edit.setText(self.settings["outputDirectory"])
         self.draft_dir_edit.setText(self.settings["draftRoot"])

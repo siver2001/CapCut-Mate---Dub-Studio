@@ -399,6 +399,18 @@ class WindowVoiceMixin:
         self._voice_preview_audio_path = str(audio_file)
         if status_label is not None:
             status_label.setText(f"Đang phát: {repair_mojibake_text(voice_label)}")
+            
+        try:
+            import subprocess
+            if audio_file.suffix.lower() == '.wav':
+                safe_path = str(audio_file).replace("'", "''")
+                cmd = f"powershell -Command \"(New-Object Media.SoundPlayer '{safe_path}').PlaySync()\""
+                # PlaySync in a background detached process is extremely stable
+                subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+        except Exception:
+            pass
+
         if self.voice_player is not None:
             self.voice_player.stop()
             self.voice_player.setSource(QUrl.fromLocalFile(str(audio_file)))
