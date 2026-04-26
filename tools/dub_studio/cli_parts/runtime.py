@@ -500,7 +500,7 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
             raise OllamaResourceError(
                 f"Ollama không thể tải model {payload.get('model', '?')}: {error_detail}. "
                 f"Hãy đóng bớt ứng dụng để giải phóng RAM, hoặc dùng model nhỏ hơn "
-                f"(ví dụ: gemma3:4b, gemma4:e2b). Thiết lập trong file .env: DUB_OLLAMA_MODEL=gemma3:4b"
+                f"(ví dụ: qwen3:4b, gemma4:e2b). Thiết lập trong file .env: DUB_OLLAMA_MODEL=qwen3:4b"
             )
         resp.raise_for_status()
 
@@ -537,7 +537,14 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
     return result
 
 
-def run_ollama_prompt(prompt: str, *, max_tokens: int = 2048, temperature: float | None = None, timeout: int | None = None) -> str:
+def run_ollama_prompt(
+    prompt: str,
+    *,
+    max_tokens: int = 2048,
+    temperature: float | None = None,
+    timeout: int | None = None,
+    json_schema: dict[str, Any] | None = None,
+) -> str:
     """Send a prompt to Ollama API and return the generated text with retries.
 
     Uses **streaming mode** so that the HTTP connection stays alive as
@@ -554,7 +561,7 @@ def run_ollama_prompt(prompt: str, *, max_tokens: int = 2048, temperature: float
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
-        "format": "json",
+        "format": json_schema or "json",
         "options": {
             "num_ctx": OLLAMA_CTX,
             "num_predict": max_tokens,
@@ -613,7 +620,7 @@ def run_ollama_prompt(prompt: str, *, max_tokens: int = 2048, temperature: float
             if _is_resource_error(error_str):
                 raise OllamaResourceError(
                     f"Ollama không đủ tài nguyên: {error_str[:300]}. "
-                    f"Hãy đóng bớt ứng dụng hoặc dùng model nhỏ hơn (DUB_OLLAMA_MODEL=gemma3:4b)."
+                    f"Hãy đóng bớt ứng dụng hoặc dùng model nhỏ hơn (DUB_OLLAMA_MODEL=qwen3:4b)."
                 ) from exc
             if attempt < max_retries:
                 backoff = min(3.0 * (attempt + 1), 10.0)
@@ -649,7 +656,7 @@ def translation_batch_progress(end_index: int, total: int) -> float:
     return 0.32 + (min(end_index, safe_total) / safe_total) * 0.12
 
 
-TRANSLATION_PROMPT_VERSION = 5
+TRANSLATION_PROMPT_VERSION = 6
 
 
 def translation_progress_message(*, provider_label: str, start: int, end_index: int, total: int, note: str = "") -> str:
@@ -693,29 +700,18 @@ def apply_localized_result(
 ) -> dict[str, str]:
     best_translated = pick_best_localized_text(
         localized.get("translatedText") or "",
-        localized.get("spokenText") or "",
+        "",
         item.get("sourceText") or source_text,
     )
     translated_text = prefer_minh_cau_pair(
         best_translated,
         item.get("sourceText") or source_text,
     )
-    spoken_seed = pick_best_localized_text(
-        localized.get("spokenText") or "",
-        translated_text,
-        item.get("sourceText") or "",
-    )
-    spoken_text = build_spoken_text(
-        spoken_seed or translated_text,
-        item.get("sourceText") or "",
-        delivery=localized.get("delivery") or "neutral",
-    )
     item["translatedText"] = translated_text
-    item["spokenText"] = spoken_text or translated_text
     item["delivery"] = localized.get("delivery") or "neutral"
+    item.pop("spoken" + "Text", None)
     return {
         "translatedText": item["translatedText"],
-        "spokenText": item["spokenText"],
         "delivery": item["delivery"],
     }
 
@@ -743,20 +739,13 @@ def fallback_translate_items(
         source_text = source_item.get("sourceText") or ""
         translated_seed = pick_best_localized_text(
             translated,
-            source_item.get("spokenText") or "",
+            "",
             source_text,
         )
         translated = prefer_minh_cau_pair(translated_seed, source_text)
-        spoken_seed = pick_best_localized_text(
-            source_item.get("spokenText") or "",
-            translated,
-            source_text,
-        )
-        spoken = build_spoken_text(spoken_seed or translated, source_text) if (spoken_seed or translated) else ""
         localized_items.append(
             {
                 "translatedText": translated,
-                "spokenText": spoken or translated,
                 "delivery": "neutral",
             }
         )
@@ -1270,6 +1259,166 @@ def ensure_vieneu_runtime(*, phase: str, step: str, progress: float) -> None:
     get_vieneu_provider()
 
 
+def prune_valtec_repo(repo_dir: Path) -> None:
+    keep_names = {
+        "src",
+        "valtec_tts",
+        "infer.py",
+        "LICENSE",
+        "README.md",
+        "requirements.txt",
+        "setup.py",
+    }
+    repo_dir = repo_dir.resolve()
+    if not str(repo_dir).startswith(str(ROOT.resolve())):
+        raise RuntimeError(f"Refusing to prune Valtec repo outside workspace: {repo_dir}")
+    for child in repo_dir.iterdir():
+        if child.name in keep_names:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    for pycache in repo_dir.rglob("__pycache__"):
+        shutil.rmtree(pycache, ignore_errors=True)
+
+
+def ensure_valtec_source_runtime(*, phase: str, step: str, progress: float) -> Path:
+    repo_dir = ROOT / "tools" / "valtec_repo"
+    required_paths = [
+        repo_dir / "valtec_tts" / "tts.py",
+        repo_dir / "src" / "models" / "synthesizer.py",
+        repo_dir / "infer.py",
+    ]
+    if all(path.exists() for path in required_paths):
+        prune_valtec_repo(repo_dir)
+        return repo_dir
+    if repo_dir.exists():
+        shutil.rmtree(repo_dir, ignore_errors=True)
+    git_binary = shutil.which("git")
+    if not git_binary:
+        raise RuntimeError("Thiếu git nên chưa thể tự tải source lõi Valtec-TTS. Hãy cài Git rồi bấm Chuẩn bị model lại.")
+    emit_progress(
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang tải source lõi Valtec-TTS từ GitHub...",
+    )
+    run([git_binary, "clone", "--depth", "1", VALTEC_REPO_URL, str(repo_dir)], cwd=ROOT)
+    prune_valtec_repo(repo_dir)
+    return repo_dir
+
+
+def ensure_valtec_python_runtime(*, phase: str, step: str, progress: float) -> None:
+    ensure_python_packages(
+        [
+            ("torch", "torch"),
+            ("torchaudio", "torchaudio"),
+            ("numpy", "numpy>=2.0.0"),
+            ("scipy", "scipy>=1.10.0"),
+            ("soundfile", "soundfile>=0.12.0"),
+            ("librosa", "librosa>=0.9.0"),
+            ("tqdm", "tqdm>=4.60.0"),
+            ("huggingface_hub", "huggingface_hub>=0.20.0"),
+            ("viphoneme", "viphoneme>=3.0.0"),
+            ("vinorm", "vinorm>=2.0.0"),
+            ("underthesea", "underthesea>=8.0.0"),
+            ("num2words", "num2words>=0.5.10"),
+            ("inflect", "inflect>=6.0.0"),
+            ("cn2an", "cn2an>=0.5.20"),
+            ("jieba", "jieba>=0.42.0"),
+            ("pypinyin", "pypinyin>=0.44.0"),
+            ("jamo", "jamo>=0.4.1"),
+            ("gruut", "gruut>=2.4.0"),
+            ("g2p_en", "g2p-en>=2.1.0"),
+            ("anyascii", "anyascii>=0.3.0"),
+            ("eng_to_ipa", "eng-to-ipa>=0.0.2"),
+        ],
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang cài thư viện tối thiểu cho Valtec-TTS...",
+    )
+
+
+def ensure_valtec_zeroshot_assets(*, phase: str, step: str, progress: float) -> None:
+    required_paths = [
+        VALTEC_ZEROSHOT_MODEL_DIR / "G_175000.pth",
+        VALTEC_ZEROSHOT_MODEL_DIR / "config.json",
+        VALTEC_HASP_MODEL_DIR / "pytorch_model.bin",
+    ]
+    if all(path.exists() and path.stat().st_size > 0 for path in required_paths):
+        return
+    emit_progress(
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Dang tai Valtec zero-shot model...",
+    )
+    try:
+        from huggingface_hub import hf_hub_download
+    except Exception as exc:
+        raise RuntimeError(
+            "Thieu huggingface_hub nen chua tai duoc Valtec zero-shot assets."
+        ) from exc
+
+    VALTEC_ZEROSHOT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    VALTEC_HASP_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    for filename in ("G_175000.pth", "config.json"):
+        source = hf_hub_download(
+            repo_id=VALTEC_ZEROSHOT_REPO,
+            repo_type="space",
+            filename=f"pretrained/zeroshot/{filename}",
+        )
+        shutil.copy2(source, VALTEC_ZEROSHOT_MODEL_DIR / filename)
+
+    source = hf_hub_download(
+        repo_id=VALTEC_ZEROSHOT_REPO,
+        repo_type="space",
+        filename="pretrained/hasp/pytorch_model.bin",
+    )
+    shutil.copy2(source, VALTEC_HASP_MODEL_DIR / "pytorch_model.bin")
+
+
+def ensure_valtec_runtime(
+    *,
+    phase: str,
+    step: str,
+    progress: float,
+    preload_zeroshot: bool = False,
+) -> None:
+    valtec_repo_dir = ensure_valtec_source_runtime(
+        phase=phase,
+        step=step,
+        progress=max(progress - 0.025, 0.0),
+    )
+    ensure_valtec_python_runtime(
+        phase=phase,
+        step=step,
+        progress=max(progress - 0.015, 0.0),
+    )
+    if preload_zeroshot or DUB_VALTEC_PRELOAD_ZEROSHOT:
+        ensure_valtec_zeroshot_assets(
+            phase=phase,
+            step=step,
+            progress=max(progress - 0.005, 0.0),
+        )
+    repo_path = str(valtec_repo_dir)
+    sys.path[:] = [path for path in sys.path if path != repo_path]
+    sys.path.insert(0, repo_path)
+    importlib.invalidate_caches()
+    emit_progress(
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang nạp sẵn Valtec-TTS model...",
+    )
+    from tools.valtec_wrapper import get_valtec_provider
+
+    get_valtec_provider(preload_zeroshot=preload_zeroshot or DUB_VALTEC_PRELOAD_ZEROSHOT)
+
+
 def prepare_runtime(target: str) -> None:
     normalized = str(target or "all").strip().lower()
     if normalized not in {"analysis", "render", "all"}:
@@ -1289,6 +1438,13 @@ def prepare_runtime(target: str) -> None:
         ensure_edge_tts_runtime(phase="render", step="prepare", progress=0.03)
         if DUB_SOURCE_SEPARATION_ENABLED:
             ensure_source_separation_runtime(phase="render", step="prepare", progress=0.04)
+        if DUB_USE_VALTEC:
+            ensure_valtec_runtime(
+                phase="render",
+                step="prepare",
+                progress=0.055,
+                preload_zeroshot=DUB_VALTEC_PRELOAD_ZEROSHOT,
+            )
         if DUB_TRANSLATE_PROVIDER in {"ollama", "auto"}:
             ensure_ollama_runtime(
                 required=DUB_TRANSLATE_PROVIDER == "ollama",
@@ -1335,3 +1491,5 @@ def whisperx_audio_waveform(audio: Any) -> dict[str, Any]:
         "waveform": torch.tensor(audio).unsqueeze(0),
         "sample_rate": 16000,
     }
+
+

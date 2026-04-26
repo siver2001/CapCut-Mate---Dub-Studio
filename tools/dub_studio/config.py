@@ -95,7 +95,10 @@ MICROSOFT_TRANSLATOR_TIMEOUT = max(
 )
 DUB_USE_GPU = env_bool("DUB_USE_GPU", default=True)
 DUB_USE_VIENEU = env_bool("DUB_USE_VIENEU", default=False)
+DUB_USE_VALTEC = env_bool("DUB_USE_VALTEC", default=True)
+DUB_VALTEC_PRELOAD_ZEROSHOT = env_bool("DUB_VALTEC_PRELOAD_ZEROSHOT", default=True)
 DUB_TTS_ENABLE_PARALLEL = env_bool("DUB_TTS_ENABLE_PARALLEL", default=True)
+DUB_TTS_ALLOW_SILENT_FALLBACK = env_bool("DUB_TTS_ALLOW_SILENT_FALLBACK", default=False)
 DUB_ENABLE_ENERGY_MATCHING = env_bool("DUB_ENABLE_ENERGY_MATCHING", default=True)
 DUB_MAX_ENERGY_GAIN_DB = float(env_value("DUB_MAX_ENERGY_GAIN_DB", default="7.0"))
 DUB_SOURCE_SEPARATION_ENABLED = env_bool("DUB_SOURCE_SEPARATION_ENABLED", default=True)
@@ -131,9 +134,13 @@ EDGE_TTS_CONCURRENCY = max(
     int(
         env_value(
             "DUB_EDGE_TTS_CONCURRENCY",
-            default=str(min(max((os.cpu_count() or 8) // 2, 2), 4)),
+            default="1",
         )
     ),
+    1,
+)
+DUB_SUBTITLE_REGION_SAMPLES = max(
+    int(env_value("DUB_SUBTITLE_REGION_SAMPLES", default="3")),
     1,
 )
 VIENEU_TTS_CONCURRENCY = max(
@@ -202,12 +209,23 @@ EDGE_VOICE_PRESETS = {
 }
 EDGE_VOICE_NAME_PATTERN = re.compile(r"^[a-z]{2,5}-[A-Z]{2,5}-.+Neural$")
 VIENEU_CLONE_PRESET = "vieneu:clone"
+VALTEC_CLONE_PRESET = "valtec:clone"
 VIENEU_PRESET_VOICE_IDS = {
     "vieneu:ngoc": "Bích Ngọc (Nữ - Miền Bắc)",
     "vieneu:tuyen": "Phạm Tuyên (Nam - Miền Bắc)",
     "vieneu:doan": "Thục Đoan (Nữ - Miền Nam)",
     "vieneu:vinh": "Xuân Vĩnh (Nam - Miền Nam)",
 }
+VALTEC_PRESET_SPEAKER_IDS = {
+    "valtec:nf": "NF",
+    "valtec:sf": "SF",
+    "valtec:nm1": "NM1",
+    "valtec:sm": "SM",
+    "valtec:nm2": "NM2",
+}
+VALTEC_REFERENCE_VOICES = {}
+VALTEC_REPO_URL = env_value("DUB_VALTEC_REPO_URL", default="https://github.com/tronghieuit/valtec-tts.git")
+VALTEC_ZEROSHOT_REPO = env_value("DUB_VALTEC_ZEROSHOT_REPO", default="valtecAI-team/valtec-zeroshot-voice-cloning")
 VIENEU_BACKBONE_REPO = env_value("DUB_VIENEU_BACKBONE_REPO", default="pnnbao-ump/VieNeu-TTS-v2-Turbo-GGUF")
 VIENEU_CODEC_REPO = env_value("DUB_VIENEU_CODEC_REPO", default="pnnbao-ump/VieNeu-Codec")
 VIENEU_BACKBONE_FILENAME = env_value("DUB_VIENEU_BACKBONE_FILENAME", default="vieneu-tts-v2-turbo.gguf")
@@ -219,6 +237,10 @@ VIENEU_PIP_EXTRA_INDEX = env_value(
 )
 LOCAL_TRANSCRIBE_PROVIDERS = {"ffmpeg", "ffmpeg_whisper", "ffmpeg-whisper", "local"}
 VIENEU_MODEL_DIR = ROOT / "temp" / "models" / "vieneu"
+VALTEC_MODEL_DIR = ROOT / "temp" / "models" / "valtec"
+VALTEC_ZEROSHOT_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "zeroshot-vietnamese"
+VALTEC_HASP_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "hasp"
+VALTEC_REFERENCE_DIR = VALTEC_MODEL_DIR / "references"
 VIENEU_REQUIRED_FILES = (
     VIENEU_BACKBONE_FILENAME,
     "voices.json",
@@ -227,10 +249,11 @@ VIENEU_REQUIRED_FILES = (
 )
 
 DEFAULT_VOICES = [
-    "edge:male",
-    "edge:male",
-    "edge:male",
-    "edge:male",
+    "valtec:nf",
+    "valtec:nm1",
+    "valtec:sf",
+    "valtec:sm",
+    "valtec:nm2",
 ]
 VOICE_LABELS = {
     "edge:female": "EdgeTTS • Nữ Hoài My",
@@ -240,9 +263,24 @@ VOICE_LABELS = {
     "vieneu:tuyen": "VieNeu-TTS • Phạm Tuyên (Nam - Miền Bắc)",
     "vieneu:doan": "VieNeu-TTS • Thục Đoan (Nữ - Miền Nam)",
     "vieneu:vinh": "VieNeu-TTS • Xuân Vĩnh (Nam - Miền Nam)",
+    VALTEC_CLONE_PRESET: "Valtec-TTS • Clone tu mau speaker",
+    "valtec:nf": "Valtec-TTS • NF Nu Bac",
+    "valtec:sf": "Valtec-TTS • SF Nu Nam",
+    "valtec:nm1": "Valtec-TTS • NM1 Nam Bac",
+    "valtec:sm": "Valtec-TTS • SM Nam Nam",
+    "valtec:nm2": "Valtec-TTS • NM2 Nam Bac 2",
     "vi-VN-HoaiMyNeural": "EdgeTTS • Nữ Hoài My",
     "vi-VN-NamMinhNeural": "EdgeTTS • Nam Nam Minh",
 }
+VOICE_LABELS.update(
+    {
+        "valtec:nf": "Valtec-TTS • NF (Northern Female / Nữ miền Bắc)",
+        "valtec:sf": "Valtec-TTS • SF (Southern Female / Nữ miền Nam)",
+        "valtec:nm1": "Valtec-TTS • NM1 (Northern Male / Nam miền Bắc)",
+        "valtec:sm": "Valtec-TTS • SM (Southern Male / Nam miền Nam)",
+        "valtec:nm2": "Valtec-TTS • NM2 (Northern Male / Nam miền Bắc)",
+    }
+)
 LANGUAGE_OPTIONS = ("en", "zh", "ko", "ja")
 WHISPERX_PRELOAD_ALIGN_LANGUAGES = tuple(
     language

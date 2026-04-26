@@ -2,7 +2,6 @@ from gui.config import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_VOICES,
     FONT_OPTIONS,
-    INTRO_VOICE_PRESETS,
     MOJIBAKE_MARKERS,
     Path,
     ROOT,
@@ -12,26 +11,84 @@ from gui.config import (
 )
 from typing import Any
 import copy
+import hashlib
 import re
-from PyQt6.QtWidgets import QApplication
 import os
 import json
+from PyQt6.QtWidgets import QApplication
 from gui import config
+
+
+_CP1252_BYTE_BY_CHAR = {
+    "\u20ac": 0x80,
+    "\u201a": 0x82,
+    "\u0192": 0x83,
+    "\u201e": 0x84,
+    "\u2026": 0x85,
+    "\u2020": 0x86,
+    "\u2021": 0x87,
+    "\u02c6": 0x88,
+    "\u2030": 0x89,
+    "\u0160": 0x8A,
+    "\u2039": 0x8B,
+    "\u0152": 0x8C,
+    "\u017d": 0x8E,
+    "\u2018": 0x91,
+    "\u2019": 0x92,
+    "\u201c": 0x93,
+    "\u201d": 0x94,
+    "\u2022": 0x95,
+    "\u2013": 0x96,
+    "\u2014": 0x97,
+    "\u02dc": 0x98,
+    "\u2122": 0x99,
+    "\u0161": 0x9A,
+    "\u203a": 0x9B,
+    "\u0153": 0x9C,
+    "\u017e": 0x9E,
+    "\u0178": 0x9F,
+}
+
+
+def _encode_mojibake_bytes(text: str) -> bytes:
+    data = bytearray()
+    for char in text:
+        codepoint = ord(char)
+        if codepoint <= 0xFF:
+            data.append(codepoint)
+        elif char in _CP1252_BYTE_BY_CHAR:
+            data.append(_CP1252_BYTE_BY_CHAR[char])
+        else:
+            raise UnicodeEncodeError("mojibake", char, 0, 1, "not a mojibake byte")
+    return bytes(data)
 
 
 def repair_mojibake_text(value: str | None) -> str:
     text = str(value or "")
     repaired = text
-    suspicious_markers = (*MOJIBAKE_MARKERS, "Ã", "Æ", "Ä", "Å", "á»", "áº")
+    suspicious_markers = (
+        *MOJIBAKE_MARKERS,
+        "Ã",
+        "Â",
+        "Ä",
+        "Æ",
+        "áº",
+        "á»",
+        "â€",
+    )
     for _ in range(3):
         if repaired.isascii():
             break
         if not any(marker in repaired for marker in suspicious_markers):
             break
         candidate = repaired
-        for encoding in ("latin1", "cp1252"):
+        for repairer in (
+            lambda value: _encode_mojibake_bytes(value).decode("utf-8"),
+            lambda value: value.encode("latin1").decode("utf-8"),
+            lambda value: value.encode("cp1252").decode("utf-8"),
+        ):
             try:
-                candidate = repaired.encode(encoding).decode("utf-8")
+                candidate = repairer(repaired)
                 break
             except Exception:
                 candidate = repaired
@@ -70,17 +127,90 @@ def repair_mojibake_text(value: str | None) -> str:
     for unaccented, accented in replacements.items():
         if unaccented in repaired:
             repaired = repaired.replace(unaccented, accented)
+
+    # Automatically add diacritics for common Vietnamese words if the text looks like unaccented Vietnamese
+    repaired = restore_vietnamese_diacritics(repaired)
             
     return repaired
 
 
+def restore_vietnamese_diacritics(text: str) -> str:
+    """Heuristic to add diacritics to common unaccented Vietnamese words."""
+    if not text or not any(c.isalpha() for c in text):
+        return text
+    
+    # Only attempt if there are few existing diacritics (likely unaccented)
+    accented_chars = "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ"
+    if sum(1 for c in text.lower() if c in accented_chars) > len(text) * 0.15:
+        return text
+
+    # Common unaccented -> accented mapping
+    mapping = {
+        "tieng": "tiếng", "viet": "việt", "chao": "chào", "ban": "bạn", "toi": "tôi",
+        "dang": "đang", "lam": "làm", "duoc": "được", "nay": "này", "cai": "cái",
+        "cua": "của", "co": "có", "khong": "không", "biet": "biết", "nguoi": "người",
+        "nhieu": "nhiều", "tot": "tốt", "dep": "đẹp", "moi": "mới", "di": "đi",
+        "ve": "về", "an": "ăn", "uong": "uống", "ngu": "ngủ", "noi": "nói",
+        "thay": "thấy", "nghi": "nghĩ", "muon": "muốn", "can": "cần", "phai": "phải",
+        "nen": "nên", "roi": "rồi", "va": "và", "voi": "với", "nhu": "như",
+        "the": "thế", "la": "là", "mot": "một", "bon": "bốn", "sau": "sáu",
+        "bay": "bảy", "tam": "tám", "chin": "chín", "muoi": "mười",
+        "khi": "khi", "nhung": "nhưng", "ma": "mà", "de": "để", "den": "đến",
+        "tu": "từ", "vao": "vào", "ra": "ra", "len": "lên", "xuong": "xuống",
+        "trong": "trong", "ngoai": "ngoài", "tren": "trên", "duoi": "dưới",
+        "truoc": "trước", "giua": "giữa", "canh": "cạnh", "gan": "gần", "xa": "xa",
+        "rat": "rất", "qua": "quá", "cung": "cũng", "chi": "chỉ", "se": "sẽ", "da": "đã",
+        "tung": "từng", "vua": "vừa", "sap": "sắp", "chung": "chúng", "no": "nó",
+        "minh": "mình", "cau": "cậu", "anh": "anh", "chi": "chị", "em": "em",
+        "ong": "ông", "ba": "bà", "co": "cô", "chu": "chú", "bac": "bác",
+        "goc": "góc", "kieu": "kiểu", "phan": "phân", "tich": "tích", "am": "âm",
+        "luong": "lượng", "toc": "tốc", "do": "độ", "nhan": "nhân", "vat": "vật",
+        "dau": "đầu", "nhap": "nhập", "xuat": "xuất", "phu": "phụ", "de": "đề",
+        "mau": "màu", "chu": "chữ", "vien": "viền", "nen": "nền", "tri": "trí",
+        "gia": "giá", "tri": "trị", "he": "hệ", "thong": "thống", "ca": "cả",
+        "chon": "chọn", "anh": "ảnh", "kich": "kích", "thuoc": "thước", "nhanh": "nhanh",
+    }
+    
+    # Split by non-word characters to preserve them
+    parts = re.split(r'(\W+)', text)
+    result = []
+    for part in parts:
+        lowered = part.lower()
+        if lowered in mapping:
+            accented = mapping[lowered]
+            if part.isupper():
+                result.append(accented.upper())
+            elif part[0].isupper():
+                result.append(accented[0].upper() + accented[1:])
+            else:
+                result.append(accented)
+        else:
+            result.append(part)
+            
+    return "".join(result)
+
+
+def decode_process_bytes(data: bytes) -> str:
+    if not data:
+        return ""
+    for encoding in ("utf-8-sig", "utf-8", "cp1258", "cp1252", "latin1"):
+        try:
+            return repair_mojibake_text(data.decode(encoding))
+        except UnicodeDecodeError:
+            continue
+    return repair_mojibake_text(data.decode("utf-8", errors="replace"))
+
+
 
 APP_STYLESHEET = """
-QMainWindow, QWidget#AppRoot {
+QMainWindow, QWidget#AppRoot, QScrollArea QWidget {
     background: #07111f;
     color: #e8eefc;
     font-family: "Segoe UI", "Arial";
     font-size: 13px;
+}
+QLabel, QCheckBox, QRadioButton, QGroupBox {
+    color: #e8eefc;
 }
 QScrollArea {
     border: none;
@@ -90,16 +220,19 @@ QFrame#HeroCard {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #102443, stop:0.5 #0f766e, stop:1 #0ea5e9);
     border: 1px solid rgba(255,255,255,0.14);
     border-radius: 12px;
+    color: white;
 }
 QFrame#SurfaceCard {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0d1b31, stop:0.55 #0d1829, stop:1 #091321);
     border: 1px solid rgba(148, 163, 184, 0.16);
     border-radius: 20px;
+    color: #e8eefc;
 }
 QFrame#StatCard {
     background: rgba(255,255,255,0.06);
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 12px;
+    color: #e8eefc;
 }
 QLabel#HeroEyebrow {
     color: rgba(255,255,255,0.78);
@@ -151,7 +284,7 @@ QLabel#FieldLabel {
     font-size: 11px;
     font-weight: 700;
 }
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTableWidget, QHeaderView {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(7, 18, 34, 0.96), stop:1 rgba(12, 28, 49, 0.96));
     border: 1px solid rgba(56, 189, 248, 0.24);
     border-radius: 12px;
@@ -159,7 +292,14 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
     padding: 8px 10px;
     selection-background-color: #38bdf8;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
+QHeaderView::section {
+    background: #0f1f35;
+    color: #f8fafc;
+    padding: 8px 6px;
+    min-height: 34px;
+    border: 1px solid rgba(56, 189, 248, 0.24);
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QTableWidget:focus {
     border: 1px solid #38bdf8;
 }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QPlainTextEdit:hover {
@@ -184,8 +324,8 @@ QComboBox QAbstractItemView {
     background: #0f1f35;
     color: #f8fafc;
     border: 1px solid rgba(96, 165, 250, 0.35);
-    selection-background-color: #38bdf8;
-    selection-color: #07111f;
+    selection-background-color: #2563eb;
+    selection-color: #ffffff;
     outline: 0;
     padding: 6px;
 }
@@ -196,8 +336,8 @@ QComboBox QAbstractItemView::item {
     background: transparent;
 }
 QComboBox QAbstractItemView::item:selected {
-    background: #38bdf8;
-    color: #07111f;
+    background: #2563eb;
+    color: #ffffff;
 }
 QComboBox QAbstractItemView::item:hover {
     background: rgba(56, 189, 248, 0.22);
@@ -366,6 +506,109 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def _safe_cache_name(value: str) -> str:
+    compact = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
+    return compact.strip("._")[:80]
+
+
+def ensure_sticker_preview_cache(sticker_options: dict[str, Any]) -> Path | None:
+    """Return a local image path for the selected sticker, downloading it if needed."""
+    options = sticker_options or {}
+    image_url = str(options.get("image_url") or options.get("url") or "").strip()
+    sticker_id = str(options.get("stickerId") or options.get("sticker_id") or "").strip()
+    if not image_url:
+        return None
+
+
+def ensure_qt_readable_sticker_preview(sticker_options: dict[str, Any]) -> Path | None:
+    """Return a sticker image path that QImage can read, converting with ffmpeg if needed."""
+    source = ensure_sticker_preview_cache(sticker_options)
+    if source is None:
+        return None
+    try:
+        from PyQt6.QtGui import QImage
+
+        if not QImage(str(source)).isNull():
+            return source
+        converted = source.with_name(f"{source.stem}_preview.png")
+        if converted.exists() and converted.stat().st_size > 0:
+            if not QImage(str(converted)).isNull():
+                return converted
+        import subprocess
+
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(source), "-frames:v", "1", str(converted)],
+            cwd=str(ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+        if converted.exists() and converted.stat().st_size > 0:
+            if not QImage(str(converted)).isNull():
+                return converted
+    except Exception:
+        pass
+    return source
+
+    local_candidate = Path(image_url).expanduser()
+    if local_candidate.exists() and local_candidate.is_file():
+        return local_candidate
+
+    cache_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "sticker_cache")
+    cache_name = _safe_cache_name(sticker_id)
+    if not cache_name:
+        cache_name = hashlib.sha1(image_url.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    sticker_type = int(options.get("sticker_type") or options.get("stickerType") or 1)
+    preferred_ext = "gif" if sticker_type == 2 else "png"
+    candidates = [
+        cache_dir / f"{cache_name}.{preferred_ext}",
+        cache_dir / f"{cache_name}.png",
+        cache_dir / f"{cache_name}.gif",
+        cache_dir / f"{cache_name}.webp",
+        cache_dir / f"{cache_name}.img",
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.stat().st_size > 0:
+            return candidate
+
+    failed_marker = cache_dir / f"{cache_name}.failed"
+    try:
+        import time
+
+        if failed_marker.exists() and time.time() - failed_marker.stat().st_mtime < 300:
+            return None
+    except Exception:
+        pass
+
+    target = candidates[0]
+    temp_target = target.with_suffix(target.suffix + ".tmp")
+    try:
+        import urllib.request
+
+        request = urllib.request.Request(
+            image_url,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            data = response.read()
+        if not data:
+            return None
+        temp_target.write_bytes(data)
+        os.replace(temp_target, target)
+        if failed_marker.exists():
+            failed_marker.unlink(missing_ok=True)
+        return target
+    except Exception as exc:
+        try:
+            failed_marker.write_text(str(exc)[:240], encoding="utf-8")
+            if temp_target.exists():
+                temp_target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None
+
+
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -376,52 +619,39 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def resolve_intro_voice_preset(preset_key: str | None) -> dict[str, Any]:
-    if preset_key and preset_key in INTRO_VOICE_PRESETS:
-        preset = INTRO_VOICE_PRESETS[preset_key]
-        voice = str(preset.get("voice") or "").strip()
-        normalized_voice = (
-            "edge:female"
-            if voice == "vi-VN-HoaiMyNeural"
-            else "edge:male"
-            if voice == "vi-VN-NamMinhNeural"
-            else voice
-        )
-        return {
-            "key": normalized_voice or preset_key,
-            "voice": normalized_voice or voice,
-            "label": preset.get("label") or normalized_voice or voice,
-            "rateDeltaPercent": int(preset.get("rateDeltaPercent") or 0),
-        }
-    custom_voice = str(preset_key or "").strip()
-    if custom_voice in {"vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural"}:
-        custom_voice = (
-            "edge:female" if custom_voice == "vi-VN-HoaiMyNeural" else "edge:male"
-        )
-    if custom_voice and (
-        custom_voice in VOICE_LABELS or custom_voice.endswith("Neural")
-    ):
-        return {
-            "key": custom_voice,
-            "voice": custom_voice,
-            "label": custom_voice,
-            "rateDeltaPercent": 0,
-        }
-    fallback_key = "male_story"
-    return {"key": fallback_key, **INTRO_VOICE_PRESETS[fallback_key]}
+    voice = str(preset_key or "").strip()
+    if voice in {"vi-VN-HoaiMyNeural"}:
+        voice = "edge:female"
+    elif voice in {"vi-VN-NamMinhNeural"}:
+        voice = "edge:male"
+    if not voice:
+        voice = str(DEFAULT_VOICES[0] if DEFAULT_VOICES else "edge:male")
+    return {
+        "key": voice,
+        "voice": voice,
+        "label": voice,
+        "rateDeltaPercent": 0,
+    }
+
+
+def preferred_default_voice() -> str:
+    return str(DEFAULT_VOICES[0] if DEFAULT_VOICES else "edge:male")
 
 
 def default_settings() -> dict[str, Any]:
+    default_voice = str(DEFAULT_VOICES[0] if DEFAULT_VOICES else "edge:male")
     return {
         "sourceLanguage": "auto",
         "targetLanguage": "vi",
         "speakerDetectionMode": "narrator",
         "speakerCount": 1,
+        "defaultVoice": default_voice,
         "voiceMapping": {},
         "introHook": {
             "enabled": True,
             "clipDurationMs": 15000,
-            "voice": "edge:male",
-            "voicePresetKey": "edge:male",
+            "voice": default_voice,
+            "voicePresetKey": default_voice,
             "voiceRateDeltaPercent": 0,
             "useBackgroundAudio": True,
             "backgroundVolume": 0.08,
@@ -436,6 +666,7 @@ def default_settings() -> dict[str, Any]:
             "cssFontFamily": "Arial",
             "assFontName": "Arial",
             "draftFontKey": "Poppins_Bold",
+            "fontGroup": "all",
             "fontColor": "#ffd200",
             "strokeColor": "#000000",
             "strokeWidth": 2,
@@ -475,6 +706,16 @@ def default_settings() -> dict[str, Any]:
             "path": "",
             "position": "top-right",
             "scale": 0.15,
+        },
+        "stickerOptions": {
+            "stickerId": "",
+            "sticker_id": "",
+            "stickerName": "",
+            "image_url": "",
+            "sticker_type": 1,
+            "scale": 1.0,
+            "transform_x": 0.0,
+            "transform_y": -0.3,
         },
         "draftRoot": str(getattr(config, "DRAFT_DIR", "") or ""),
         "outputDirectory": str(DEFAULT_OUTPUT_DIR),
@@ -541,7 +782,7 @@ def create_base_job(job_id: str, input_path: str) -> dict[str, Any]:
 
 
 def append_job_log(job: dict[str, Any], message: str, level: str = "info") -> None:
-    compact_message = " ".join(str(message or "").split()).strip()
+    compact_message = " ".join(repair_mojibake_text(str(message or "")).split()).strip()
     if not compact_message:
         return
     if len(compact_message) > 220:

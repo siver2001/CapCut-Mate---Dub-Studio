@@ -120,7 +120,7 @@ def select_segments(analysis: dict[str, object], limit: int) -> list[dict[str, o
     ranked = sorted(
         segments,
         key=lambda item: (
-            len(normalize_text(item.get("spokenText") or item.get("translatedText") or item.get("sourceText") or "")),
+            len(normalize_text(item.get("translatedText") or item.get("sourceText") or "")),
             max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 0),
         ),
         reverse=True,
@@ -136,7 +136,7 @@ def synthesize_backtest_clip(
     timing_mode: str,
     work_dir: Path,
 ) -> Path:
-    text = normalize_text(segment.get("spokenText") or segment.get("translatedText") or segment.get("sourceText") or "")
+    text = normalize_text(segment.get("translatedText") or segment.get("sourceText") or "")
     if not text:
         raise RuntimeError(f"Segment {segment.get('id')} has no text to synthesize.")
 
@@ -150,12 +150,13 @@ def synthesize_backtest_clip(
         delivery=delivery,
     )
     target_ms = max(int(segment.get("endMs", 0)) - int(segment.get("startMs", 0)), 500)
-    rate = estimate_rate(profile["spokenText"], target_ms, timing_mode=timing_mode)
+    tts_text = normalize_text(profile["text"])
+    rate = estimate_rate(tts_text, target_ms, timing_mode=timing_mode)
 
     raw_path = work_dir / f"{segment['id']}_raw.wav"
     fitted_path = work_dir / f"{segment['id']}_fitted.wav"
     synthesize_tts(
-        text=profile["spokenText"],
+        text=tts_text,
         voice=voice,
         rate=rate,
         output_path=raw_path,
@@ -203,7 +204,7 @@ def run_backtest(job_id: str, video_path: Path, analysis_path: Path, limit: int,
                     "segmentId": seg_id,
                     "speakerId": segment.get("speakerId") or "speaker_1",
                     "sourceText": segment.get("sourceText") or "",
-                    "spokenText": segment.get("spokenText") or segment.get("translatedText") or "",
+                    "translatedText": segment.get("translatedText") or "",
                     "referencePath": str(reference_path),
                     "candidatePath": str(candidate_path),
                     "reference": reference_metrics,
@@ -219,7 +220,7 @@ def run_backtest(job_id: str, video_path: Path, analysis_path: Path, limit: int,
                     "segmentId": seg_id,
                     "speakerId": segment.get("speakerId") or "speaker_1",
                     "sourceText": segment.get("sourceText") or "",
-                    "spokenText": segment.get("spokenText") or segment.get("translatedText") or "",
+                    "translatedText": segment.get("translatedText") or "",
                     "status": "error",
                     "error": str(exc),
                     "score": 0.0,

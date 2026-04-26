@@ -1,39 +1,70 @@
 import json
-import random
-import os
 from typing import List, Dict, Any
+import urllib.request
+import urllib.error
 from src.utils.logger import logger
-import config
+
+CAPCUT_MATE_API = "https://capcut-mate.jcaigc.cn"
+
 
 def search_sticker(keyword: str) -> List[Dict[str, Any]]:
     """
-    Search for stickers by keyword.
-    
+    Search for stickers by keyword using CapCut Mate cloud API.
+
     Args:
         keyword: Search term.
-        
+
     Returns:
         List[Dict[str, Any]]: Up to 50 sticker records.
     """
     logger.info(f"search_sticker called for keyword: {keyword}")
 
+    url = f"{CAPCUT_MATE_API}/openapi/capcut-mate/v1/search_sticker"
+    payload = json.dumps({"keyword": keyword}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+    }
+
     try:
-        if not os.path.exists(config.STICKER_CONFIG_PATH):
-            logger.error(f"Sticker config not found: {config.STICKER_CONFIG_PATH}")
+        req = urllib.request.Request(
+            url=url,
+            data=payload,
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        code = result.get("code", 0)
+        if code != 0:
+            logger.error(f"CapCut Mate API error: {result.get('message', 'unknown')}")
             return []
 
-        with open(config.STICKER_CONFIG_PATH, 'r', encoding='utf-8') as f:
-            all_stickers = json.load(f)
+        raw_data = result.get("data", [])
+        stickers: List[Dict[str, Any]] = []
+        for item in raw_data[:50]:
+            sticker_info = item.get("sticker", {})
+            sticker_id = str(item.get("sticker_id", ""))
+            title = str(item.get("title", ""))
+            large_image = sticker_info.get("large_image", {})
+            image_url = str(large_image.get("image_url", ""))
+            package = sticker_info.get("sticker_package", {})
+            stickers.append({
+                "sticker_id": sticker_id,
+                "title": title,
+                "image_url": image_url,
+                "width": package.get("width_per_frame", 0),
+                "height": package.get("height_per_frame", 0),
+                "size": package.get("size", 0),
+                "sticker_type": sticker_info.get("sticker_type", 1),
+            })
 
-        # Simple keyword matching
-        matches = [s for s in all_stickers if keyword.lower() in s.get("title", "").lower()]
-        
-        # Fallback to random if no matches
-        if not matches:
-            logger.info("No matches, returning random stickers")
-            return random.sample(all_stickers, min(50, len(all_stickers)))
+        logger.info(f"search_sticker returned {len(stickers)} stickers for '{keyword}'")
+        return stickers
 
-        return matches[:50]
+    except urllib.error.HTTPError as e:
+        logger.error(f"HTTP error {e.code} calling CapCut Mate search_sticker: {e.read().decode()}")
+        return []
     except Exception as e:
-        logger.error(f"Failed to search stickers: {str(e)}")
+        logger.error(f"Failed to search stickers from cloud API: {e}")
         return []

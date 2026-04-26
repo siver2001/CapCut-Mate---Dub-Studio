@@ -5,6 +5,47 @@ from typing import Any
 from .models import SubtitleLine
 from .subtitle_utils import normalize_text
 
+SUBTITLE_PREVIEW_REFERENCE_HEIGHT = 360
+
+
+def subtitle_preview_to_video_px(value: int | float, video_meta: dict[str, Any]) -> int:
+    video_height = max(int(video_meta.get("height") or 1920), 1)
+    return max(int(round(float(value) * video_height / SUBTITLE_PREVIEW_REFERENCE_HEIGHT)), 0)
+
+
+def subtitle_preview_offset(position_preset: str, bottom_offset: int) -> float:
+    safe_offset = max(min(int(bottom_offset), 240), 0)
+    if position_preset == "top":
+        return 32.0 + safe_offset * 0.35
+    if position_preset == "middle":
+        return 0.0
+    return max(safe_offset, 12) * 0.7
+
+
+def effective_ass_font_size(
+    subtitle_preset: dict[str, Any],
+    video_meta: dict[str, Any],
+) -> int:
+    return max(subtitle_preview_to_video_px(int(subtitle_preset.get("fontSize", 18)), video_meta), 8)
+
+
+def effective_ass_outline(value: int | float, video_meta: dict[str, Any]) -> int:
+    if float(value or 0) <= 0:
+        return 0
+    return max(subtitle_preview_to_video_px(value, video_meta), 1)
+
+
+def effective_ass_margin_v(
+    subtitle_preset: dict[str, Any],
+    video_meta: dict[str, Any],
+) -> int:
+    position_preset = str(subtitle_preset.get("positionPreset") or "bottom").strip().lower()
+    preview_offset = subtitle_preview_offset(
+        position_preset,
+        int(subtitle_preset.get("bottomOffset", 54)),
+    )
+    return subtitle_preview_to_video_px(preview_offset, video_meta)
+
 
 def default_subtitle_region(video_meta: dict[str, Any]) -> dict[str, Any]:
     width = int(video_meta["width"])
@@ -115,7 +156,7 @@ def compose_ass(
     subtitle_preset: dict[str, Any],
     subtitle_positions: list[dict[str, int]] | None = None,
 ) -> str:
-    font_size = int(subtitle_preset.get("fontSize", 18))
+    font_size = effective_ass_font_size(subtitle_preset, video_meta)
     ass_font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
     font_tokens = " ".join(
         str(part or "")
@@ -129,7 +170,7 @@ def compose_ass(
     bold_flag = -1 if "bold" in font_tokens or "black" in font_tokens else 0
     primary_color = subtitle_preset.get("assPrimaryColor") or hex_to_ass_color(subtitle_preset.get("fontColor", "#ffd200"))
     outline_color = subtitle_preset.get("assOutlineColor") or hex_to_ass_color(subtitle_preset.get("strokeColor", "#000000"))
-    outline = int(subtitle_preset.get("strokeWidth", 2))
+    outline = effective_ass_outline(int(subtitle_preset.get("strokeWidth", 2)), video_meta)
     box_enabled = bool(subtitle_preset.get("boxEnabled", False))
     box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()
     use_unified_box = box_enabled and box_layout_mode == "unified"
@@ -141,18 +182,20 @@ def compose_ass(
         subtitle_preset.get("boxBorderColor", "#3b82f6"),
         float(subtitle_preset.get("boxBorderOpacity", 1.0)),
     )
-    box_border_width = max(int(subtitle_preset.get("boxBorderWidth", 2)), 0)
+    box_border_width = effective_ass_outline(
+        max(int(subtitle_preset.get("boxBorderWidth", 2)), 0),
+        video_meta,
+    )
     box_padding_x = max(int(subtitle_preset.get("boxPaddingX", 24)), 0)
     box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12)), 0)
-    box_shadow = max(int(round((box_padding_x + box_padding_y) / 10)), 2) if use_unified_box else 0
+    box_shadow = (
+        effective_ass_outline(max(int(round((box_padding_x + box_padding_y) / 10)), 2), video_meta)
+        if use_unified_box
+        else 0
+    )
     position_preset = str(subtitle_preset.get("positionPreset") or "bottom").strip().lower()
     alignment = 8 if position_preset == "top" else 5 if position_preset == "middle" else 2
-    margin_v = int(
-        resolve_subtitle_region_for_position(video_meta, default_subtitle_region(video_meta), subtitle_preset).get(
-            "marginV",
-            36,
-        )
-    )
+    margin_v = effective_ass_margin_v(subtitle_preset, video_meta)
     lines_out = [
         "[Script Info]",
         "ScriptType: v4.00+",

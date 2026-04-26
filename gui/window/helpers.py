@@ -74,7 +74,7 @@ class SectionWidget(QWidget):
 
         # Content container
         self._content_widget = QWidget()
-        self._content_widget.setStyleSheet("background: transparent; border: none;")
+        self._content_widget.setStyleSheet("background: transparent; border: none; color: #e8eefc;")
         self._content_layout = QVBoxLayout(self._content_widget)
         self._content_layout.setContentsMargins(8, 8, 8, 0)
         self._content_layout.setSpacing(8)
@@ -293,8 +293,8 @@ class WindowHelpersMixin:
             background: #0f1f35;
             color: #f8fafc;
             border: 1px solid rgba(96, 165, 250, 0.35);
-            selection-background-color: #38bdf8;
-            selection-color: #07111f;
+            selection-background-color: #2563eb;
+            selection-color: #ffffff;
             padding: 6px;
             """
         )
@@ -325,15 +325,19 @@ class WindowHelpersMixin:
 
     @staticmethod
     def _format_voice_label(voice: str) -> str:
+        from gui.config import SHORT_VOICE_LABELS, VOICE_LABELS
+
         value = str(voice or "").strip()
         if not value:
             return ""
+        if value in SHORT_VOICE_LABELS:
+            return SHORT_VOICE_LABELS[value]
         if value in VOICE_LABELS:
             return repair_mojibake_text(VOICE_LABELS[value])
         if value.startswith("vieneu:"):
-            return repair_mojibake_text(f"VieNeu-TTS • {value}")
+            return repair_mojibake_text(value.split(":", 1)[-1].replace("_", " ").title())
         if value.startswith("edge:") or value.endswith("Neural"):
-            return repair_mojibake_text(f"EdgeTTS • {value}")
+            return repair_mojibake_text(value.split(":", 1)[-1].replace("_", " ").title())
         return repair_mojibake_text(value)
 
     def _make_card(self, title: str, hint: str) -> tuple[QFrame, QVBoxLayout]:
@@ -545,14 +549,14 @@ class WindowHelpersMixin:
         box_fill_color = self.settings["subtitlePreset"].get("boxFillColor", "#77b8ee")
         box_border_color = self.settings["subtitlePreset"].get("boxBorderColor", "#3b82f6")
         self.font_color_btn.setStyleSheet(
-            f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {font_color}, stop:1 #ffffff); color: #0f172a; border: none;"
+            f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {font_color}, stop:1 #ffffff); color: #ffffff; border: 1px solid rgba(15,23,42,0.45);"
         )
         self.stroke_color_btn.setStyleSheet(
             f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {stroke_color}, stop:1 #64748b); color: white; border: none;"
         )
         if hasattr(self, "box_fill_color_btn") and self.box_fill_color_btn is not None:
             self.box_fill_color_btn.setStyleSheet(
-                f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {box_fill_color}, stop:1 #dbeafe); color: #0f172a; border: none;"
+                f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {box_fill_color}, stop:1 #dbeafe); color: #ffffff; border: 1px solid rgba(15,23,42,0.45);"
             )
         if hasattr(self, "box_border_color_btn") and self.box_border_color_btn is not None:
             self.box_border_color_btn.setStyleSheet(

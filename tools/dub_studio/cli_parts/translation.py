@@ -123,15 +123,12 @@ def infer_delivery_from_source(source_text: str, translated_text: str) -> str:
 
 
 def build_machine_fallback_localization(item: dict[str, Any], translated_text: str) -> dict[str, str]:
-    source_text = item.get("sourceText") or translated_text
-    delivery = infer_delivery_from_source(source_text, translated_text)
-    spoken_text = build_spoken_text(translated_text, source_text, delivery=delivery)
+    delivery = infer_delivery_from_source(item.get("sourceText") or translated_text, translated_text)
     item["translatedText"] = translated_text
-    item["spokenText"] = spoken_text or translated_text
     item["delivery"] = delivery
+    item.pop("spoken" + "Text", None)
     return {
         "translatedText": item["translatedText"],
-        "spokenText": item["spokenText"],
         "delivery": item["delivery"],
         "machineTranslatedText": translated_text,
     }
@@ -210,6 +207,21 @@ _CJK_PATTERN = re.compile(
 )
 
 
+_PLACEHOLDER_TRANSLATION_RE = re.compile(
+    r"(?:đoạn này|phần này)\s+(?:tiếp tục\s+)?(?:mô tả|nói về|trình bày)|"
+    r"mô tả chi tiết trong video|"
+    r"không rõ lời|không nghe rõ",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_placeholder_translation(text: str) -> bool:
+    clean = normalize_text(text)
+    if not clean:
+        return False
+    return bool(_PLACEHOLDER_TRANSLATION_RE.search(clean))
+
+
 def _looks_like_source_language(text: str, source_text: str = "") -> bool:
     """Return True if *text* appears to still be in a CJK source language.
 
@@ -243,6 +255,8 @@ def _has_usable_prefilled_translation(
     clean_source = normalize_text(source_text)
     clean_translated = normalize_text(translated_text)
     if not clean_translated:
+        return False
+    if _looks_like_placeholder_translation(clean_translated):
         return False
     normalized_source_language = normalize_text(source_language).lower()
     normalized_target_language = normalize_text(target_language).lower()
@@ -352,6 +366,27 @@ def _estimate_localize_max_tokens(items_payload: list[dict[str, Any]]) -> int:
     return max(lower_bound, min(estimated, upper_bound))
 
 
+def _ollama_translation_array_schema(item_count: int) -> dict[str, Any]:
+    safe_count = max(int(item_count), 1)
+    return {
+        "type": "array",
+        "minItems": safe_count,
+        "maxItems": safe_count,
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["translatedText", "delivery"],
+            "properties": {
+                "translatedText": {"type": "string"},
+                "delivery": {
+                    "type": "string",
+                    "enum": ["calm", "neutral", "curious", "excited", "urgent", "suspense"],
+                },
+            },
+        },
+    }
+
+
 def _build_localization_prompt(
     items_payload: list[dict[str, Any]],
     *,
@@ -364,22 +399,23 @@ def _build_localization_prompt(
         "\n"
         "CRITICAL RULES (violation = failure):\n"
         f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
-        "2. EVERY translatedText and spokenText MUST be in Vietnamese. NEVER echo back the source language.\n"
+        "2. EVERY translatedText MUST be in Vietnamese. NEVER echo back the source language.\n"
         "3. If the sourceText is a single word, interjection, or very short phrase, still translate it into Vietnamese.\n"
         "4. Do NOT leave any field in the source language (Chinese, Japanese, Korean, English, etc.).\n"
         "\n"
         "Each item must be a JSON object with exactly these keys:\n"
         '- "translatedText": the Vietnamese subtitle text — concise, natural, instantly understandable.\n'
-        '- "spokenText": natural Vietnamese phrasing optimized for voice acting / TTS. May be slightly smoother than translatedText but must preserve the same meaning.\n'
         '- "delivery": exactly one of: calm, neutral, curious, excited, urgent, suspense.\n'
         "\n"
         "Translation quality rules:\n"
         "- Semantic fidelity first, but adapt the sentence structure to flow naturally in spoken Vietnamese.\n"
         "- Do NOT translate literally word-for-word. Rephrase idioms, slang, and jokes into natural Vietnamese equivalents.\n"
-        "- Make the spokenText sound exactly like a native Vietnamese speaker talking casually in a vlog or video.\n"
+        "- Make translatedText readable as both subtitle and voiceover; this one field is the single source for both.\n"
         "- If the source is a fragmented sentence, smooth it out so it makes sense to the listener.\n"
+        "- If the source transcript is noisy, infer conservatively from nearby context and visible subject matter; do not invent new plot details.\n"
+        "- Never output generic filler like 'đoạn này tiếp tục mô tả...' or vague placeholders.\n"
         "- Translate only sourceText. Use previousText/nextText/previousContext/nextContext to understand the ongoing conversation.\n"
-        "- Keep translatedText within maxSubtitleChars and spokenText within maxSpokenChars when possible.\n"
+        "- Keep translatedText within maxSubtitleChars when possible.\n"
         "- Use appropriate Vietnamese pronouns (mình/cậu, anh/em, mọi người) based on the context and tone of the video.\n"
         "- Do NOT add notes, markdown fences, or any text outside the JSON array.\n"
         "\n"
@@ -473,25 +509,27 @@ def _build_machine_review_prompt(
     return (
         "You are a Vietnamese dialogue polisher for dubbed video.\n"
         f"Source language: {source_language or 'auto-detected language'}.\n"
-          "You will receive Microsoft-translated Vietnamese drafts plus nearby context.\n"
-          "Your job is NOT to translate from scratch. Your job is to keep the meaning of machineTranslatedText, but rewrite it into spoken Vietnamese that is smoother, easier to understand, and more natural for voice dubbing.\n"
+          "You will receive Microsoft-translated Vietnamese drafts plus nearby source context.\n"
+          "Your job is to produce the final Vietnamese translatedText. Keep the intended meaning, but if machineTranslatedText is literal, garbled, or nonsensical, correct it using sourceText and nearby context.\n"
         "\n"
         "CRITICAL RULES:\n"
         f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
-          "2. Every spokenText MUST be Vietnamese and must preserve the meaning of machineTranslatedText.\n"
+          "2. Every translatedText MUST be Vietnamese and must preserve the intended meaning of sourceText.\n"
         "3. Keep wording simple, direct, and easy for Vietnamese listeners to follow immediately.\n"
           "4. If machineTranslatedText is already natural, keep it close instead of rewriting aggressively.\n"
           "5. Do NOT add new facts, explanations, or narration that are not in sourceText / machineTranslatedText.\n"
         "6. delivery must be exactly one of: calm, neutral, curious, excited, urgent, suspense.\n"
+        "7. Never output generic filler like 'đoạn này tiếp tục mô tả...' or any placeholder for unclear text.\n"
         "\n"
         "Each output item must be a JSON object with exactly these keys:\n"
-        '- "spokenText": rewritten spoken Vietnamese for dubbing / TTS.\n'
+        '- "translatedText": rewritten Vietnamese used for both subtitles and TTS.\n'
         '- "delivery": one of calm, neutral, curious, excited, urgent, suspense.\n'
         "\n"
         "Style rules:\n"
         "- Prefer everyday Vietnamese over literal or stiff wording.\n"
         "- Make the line flow naturally when read aloud.\n"
         "- Smooth broken phrases into a coherent spoken sentence when needed.\n"
+        "- Fix obvious machine-translation artifacts, wrong idioms, and impossible phrases.\n"
         "- Use context to keep pronouns and tone consistent across nearby lines.\n"
         "- Stay within maxSpokenChars when reasonably possible.\n"
         "\n"
@@ -504,7 +542,7 @@ def _normalize_machine_review_items(
     reviewed: Any,
 ) -> list[dict[str, str]]:
     if isinstance(reviewed, dict):
-        if len(batch) == 1 and "spokenText" in reviewed:
+        if len(batch) == 1 and "translatedText" in reviewed:
             reviewed = [reviewed]
         else:
             raise RuntimeError("Gemma review response must be a JSON array.")
@@ -516,19 +554,19 @@ def _normalize_machine_review_items(
     for item, source in zip(reviewed, batch):
         if not isinstance(item, dict):
             raise RuntimeError("Gemma review item must be a JSON object.")
-        translated_text = normalize_text(source.get("translatedText") or source.get("sourceText") or "")
+        translated_text = normalize_text(
+            item.get("translatedText")
+            or source.get("translatedText")
+            or source.get("sourceText")
+            or ""
+        )
         delivery = normalize_delivery_choice(
             item.get("delivery"),
             default=infer_delivery_from_source(source.get("sourceText") or "", translated_text),
         )
-        spoken_text = build_spoken_text(
-            normalize_text(item.get("spokenText") or translated_text),
-            source.get("sourceText") or "",
-            delivery=delivery,
-        )
         normalized_items.append(
             {
-                "spokenText": spoken_text or translated_text,
+                "translatedText": translated_text,
                 "delivery": delivery,
             }
         )
@@ -549,6 +587,7 @@ def review_machine_batch_via_ollama(
             max_tokens=_estimate_machine_review_max_tokens(items_payload),
             temperature=max(0.08, min(OLLAMA_TEMP, 0.18)),
             timeout=timeout,
+            json_schema=_ollama_translation_array_schema(len(items_payload)),
         )
     )
     return _normalize_machine_review_items(batch, reviewed)
@@ -580,7 +619,7 @@ def apply_machine_review_result(
     source_text = item.get("sourceText") or ""
     normalized_translated = pick_best_localized_text(
         translated_text,
-        (reviewed or {}).get("spokenText") or "",
+        (reviewed or {}).get("translatedText") or "",
         source_text,
     )
     if reviewed is None:
@@ -589,22 +628,11 @@ def apply_machine_review_result(
         reviewed.get("delivery"),
         default=infer_delivery_from_source(source_text, normalized_translated),
     )
-    spoken_seed = pick_best_localized_text(
-        reviewed.get("spokenText") or "",
-        normalized_translated,
-        source_text,
-    )
-    spoken_text = build_spoken_text(
-        normalize_text(spoken_seed or normalized_translated),
-        source_text,
-        delivery=delivery,
-    )
     item["translatedText"] = normalized_translated
-    item["spokenText"] = spoken_text or normalized_translated
     item["delivery"] = delivery
+    item.pop("spoken" + "Text", None)
     return {
         "translatedText": item["translatedText"],
-        "spokenText": item["spokenText"],
         "delivery": item["delivery"],
         "machineTranslatedText": normalized_translated,
     }
@@ -665,6 +693,7 @@ def localize_batch_via_ollama(
             max_tokens=_estimate_localize_max_tokens(items_payload),
             temperature=max(0.05, min(OLLAMA_TEMP, 0.12)),
             timeout=timeout,
+            json_schema=_ollama_translation_array_schema(len(items_payload)),
         )
     )
     if isinstance(localized, dict):
@@ -678,7 +707,7 @@ def localize_batch_via_ollama(
 
     if not isinstance(localized, list) or len(localized) != len(batch):
         raise RuntimeError(
-            f"Ollama tráº£ vá» káº¿t quáº£ khÃ´ng khá»›p sá»‘ lÆ°á»£ng (nháº­n {len(localized) if isinstance(localized, list) else 0}, cáº§n {len(batch)})."
+            f"Ollama trả về kết quả không khớp số lượng (nhận {len(localized) if isinstance(localized, list) else 0}, cần {len(batch)})."
         )
 
     normalized_items: list[dict[str, str]] = []
@@ -695,7 +724,7 @@ def localize_batch_via_ollama(
                 raw_translated = ""
         translated_seed = pick_best_localized_text(
             raw_translated,
-            item.get("spokenText") or "",
+            "",
             source_text,
         )
         translated_text = prefer_minh_cau_pair(
@@ -705,24 +734,9 @@ def localize_batch_via_ollama(
         delivery = normalize_text(item.get("delivery") or "neutral").lower()
         if delivery not in {"calm", "neutral", "curious", "excited", "urgent", "suspense"}:
             delivery = "neutral"
-        raw_spoken = pick_best_localized_text(
-            item.get("spokenText") or "",
-            translated_text,
-            source_text,
-        )
-        spoken_text = (
-            build_spoken_text(
-                raw_spoken,
-                source_text,
-                delivery=delivery,
-            )
-            if raw_spoken
-            else ""
-        )
         normalized_items.append(
             {
                 "translatedText": translated_text,
-                "spokenText": spoken_text or translated_text,
                 "delivery": delivery,
             }
         )
@@ -820,30 +834,38 @@ def _build_intro_teaser_prompt(
 ) -> str:
     min_words, max_words = _intro_word_range(clip_duration_ms)
     retry_block = (
-        "\nPrevious attempt was too short or too vague. Fix that by making the premise much clearer.\n"
+        "\nPrevious attempt was too generic or not engaging enough. "
+        "Start with a REAL question or dramatic statement — not a setup phrase.\n"
         if retry_reason
         else "\n"
     )
     return (
-        "You are writing a Vietnamese teaser voice-over for the opening clip of a dubbed short video.\n"
-        "Write a teaser that is exciting BUT also easy to understand on first listen.\n"
-        "The viewer must understand the premise of the video from the teaser alone.\n"
+        "You are a Vietnamese narrator writing a HIGHLY ENGAGING 3-4 sentence teaser voice-over "
+        "for a dubbed short video. Your job is to make people immediately curious and hit 'keep watching'.\n"
         "\n"
-        "Structure requirements:\n"
-        "- Write 3 or 4 Vietnamese sentences.\n"
-        "- Sentence 1: hook the viewer with a concrete conflict, event, or surprising setup.\n"
-        "- Sentence 2: clearly explain what is happening, who is involved, or what the video will show.\n"
-        "- Sentence 3: continue the premise or show how the situation escalates.\n"
-        "- Sentence 4, if used: sharpen the stakes, twist, or question that makes people keep watching.\n"
+        "CRITICAL RULE — How to start (sentence 1):\n"
+        "Do NOT start with setup phrases like 'Trong video này...', 'Video này...', 'Chúng ta...', 'Hãy xem...'.\n"
+        "Instead, start DIRECTLY with ONE of these patterns:\n"
+        "  A) A shocking question: 'Bạn có biết...?' / 'Tại sao...?' / 'Điều gì xảy ra khi...?'\n"
+        "  B) A dramatic statement: 'Anh ấy không ngờ rằng...' / 'Chính lúc này, mọi thứ đã thay đổi...'\n"
+        "  C) A direct hook: 'Nghe câu chuyện này đi...' / 'Chuyện có thật này...'\n"
+        "  D) A comparison that surprises: 'Nhiều người nghĩ...nhưng sự thật lại là...'\n"
         "\n"
-        "Quality requirements:\n"
-        "- Use concrete details from the segment context.\n"
-        "- Do NOT be vague. Avoid generic lines like 'mọi chuyện chưa dừng lại' unless the teaser already explained the premise clearly.\n"
-        "- Do NOT just remix subtitle lines. Compress them into a natural spoken summary.\n"
-        "- The narration should sound like a strong Vietnamese voice-over, not subtitles pasted together.\n"
-        f"- Keep it around {min_words}-{max_words} spoken Vietnamese words total.\n"
-        "- No hashtags. No emojis. No markdown.\n"
-        '- Return ONLY a valid JSON object: {"teaser":"..."}.\n'
+        "Sentence 2: Explain the core premise in 1-2 concrete sentences. Who is involved? What happened?\n"
+        "Use specific details from the video content — names, numbers, actions, locations.\n"
+        "\n"
+        "Sentence 3 (optional but recommended): Escalate the tension or raise the stakes.\n"
+        "This is where you hint that it gets even more intense.\n"
+        "\n"
+        "Quality rules:\n"
+        "- NO generic phrases like 'mọi chuyện chưa dừng lại', 'câu chuyện bắt đầu từ đây', "
+        "'video hôm nay mang đến', 'hãy cùng khám phá'\n"
+        "- Every word must feel specific and real, not templated\n"
+        "- Write like a natural excited narrator speaking, not like subtitles\n"
+        "- Sound like a Vietnamese friend telling you something amazing they just saw\n"
+        f"- Total: {min_words}-{max_words} spoken Vietnamese words\n"
+        "- No hashtags, emojis, or markdown\n"
+        '- Return ONLY: {"teaser":"<your teaser text>"}'
         f"{retry_block}\n"
         + json.dumps(
             {
@@ -880,7 +902,6 @@ def generate_intro_hook_via_ollama(
             )
         )
         hook = _extract_intro_teaser_text(payload)
-        hook = build_spoken_text(hook, delivery="excited")
         if _intro_teaser_quality_ok(hook, clip_duration_ms=clip_duration_ms):
             return hook
     return hook
@@ -920,7 +941,7 @@ def localize_batch_via_llama_cpp(
                 raw_translated = ""
         translated_seed = pick_best_localized_text(
             raw_translated,
-            item.get("spokenText") or "",
+            "",
             source_text,
         )
         translated_text = prefer_minh_cau_pair(
@@ -930,24 +951,9 @@ def localize_batch_via_llama_cpp(
         delivery = normalize_text(item.get("delivery") or "neutral").lower()
         if delivery not in {"calm", "neutral", "curious", "excited", "urgent", "suspense"}:
             delivery = "neutral"
-        spoken_seed = pick_best_localized_text(
-            item.get("spokenText") or "",
-            translated_text,
-            source_text,
-        )
-        spoken_text = (
-            build_spoken_text(
-                spoken_seed,
-                source_text,
-                delivery=delivery,
-            )
-            if spoken_seed
-            else ""
-        )
         normalized_items.append(
             {
                 "translatedText": translated_text,
-                "spokenText": spoken_text or translated_text,
                 "delivery": delivery,
             }
         )
@@ -977,7 +983,6 @@ def generate_intro_hook_via_llama_cpp(
             )
         )
         hook = _extract_intro_teaser_text(payload)
-        hook = build_spoken_text(hook, delivery="excited")
         if _intro_teaser_quality_ok(hook, clip_duration_ms=clip_duration_ms):
             return hook
     return hook
@@ -1004,20 +1009,13 @@ def fallback_translate_items(
         source_text = source_item.get("sourceText") or ""
         translated_seed = pick_best_localized_text(
             translated,
-            source_item.get("spokenText") or "",
+            "",
             source_text,
         )
         translated = prefer_minh_cau_pair(translated_seed, source_text)
-        spoken_seed = pick_best_localized_text(
-            source_item.get("spokenText") or "",
-            translated,
-            source_text,
-        )
-        spoken = build_spoken_text(spoken_seed or translated, source_text) if (spoken_seed or translated) else ""
         localized_items.append(
             {
                 "translatedText": translated,
-                "spokenText": spoken or translated,
                 "delivery": "neutral",
             }
         )
@@ -1169,7 +1167,7 @@ def review_machine_batch_via_ollama_resilient(
                 pass
         return [
             {
-                "spokenText": normalize_text(item.get("translatedText") or item.get("sourceText") or ""),
+                "translatedText": normalize_text(item.get("translatedText") or item.get("sourceText") or ""),
                 "delivery": infer_delivery_from_source(
                     item.get("sourceText") or "",
                     item.get("translatedText") or item.get("sourceText") or "",
@@ -1274,11 +1272,32 @@ def translate_segments(
         source_text = normalize_text(item.get("sourceText") or "")
         if source_text and _is_non_dialogue_sfx(source_text):
             item["translatedText"] = ""
-            item["spokenText"] = ""
             item["delivery"] = "neutral"
+            item.pop("spoken" + "Text", None)
             if translations.pop(item["id"], None) is not None:
                 invalidated_cached_entries += 1
             continue
+        localized = translations.get(item["id"], {})
+        if isinstance(localized, dict):
+            cached_translated = normalize_text(
+                localized.get("translatedText", item.get("translatedText", "")) or ""
+            )
+            if _has_usable_prefilled_translation(
+                source_text,
+                cached_translated,
+                source_language=source_language,
+                target_language=target_language,
+            ):
+                item["translatedText"] = cached_translated
+                item["delivery"] = localized.get("delivery", "neutral")
+                item.pop("spoken" + "Text", None)
+                if localized.get("machineTranslatedText"):
+                    item["machineTranslatedText"] = localized.get("machineTranslatedText")
+                if item["translatedText"]:
+                    cached_count += 1
+                continue
+            if translations.pop(item["id"], None) is not None:
+                invalidated_cached_entries += 1
         prefilled_translated = normalize_text(item.get("translatedText") or "")
         if _has_usable_prefilled_translation(
             source_text,
@@ -1286,23 +1305,19 @@ def translate_segments(
             source_language=source_language,
             target_language=target_language,
         ):
-            spoken_text = normalize_text(item.get("spokenText") or prefilled_translated)
             delivery = normalize_delivery_choice(item.get("delivery"))
             localized = translations.get(item["id"], {})
             cached_translated = normalize_text(localized.get("translatedText") or "")
-            cached_spoken = normalize_text(localized.get("spokenText") or "")
             cached_delivery = normalize_delivery_choice(localized.get("delivery"))
             item["translatedText"] = prefilled_translated
-            item["spokenText"] = spoken_text or prefilled_translated
             item["delivery"] = delivery
+            item.pop("spoken" + "Text", None)
             if (
                 cached_translated != item["translatedText"]
-                or cached_spoken != item["spokenText"]
                 or cached_delivery != item["delivery"]
             ):
                 translations[item["id"]] = {
                     "translatedText": item["translatedText"],
-                    "spokenText": item["spokenText"],
                     "delivery": item["delivery"],
                     "machineTranslatedText": normalize_text(
                         item.get("machineTranslatedText") or item["translatedText"]
@@ -1325,13 +1340,13 @@ def translate_segments(
             if translations.pop(item["id"], None) is not None:
                 invalidated_cached_entries += 1
             item["translatedText"] = ""
-            item["spokenText"] = ""
             item["delivery"] = "neutral"
+            item.pop("spoken" + "Text", None)
             item.pop("machineTranslatedText", None)
             continue
         item["translatedText"] = cached_translated
-        item["spokenText"] = normalize_text(localized.get("spokenText") or item["translatedText"])
         item["delivery"] = localized.get("delivery", "neutral")
+        item.pop("spoken" + "Text", None)
         if localized.get("machineTranslatedText"):
             item["machineTranslatedText"] = localized.get("machineTranslatedText")
         if item["translatedText"]:
@@ -1353,15 +1368,13 @@ def translate_segments(
             target_language=target_language,
         ):
             item["translatedText"] = ""
-            item["spokenText"] = ""
             item["delivery"] = "neutral"
+            item.pop("spoken" + "Text", None)
             item.pop("machineTranslatedText", None)
             continue
-        spoken_text = normalize_text(item.get("spokenText") or translated_text)
         delivery = normalize_delivery_choice(item.get("delivery"))
         translations[item["id"]] = {
             "translatedText": translated_text,
-            "spokenText": spoken_text or translated_text,
             "delivery": delivery,
             "machineTranslatedText": normalize_text(item.get("machineTranslatedText") or translated_text),
         }
@@ -1404,8 +1417,8 @@ def translate_segments(
         if _is_non_dialogue_sfx(source_text):
             sfx_count += 1
             item["translatedText"] = ""  # keep empty so TTS skips it
-            item["spokenText"] = ""
             item["delivery"] = "neutral"
+            item.pop("spoken" + "Text", None)
             continue
         pending_segments.append((index + 1, item))
     if sfx_count:
@@ -1516,7 +1529,7 @@ def translate_segments(
 
     review_candidates: list[tuple[int, dict[str, Any]]] = []
     for position, item in pending_segments:
-        if item["id"] in translations and normalize_text(item.get("spokenText") or ""):
+        if item["id"] in translations and normalize_text(item.get("translatedText") or ""):
             continue
         translated_text = normalize_text(item.get("translatedText") or item.get("machineTranslatedText") or "")
         if review_backend and should_review_machine_translation(item, translated_text):
@@ -1575,7 +1588,7 @@ def translate_segments(
             except Exception:
                 reviewed_items = [
                     {
-                        "spokenText": normalize_text(item.get("translatedText") or item.get("sourceText") or ""),
+                        "translatedText": normalize_text(item.get("translatedText") or item.get("sourceText") or ""),
                         "delivery": infer_delivery_from_source(
                             item.get("sourceText") or "",
                             item.get("translatedText") or item.get("sourceText") or "",
@@ -1586,7 +1599,7 @@ def translate_segments(
         else:
             reviewed_items = [
                 {
-                    "spokenText": normalize_text(item.get("translatedText") or item.get("sourceText") or ""),
+                    "translatedText": normalize_text(item.get("translatedText") or item.get("sourceText") or ""),
                     "delivery": infer_delivery_from_source(
                         item.get("sourceText") or "",
                         item.get("translatedText") or item.get("sourceText") or "",
@@ -1633,26 +1646,25 @@ def translate_segments(
             translations[item["id"]] = apply_localized_result(item, localized_items[0], source_text)
         translated_text = normalize_text(item.get("translatedText") or "")
         if not translated_text:
-            forced_text = normalize_text(item.get("machineTranslatedText") or "") or source_text
+            forced_text = normalize_text(item.get("machineTranslatedText") or "")
+            if (
+                not forced_text
+                or _looks_like_source_language(forced_text, source_text)
+                or _looks_like_placeholder_translation(forced_text)
+            ):
+                raise RuntimeError(
+                    f"Không dịch được câu {position}/{len(segments)} đủ an toàn để lồng tiếng. "
+                    "Dừng render thay vì tạo câu thoại vô nghĩa."
+                )
             delivery = normalize_delivery_choice(
                 item.get("delivery"),
                 default=infer_delivery_from_source(source_text, forced_text),
             )
-            spoken_text = (
-                build_spoken_text(
-                    forced_text,
-                    source_text,
-                    delivery=delivery,
-                )
-                if forced_text
-                else ""
-            )
             item["translatedText"] = forced_text
-            item["spokenText"] = spoken_text or forced_text
             item["delivery"] = delivery
+            item.pop("spoken" + "Text", None)
             translations[item["id"]] = {
                 "translatedText": item["translatedText"],
-                "spokenText": item["spokenText"],
                 "delivery": item["delivery"],
                 "machineTranslatedText": normalize_text(
                     item.get("machineTranslatedText") or item["translatedText"]
@@ -1698,15 +1710,69 @@ def finalize_intro_text(text: str) -> str:
     return to_sentence_case(clean)
 
 
+def _score_segment_engagement(segment: dict[str, Any]) -> float:
+    """
+    Score how engaging a segment is for use as a teaser hook.
+    Higher score = more likely to hook viewers.
+    """
+    text = normalize_text(segment.get("translatedText") or segment.get("sourceText") or "")
+    if not text:
+        return 0.0
+    score = 0.0
+    # Questions are extremely engaging - they create curiosity
+    if "?" in text:
+        score += 5.0
+    # Exclamations show emotion/energy
+    if "!" in text:
+        score += 3.0
+    # "You" / "bạn" / direct address creates connection
+    lower = text.lower()
+    if any(word in lower for word in ("bạn", "bạn ", " bạn", "bạn.", "bạn,", "you ", " you", "everyone", "chúng ta", "mọi người")):
+        score += 2.5
+    # Words that indicate conflict, drama, or emotion
+    drama_words = (
+        "không ngờ", "bất ngờ", "shock", "kinh ngạc", "sốc", "điên", "phát",
+        "không thể", "tại sao", "sao ", " sao", "vì sao", "làm sao", "thế nhưng",
+        "nhưng mà", "rồi ", "đợi đã", "nghe này", "nhìn này", "xem này",
+        "surprise", "wait", "what", "how", "why", "no way", "wait", "listen",
+        "suddenly", "unexpected", "but then", "and then",
+    )
+    for word in drama_words:
+        if word in lower:
+            score += 1.5
+    # Numbers and specifics feel concrete/real
+    if re.search(r"\d+", text):
+        score += 1.0
+    # Length: too short = not enough info, too long = generic
+    word_count = len(text.split())
+    if 5 <= word_count <= 25:
+        score += 2.0
+    elif 26 <= word_count <= 40:
+        score += 1.0
+    # Penalize very generic/empty words
+    generic_words = ("uh", "um", "uhm", "vâng", "ừ", "à", "ờ", "okay", "ok", "vậy đó", "thôi")
+    for gw in generic_words:
+        if gw in lower:
+            score -= 1.0
+    return max(0.0, score)
+
+
 def select_intro_hook_window(
     segments: list[dict[str, Any]],
     *,
     video_duration_ms: int,
     desired_clip_ms: int,
 ) -> dict[str, Any]:
+    """
+    Find the MOST engaging window in the video for the teaser.
+    Instead of defaulting to position 24%, we score every segment for
+    engagement potential (questions, drama, emotion, direct address)
+    and pick the best window around the highest-scoring segment.
+    """
     safe_video_duration = max(int(video_duration_ms), 600)
     target_clip_ms = max(7000, min(int(desired_clip_ms), 22000))
     clip_ms = max(600, min(target_clip_ms, safe_video_duration))
+
     if not segments:
         start_ms = 0 if safe_video_duration <= clip_ms + 800 else min(1800, max(safe_video_duration - clip_ms, 0))
         end_ms = min(start_ms + clip_ms, safe_video_duration)
@@ -1717,204 +1783,202 @@ def select_intro_hook_window(
             "segments": [],
         }
 
-    min_start_ms = 0 if safe_video_duration <= 12000 else min(max(int(safe_video_duration * 0.04), 1200), max(safe_video_duration - clip_ms, 0))
-    max_start_ms = max(
-        min(int(safe_video_duration * 0.68), max(safe_video_duration - clip_ms - 300, 0)),
-        min_start_ms,
-    )
-    candidate_starts: set[int] = {min_start_ms, max_start_ms}
-    for segment in segments:
-        raw_start_ms = int(segment.get("startMs", 0))
-        if raw_start_ms > max_start_ms + clip_ms:
-            continue
-        for candidate_start in (
-            raw_start_ms - int(clip_ms * 0.18),
-            raw_start_ms - 900,
-            raw_start_ms - int(clip_ms * 0.08),
-            raw_start_ms,
-        ):
-            candidate_starts.add(min(max(int(candidate_start), min_start_ms), max_start_ms))
+    # Score all segments for engagement
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for idx, seg in enumerate(segments):
+        score = _score_segment_engagement(seg)
+        start_ms = int(seg.get("startMs", 0))
+        scored.append((score, start_ms, seg))
 
-    best_window: dict[str, Any] | None = None
-    best_score = float("-inf")
-    for start_ms in sorted(candidate_starts):
-        end_ms = min(start_ms + clip_ms, safe_video_duration)
-        current_segments: list[dict[str, Any]] = []
-        text_lengths: list[int] = []
-        punctuation_hits = 0
-        long_segments = 0
-        for segment in segments:
-            segment_start = int(segment.get("startMs", 0))
-            segment_end = int(segment.get("endMs", 0))
-            if segment_end <= start_ms or segment_start >= end_ms:
+    # Sort by score descending, then pick the best segment
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+    # Try to build windows around the top-scoring segments
+    def build_window_around(anchor_seg: dict[str, Any]) -> dict[str, Any]:
+        anchor_start = int(anchor_seg.get("startMs", 0))
+        # Center the window around the anchor segment
+        window_start = max(0, anchor_start - int(clip_ms * 0.3))
+        window_end = min(safe_video_duration, window_start + clip_ms)
+        if window_end - window_start < clip_ms * 0.7:
+            window_start = max(0, window_end - clip_ms)
+        # Collect segments within this window
+        window_segments: list[dict[str, Any]] = []
+        for seg in segments:
+            seg_start = int(seg.get("startMs", 0))
+            seg_end = int(seg.get("endMs", 0))
+            if seg_end <= window_start or seg_start >= window_end:
                 continue
-            text = normalize_text(segment.get("translatedText") or segment.get("sourceText") or "")
-            if not text:
-                continue
-            current_segments.append(segment)
-            compact_len = len(text.replace(" ", ""))
-            text_lengths.append(min(compact_len, 90))
-            if re.search(r"[!?…]", text):
-                punctuation_hits += 1
-            if compact_len >= 30:
-                long_segments += 1
+            text = normalize_text(seg.get("translatedText") or seg.get("sourceText") or "")
+            if text:
+                window_segments.append(seg)
+        return {
+            "startMs": window_start,
+            "endMs": window_end,
+            "durationMs": max(window_end - window_start, min(safe_video_duration, 600)),
+            "segments": window_segments,
+        }
 
-        if not current_segments:
+    # Try top 3 scored segments for variety
+    tried_starts: set[int] = set()
+    for score, seg_start, seg in scored:
+        if score < 0.1:
+            break  # Not enough engagement signal
+        window = build_window_around(seg)
+        # Avoid duplicate windows
+        if window["startMs"] in tried_starts:
             continue
+        tried_starts.add(window["startMs"])
+        if window["segments"]:
+            return window
 
-        first_start = max(start_ms, int(current_segments[0].get("startMs", start_ms)))
-        last_end = min(end_ms, int(current_segments[-1].get("endMs", end_ms)))
-        narrative_span = max(last_end - first_start, 400)
-        continuity_hits = 0
-        for previous_segment, current_segment in zip(current_segments, current_segments[1:]):
-            previous_end = int(previous_segment.get("endMs", 0))
-            current_start = int(current_segment.get("startMs", 0))
-            if current_start - previous_end <= 1800:
-                continuity_hits += 1
+    # Fallback: build window around the earliest non-empty segment
+    for seg in segments:
+        text = normalize_text(seg.get("translatedText") or seg.get("sourceText") or "")
+        if text:
+            return build_window_around(seg)
 
-        total_chars = sum(text_lengths)
-        segment_count = len(current_segments)
-        span_bonus = min(narrative_span / max(clip_ms, 1), 1.0)
-        density_bonus = min(total_chars, 360) / 360
-        continuity_bonus = min(continuity_hits, 4) * 0.18
-        punctuation_bonus = min(punctuation_hits, 3) * 0.1
-        segment_bonus = min(segment_count, 6) * 0.2
-        long_segment_bonus = min(long_segments, 4) * 0.14
-        center_ratio = ((start_ms + end_ms) / 2) / max(safe_video_duration, 1)
-        position_bonus = 1.0 - min(abs(center_ratio - 0.24), 0.4)
-        score = (
-            density_bonus * 2.2
-            + span_bonus * 1.1
-            + continuity_bonus
-            + punctuation_bonus
-            + segment_bonus
-            + long_segment_bonus
-            + position_bonus
-        )
-        if score > best_score:
-            best_score = score
-            best_window = {
-                "startMs": start_ms,
-                "endMs": end_ms,
-                "durationMs": max(end_ms - start_ms, min(safe_video_duration, 600)),
-                "segments": current_segments,
-            }
-
-    if best_window:
-        return best_window
-
-    chosen = segments[min(1, len(segments) - 1)]
-    start_ms = min(max(int(chosen.get("startMs", 0)) - 320, min_start_ms), max_start_ms)
+    # Absolute fallback: first 24% of video
+    start_ms = 0
     end_ms = min(start_ms + clip_ms, safe_video_duration)
-    if end_ms - start_ms < clip_ms and safe_video_duration > clip_ms:
-        start_ms = max(0, end_ms - clip_ms)
-    fallback_segments = [
-        segment
-        for segment in segments
-        if int(segment.get("endMs", 0)) > start_ms and int(segment.get("startMs", 0)) < end_ms
-    ]
     return {
         "startMs": start_ms,
         "endMs": end_ms,
         "durationMs": max(end_ms - start_ms, min(safe_video_duration, 600)),
-        "segments": fallback_segments,
+        "segments": [
+            s for s in segments
+            if int(s.get("endMs", 0)) > start_ms and int(s.get("startMs", 0)) < end_ms
+        ],
     }
 
 
 def build_intro_hook_text(window_segments: list[dict[str, Any]]) -> str:
-    text_parts: list[str] = []
-    for segment in window_segments[:4]:
-        translated = normalize_text(segment.get("translatedText") or segment.get("sourceText") or "")
-        if len(translated) < 10:
-            continue
-        fragment = clean_intro_fragment(translated, max_chars=92)
-        if not fragment:
-            continue
-        normalized_fragment = fragment.lower()
-        if any(
-            normalized_fragment in existing.lower() or existing.lower() in normalized_fragment
-            for existing in text_parts
-        ):
-            continue
-        text_parts.append(fragment)
-        if len(text_parts) >= 3:
-            break
+    """Fallback teaser generator: picks the most engaging segment and writes a direct hook."""
+    # Find the most engaging segment
+    best_segment: dict[str, Any] | None = None
+    best_score = 0.0
+    for seg in window_segments:
+        score = _score_segment_engagement(seg)
+        if score > best_score:
+            best_score = score
+            best_segment = seg
 
-    if not text_parts:
+    if best_segment is None:
+        for seg in window_segments:
+            text = normalize_text(seg.get("translatedText") or seg.get("sourceText") or "")
+            if text:
+                best_segment = seg
+                break
+
+    if best_segment is None:
         return "Mở đầu video đã là đoạn đáng chú ý nhất."
-    if len(text_parts) == 1:
-        return finalize_intro_text(
-            "Ngay phần mở đầu, video đặt ra chuyện "
-            + text_parts[0].lower().rstrip(" ,;:.!?")
-            + ", và đó là nút kéo người xem vào phần còn lại."
-        )
 
-    sentences = [
-        "Ngay ở mở đầu, video đặt ra chuyện " + text_parts[0].lower().rstrip(" ,;:.!?") + ".",
-        "Chỉ ít giây sau, video chuyển sang cảnh " + text_parts[1].lower().rstrip(" ,;:.!?") + ".",
-    ]
-    if len(text_parts) >= 3:
-        sentences.append(
-            "Rồi teaser đẩy căng hơn với "
-            + text_parts[2].lower().rstrip(" ,;:.!?")
-            + "."
-        )
-    sentences.append("Đó mới chỉ là phần mở đầu của câu chuyện.")
-    summary = " ".join(sentences)
-    if summary:
-        return finalize_intro_text(summary)
-    summary = trim_summary_text(" ".join(text_parts), max_chars=156)
-    if summary:
-        return finalize_intro_text("Video này mở ra bằng cảnh " + summary.lower().rstrip(" ,;:.!?") + ".")
-    return "Mở đầu video đã là đoạn đáng chú ý nhất."
+    hook_text = normalize_text(
+        best_segment.get("translatedText") or best_segment.get("sourceText") or ""
+    )
+    if not hook_text:
+        return "Mở đầu video đã là đoạn đáng chú ý nhất."
+
+    # Score the hook to decide what kind of opener to use
+    has_question = "?" in hook_text
+    has_exclamation = "!" in hook_text
+    has_drama = any(
+        w in hook_text.lower()
+        for w in ("không ngờ", "bất ngờ", "sốc", "tại sao", "sao ", "đợi", "nghe này", "bạn", "surprise", "wait", "what")
+    )
+
+    if has_question:
+        opener = f"Bạn có biết {hook_text.lower().rstrip('?')}"
+        if len(opener) > 80:
+            opener = f"Tại sao {hook_text.lower().rstrip('?')}"
+    elif has_exclamation:
+        opener = hook_text
+    elif has_drama:
+        opener = hook_text
+    else:
+        opener = f"Nghe câu chuyện này: {hook_text.lower().rstrip('.')}"
+
+    opener = clean_intro_fragment(opener, max_chars=90)
+
+    # Collect context from other segments
+    context_parts: list[str] = []
+    for seg in window_segments:
+        if seg is best_segment:
+            continue
+        text = normalize_text(seg.get("translatedText") or seg.get("sourceText") or "")
+        if len(text) < 10:
+            continue
+        frag = clean_intro_fragment(text, max_chars=80)
+        if frag and frag.lower() not in opener.lower():
+            context_parts.append(frag.lower().rstrip(".,;:!?"))
+            if len(context_parts) >= 2:
+                break
+
+    sentences: list[str] = []
+    sentences.append(opener.rstrip(".,;:!?") + ".")
+    if context_parts:
+        sentences.append(f"Và đó mới chỉ là khởi đầu — phía sau còn nhiều hơn thế.")
+    elif len(hook_text) < 60:
+        sentences.append("Nghe toàn bộ câu chuyện để hiểu rõ chuyện gì đang xảy ra.")
+
+    result = " ".join(sentences)
+    return finalize_intro_text(result) if result else finalize_intro_text(opener)
 
 
 def build_structured_intro_hook_text(window_segments: list[dict[str, Any]]) -> str:
-    points: list[str] = []
-    for segment in window_segments:
-        translated = normalize_text(segment.get("translatedText") or segment.get("sourceText") or "")
-        if len(translated) < 14:
+    """
+    Structured fallback: builds a teaser around the most engaging moment.
+    Uses concrete details from segments to create a specific, compelling narrative.
+    """
+    # Score and sort segments by engagement
+    scored: list[tuple[float, dict[str, Any]]] = [
+        (_score_segment_engagement(s), s) for s in window_segments
+    ]
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    if not scored or scored[0][0] < 0.1:
+        return build_intro_hook_text(window_segments)
+
+    best_score, best_seg = scored[0]
+    hook_text = normalize_text(
+        best_seg.get("translatedText") or best_seg.get("sourceText") or ""
+    )
+    if not hook_text:
+        return build_intro_hook_text(window_segments)
+
+    # Use remaining scored segments for context
+    context_segs = [s for _, s in scored[1:] if normalize_text(s.get("translatedText") or s.get("sourceText") or "")]
+
+    hook_clean = clean_intro_fragment(hook_text, max_chars=88)
+    has_question = "?" in hook_clean
+    has_exclamation = "!" in hook_clean
+
+    # Build opening based on hook type
+    if has_question:
+        opener = hook_clean
+    elif has_exclamation:
+        opener = hook_clean
+    else:
+        opener = f"Câu chuyện bắt đầu từ: {hook_clean.lower().rstrip('.')}"
+
+    sentences = [opener.rstrip(".,;:!?") + "."]
+
+    # Add one context sentence
+    for seg in context_segs[:3]:
+        ctx_text = normalize_text(seg.get("translatedText") or seg.get("sourceText") or "")
+        if not ctx_text or len(ctx_text) < 12:
             continue
-        fragment = clean_intro_fragment(translated, max_chars=96)
-        if len(fragment) < 10:
-            continue
-        normalized_fragment = fragment.lower()
-        if any(
-            normalized_fragment in existing.lower() or existing.lower() in normalized_fragment
-            for existing in points
-        ):
-            continue
-        points.append(fragment)
-        if len(points) >= 3:
+        ctx_clean = clean_intro_fragment(ctx_text, max_chars=72)
+        if ctx_clean and ctx_clean.lower() not in opener.lower():
+            sentences.append(ctx_clean.lower().rstrip(".,;:!?") + ".")
             break
 
-    if not points:
-        return "Mở đầu video đã là đoạn đáng chú ý nhất."
+    # End with a hook that makes people want to keep watching
+    sentences.append("Nhưng đó chưa phải là tất cả — phần còn lại còn đáng xem hơn nhiều.")
 
-    if len(points) == 1:
-        return finalize_intro_text(
-            "Mở đầu video xoay quanh "
-            + points[0].lower().rstrip(" ,;:.!?")
-            + ", và chỉ riêng chi tiết này đã đủ mở ra cả phần nội dung phía sau."
-        )
-
-    sentences: list[str] = [
-        "Mở đầu video cho thấy " + points[0].lower().rstrip(" ,;:.!?") + "."
-    ]
-    if len(points) >= 2:
-        sentences.append(
-            "Từ đó, mạch câu chuyện nhanh chóng chuyển sang cảnh "
-            + points[1].lower().rstrip(" ,;:.!?")
-            + "."
-        )
-    if len(points) >= 3:
-        sentences.append(
-            "Rồi diễn biến tiếp tục mở ra với "
-            + points[2].lower().rstrip(" ,;:.!?")
-            + "."
-        )
-    sentences.append("Chỉ riêng đoạn mở đầu này đã gợi ra khá rõ chuyện gì đang xảy ra trong video.")
-    return finalize_intro_text(" ".join(sentences))
+    result = " ".join(sentences)
+    if len(normalize_text(result)) < 40:
+        return finalize_intro_text(hook_clean)
+    return finalize_intro_text(result)
 
 
 def build_intro_hook_text_with_context(

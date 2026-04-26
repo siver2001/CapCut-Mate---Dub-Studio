@@ -472,11 +472,21 @@ class WindowBatchMixin:
             if self.settings["sourceLanguage"] == "auto"
             else self.settings["sourceLanguage"],
             "targetLanguage": self.settings["targetLanguage"],
-            "speakerDetectionMode": self.settings["speakerDetectionMode"],
-            "speakerCount": int(self.settings["speakerCount"]),
-            "voiceMapping": copy.deepcopy(self.settings["voiceMapping"]),
+            "speakerDetectionMode": "narrator",
+            "speakerCount": 1,
+            "voiceMapping": self._batch_voice_mapping(),
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
         }
+
+    def _batch_voice_mapping(self) -> dict[str, str]:
+        voice_mapping = self._expanded_voice_mapping()
+        default_voice = str(
+            self.settings.get("defaultVoice")
+            or voice_mapping.get("speaker_1")
+            or "valtec:nf"
+        ).strip()
+        voice_mapping["speaker_1"] = default_voice
+        return voice_mapping
 
     def _batch_build_render_options(self, analysis: dict[str, Any]) -> dict[str, Any]:
         """Build render options from the shared settings for a batch item."""
@@ -492,8 +502,9 @@ class WindowBatchMixin:
         return {
             "sourceLanguage": effective_source_language or "",
             "targetLanguage": self.settings["targetLanguage"],
-            "speakerDetectionMode": self.settings["speakerDetectionMode"],
-            "voiceMapping": copy.deepcopy(self.settings["voiceMapping"]),
+            "speakerDetectionMode": "narrator",
+            "speakerCount": 1,
+            "voiceMapping": self._batch_voice_mapping(),
             "introHook": copy.deepcopy(self.settings["introHook"]),
             "subtitlePreset": copy.deepcopy(self.settings["subtitlePreset"]),
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),

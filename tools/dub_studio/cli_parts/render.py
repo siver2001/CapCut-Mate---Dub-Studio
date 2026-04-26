@@ -11,10 +11,11 @@ from .analysis import (
     build_speakers,
     detect_source_language,
     extract_speaker_samples,
+    is_valtec_reference_voice,
+    is_valtec_voice_preset,
     is_vieneu_voice_preset,
-    maybe_upgrade_speaker_segmentation_with_llm,
-    refine_speakers_with_ollama,
     resolve_tts_output_extension,
+    resolve_valtec_reference_audio,
     resolve_voice_preset,
     subtitle_region_detected,
 )
@@ -22,14 +23,14 @@ from .audio import (
     create_dub_audio,
     create_final_audio,
     create_intro_audio,
-    estimate_spoken_text_profile,
+    estimate_tts_text_profile,
     extract_video_clip,
     normalize_audio_mix_mode,
     prepare_background_audio_track,
     synthesize_timed_tts_clip,
     synthesize_tts,
 )
-from .runtime import ensure_vieneu_runtime, prepare_runtime, should_use_llama_cpp, should_use_ollama
+from .runtime import ensure_valtec_runtime, ensure_vieneu_runtime, prepare_runtime
 from .translation import (
     build_intro_hook_text,
     build_intro_hook_text_with_context,
@@ -39,6 +40,8 @@ from .translation import (
     select_intro_hook_window,
     translate_segments,
 )
+from ..subtitle_utils import renumber_subtitle_timeline
+from ..tts.text import sanitize_for_tts_or_raise
 
 def stable_video_codec() -> tuple[str, list[str]]:
     # Favor a faster default preset for interactive dubbing/export iterations.
@@ -189,6 +192,30 @@ def choose_video_codec() -> tuple[str, list[str]]:
     return stable_video_codec()
 
 
+def expand_cleanup_region_for_render(
+    region: dict[str, Any],
+    *,
+    video_meta: dict[str, Any],
+    subtitle_preset: dict[str, Any],
+) -> dict[str, int]:
+    width = int(video_meta.get("width") or 1080)
+    height = int(video_meta.get("height") or 1920)
+    font_size = effective_ass_font_size(subtitle_preset, video_meta)
+    region_w = max(int(region.get("w", 0)), 1)
+    region_h = max(int(region.get("h", 0)), 1)
+    center_x = int(region.get("centerX", int(region.get("x", 0)) + region_w // 2))
+    center_y = int(region.get("centerY", int(region.get("y", 0)) + region_h // 2))
+
+    min_w = min(width, max(int(width * 0.72), region_w + int(width * 0.16)))
+    min_h = min(height, max(int(height * 0.14), region_h + font_size * 2))
+    expanded_w = min(width, max(region_w + int(region_w * 0.7), min_w))
+    expanded_h = min(height, max(region_h + int(region_h * 1.6), min_h))
+
+    x = max(min(center_x - expanded_w // 2, width - expanded_w), 0)
+    y = max(min(center_y - int(expanded_h * 0.58), height - expanded_h), 0)
+    return {"x": x, "y": y, "w": expanded_w, "h": expanded_h}
+
+
 def burn_subtitles(
     *,
     video_path: Path,
@@ -202,9 +229,15 @@ def burn_subtitles(
     use_ass: bool = False,
 ) -> None:
     codec, codec_args = choose_video_codec()
-    font_size = int(subtitle_preset.get("fontSize", 18))
-    effective_region = resolve_subtitle_region_for_position(video_meta=get_video_meta(video_path), subtitle_region=subtitle_region, subtitle_preset=subtitle_preset)
-    margin_v = int(effective_region.get("marginV", subtitle_preset.get("bottomOffset", 36)))
+    source_video_meta = get_video_meta(video_path)
+    target_duration_seconds = max(ffprobe_duration_ms(video_path) / 1000, 0.1)
+    font_size = effective_ass_font_size(subtitle_preset, source_video_meta)
+    effective_region = resolve_subtitle_region_for_position(
+        video_meta=source_video_meta,
+        subtitle_region=subtitle_region,
+        subtitle_preset=subtitle_preset,
+    )
+    margin_v = effective_ass_margin_v(subtitle_preset, source_video_meta)
     cleanup_blur_strength = max(
         2,
         min(
@@ -214,12 +247,12 @@ def burn_subtitles(
     )
     blur_filter = (
         f"boxblur=luma_radius={cleanup_blur_strength}:luma_power=1,"
-        "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill"
+        "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.58:t=fill"
     )
     font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
     primary_color = subtitle_preset.get("assPrimaryColor") or "&H0038D8FF"
     outline_color = subtitle_preset.get("assOutlineColor") or "&H00000000"
-    outline = int(subtitle_preset.get("strokeWidth", 2))
+    outline = effective_ass_outline(int(subtitle_preset.get("strokeWidth", 2)), source_video_meta)
     box_enabled = bool(subtitle_preset.get("boxEnabled", False))
     box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()
     use_unified_box = box_enabled and box_layout_mode == "unified"
@@ -231,15 +264,21 @@ def burn_subtitles(
         subtitle_preset.get("boxBorderColor", "#3b82f6"),
         float(subtitle_preset.get("boxBorderOpacity", 1.0)),
     )
-    box_border_width = int(subtitle_preset.get("boxBorderWidth", 2))
+    box_border_width = effective_ass_outline(
+        int(subtitle_preset.get("boxBorderWidth", 2)),
+        source_video_meta,
+    )
     box_shadow = (
-        max(
-            int(
-                round(
-                    (int(subtitle_preset.get("boxPaddingX", 24)) + int(subtitle_preset.get("boxPaddingY", 12))) / 10
-                )
+        effective_ass_outline(
+            max(
+                int(
+                    round(
+                        (int(subtitle_preset.get("boxPaddingX", 24)) + int(subtitle_preset.get("boxPaddingY", 12))) / 10
+                    )
+                ),
+                2,
             ),
-            2,
+            source_video_meta,
         )
         if use_unified_box
         else 0
@@ -258,10 +297,15 @@ def burn_subtitles(
             f"MarginV={margin_v},Alignment=2'"
         )
 
-    region_x = int(effective_region.get("x", 0))
-    region_y = int(effective_region.get("y", 0))
-    region_w = int(effective_region.get("w", 0))
-    region_h = int(effective_region.get("h", 0))
+    cleanup_region = expand_cleanup_region_for_render(
+        effective_region,
+        video_meta=source_video_meta,
+        subtitle_preset=subtitle_preset,
+    )
+    region_x = int(cleanup_region.get("x", 0))
+    region_y = int(cleanup_region.get("y", 0))
+    region_w = int(cleanup_region.get("w", 0))
+    region_h = int(cleanup_region.get("h", 0))
 
     dynamic_regions = [region for region in (dynamic_regions or []) if int(region.get("w", 0)) > 0 and int(region.get("h", 0)) > 0]
 
@@ -269,13 +313,23 @@ def burn_subtitles(
         if cleanup_mode == "localized_blur":
             drawbox_chain = ",".join(
                 [
-                    "drawbox="
-                    f"x={max(int(region.get('x', region_x)), 0)}:"
-                    f"y={max(int(region.get('y', region_y)), 0)}:"
-                    f"w={max(int(region.get('w', region_w)), 1)}:"
-                    f"h={max(int(region.get('h', region_h)), 1)}:"
-                    "color=white:t=fill:"
-                    f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
+                    (
+                        lambda cleanup_region: (
+                            "drawbox="
+                            f"x={cleanup_region['x']}:"
+                            f"y={cleanup_region['y']}:"
+                            f"w={cleanup_region['w']}:"
+                            f"h={cleanup_region['h']}:"
+                            "color=white:t=fill:"
+                            f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
+                        )
+                    )(
+                        expand_cleanup_region_for_render(
+                            region,
+                            video_meta=source_video_meta,
+                            subtitle_preset=subtitle_preset,
+                        )
+                    )
                     for region in dynamic_regions
                 ]
             )
@@ -291,13 +345,23 @@ def burn_subtitles(
         elif cleanup_mode == "localized_mask":
             drawbox_chain = ",".join(
                 [
-                    "drawbox="
-                    f"x={max(int(region.get('x', region_x)), 0)}:"
-                    f"y={max(int(region.get('y', region_y)), 0)}:"
-                    f"w={max(int(region.get('w', region_w)), 1)}:"
-                    f"h={max(int(region.get('h', region_h)), 1)}:"
-                    "color=black@0.68:t=fill:"
-                    f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
+                    (
+                        lambda cleanup_region: (
+                            "drawbox="
+                            f"x={cleanup_region['x']}:"
+                            f"y={cleanup_region['y']}:"
+                            f"w={cleanup_region['w']}:"
+                            f"h={cleanup_region['h']}:"
+                            "color=black@0.78:t=fill:"
+                            f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
+                        )
+                    )(
+                        expand_cleanup_region_for_render(
+                            region,
+                            video_meta=source_video_meta,
+                            subtitle_preset=subtitle_preset,
+                        )
+                    )
                     for region in dynamic_regions
                 ]
             )
@@ -320,7 +384,7 @@ def burn_subtitles(
             filter_arg = "-filter_complex"
             video_map = "[vout]"
         elif cleanup_mode == "localized_mask":
-            video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=black@0.68:t=fill,{subtitles_filter}"
+            video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=black@0.78:t=fill,{subtitles_filter}"
             filter_arg = "-vf"
             video_map = "0:v:0"
         else:
@@ -354,7 +418,7 @@ def burn_subtitles(
     command.extend(
         [
             "-af",
-            stable_audio_filter_chain(),
+            f"apad,atrim=0:{target_duration_seconds:.3f},{stable_audio_filter_chain()}",
             "-c:v",
             codec,
             *codec_args,
@@ -364,7 +428,8 @@ def burn_subtitles(
             "192k",
             "-movflags",
             "+faststart",
-            "-shortest",
+            "-t",
+            f"{target_duration_seconds:.3f}",
             str(output_path),
         ]
     )
@@ -440,13 +505,13 @@ def render_intro_hook(
         source_language=source_language,
         clip_duration_ms=clip_window["durationMs"],
     )
-    spoken_profile = estimate_spoken_text_profile(intro_text)
+    tts_profile = estimate_tts_text_profile(intro_text)
     remaining_source_ms = max(video_duration_ms - clip_window["startMs"], clip_window["durationMs"])
     max_intro_duration_ms = min(max(clip_window["durationMs"] + 6000, 24000), remaining_source_ms)
     desired_intro_duration_ms = min(
         max(
             clip_window["durationMs"],
-            int(spoken_profile.get("expectedSeconds", 0.0) * 1000) + 900,
+            int(tts_profile.get("expectedSeconds", 0.0) * 1000) + 900,
         ),
         max_intro_duration_ms,
     )
@@ -458,7 +523,7 @@ def render_intro_hook(
     intro_srt_path = dirs["render"] / "intro_hook.srt"
     teaser_output_path = dirs["render"] / "intro_hook_rendered.mp4"
 
-    fitted_intro_voice, intro_clip_ms, intro_rate, _, _, intro_spoken_text = synthesize_timed_tts_clip(
+    fitted_intro_voice, intro_clip_ms, intro_rate, _, _, _ = synthesize_timed_tts_clip(
         index=0,
         speaker_id="intro_hook",
         voice=intro_voice,
@@ -496,7 +561,6 @@ def render_intro_hook(
             [
                 {
                     "translatedText": intro_text,
-                    "spokenText": intro_spoken_text,
                     "startMs": 0,
                     "endMs": actual_intro_duration_ms,
                 }
@@ -505,17 +569,20 @@ def render_intro_hook(
             max_chars=int(subtitle_preset.get("maxCharsPerChunk", 22)),
             punctuation_aware=bool(subtitle_preset.get("punctuationAwareSplit", True)),
         )
-        intro_dynamic_regions, intro_positions = build_dynamic_subtitle_regions(
-            clip_path,
-            video_meta=video_meta,
-            subtitles=intro_subtitles,
-            fallback_region=subtitle_region,
-        )
-        intro_dynamic_regions = filter_dynamic_cleanup_regions(
-            intro_dynamic_regions,
-            anchor_region=subtitle_region,
-            video_meta=video_meta,
-        )
+        if normalize_source_subtitle_cleanup_mode(cleanup_mode) != "none":
+            intro_dynamic_regions, intro_positions = build_dynamic_subtitle_regions(
+                clip_path,
+                video_meta=video_meta,
+                subtitles=intro_subtitles,
+                fallback_region=subtitle_region,
+            )
+            intro_dynamic_regions = filter_dynamic_cleanup_regions(
+                intro_dynamic_regions,
+                anchor_region=subtitle_region,
+                video_meta=video_meta,
+            )
+        else:
+            intro_dynamic_regions = []
         intro_ass_path = dirs["render"] / "intro_hook.ass"
         intro_ass_path.write_text(
             compose_ass(
@@ -542,7 +609,6 @@ def render_intro_hook(
     return {
         "enabled": True,
         "text": intro_text,
-        "spokenText": intro_spoken_text,
         "videoPath": str(teaser_output_path),
         "sourceStartMs": clip_window["startMs"],
         "sourceEndMs": min(clip_window["startMs"] + actual_intro_duration_ms, max(video_duration_ms, actual_intro_duration_ms)),
@@ -659,6 +725,7 @@ def mux_video_with_audio(
     video_meta: dict[str, Any] | None = None
 ) -> None:
     codec, codec_args = choose_video_codec()
+    target_duration_seconds = max(ffprobe_duration_ms(video_path) / 1000, 0.1)
     command = [
         "ffmpeg",
         "-y",
@@ -684,15 +751,148 @@ def mux_video_with_audio(
         
     command.extend([
         "-af",
-        stable_audio_filter_chain(),
+        f"apad,atrim=0:{target_duration_seconds:.3f},{stable_audio_filter_chain()}",
         "-c:v", codec, *codec_args,
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
-        "-shortest",
+        "-t", f"{target_duration_seconds:.3f}",
         str(output_path),
     ])
     run(command, cwd=ROOT)
 
+
+def apply_sticker_overlay(
+    input_video_path: Path,
+    output_video_path: Path,
+    sticker_options: dict[str, Any],
+    scale: float = 1.0,
+    transform_x: float = 0.0,
+    transform_y: float = -0.3,
+) -> Path:
+    """
+    Overlay a sticker (image/GIF) on top of a video using ffmpeg.
+
+    Args:
+        input_video_path: Path to the input video (with subtitles already burned).
+        output_video_path: Path for the output video with sticker overlay.
+        sticker_options: Dict with sticker data (image_url, sticker_id, etc.).
+        scale: Sticker scale factor (default 1.0).
+        transform_x: X offset in normalized coordinates (-1 to 1).
+        transform_y: Y offset in normalized coordinates (-1 to 1).
+
+    Returns:
+        Path to the output video.
+    """
+    image_url = str(sticker_options.get("image_url") or "").strip()
+    if not image_url:
+        logger.warning("apply_sticker_overlay: no image_url in sticker_options")
+        if input_video_path != output_video_path:
+            import shutil
+            shutil.copy2(input_video_path, output_video_path)
+        return output_video_path
+
+    # Download sticker image
+    cache_dir = DUB_STUDIO_DIR / "sticker_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    sticker_id = str(
+        sticker_options.get("sticker_id")
+        or sticker_options.get("stickerId")
+        or "unknown"
+    )
+    sticker_type = int(sticker_options.get("sticker_type", 1))
+    ext = "gif" if sticker_type == 2 else "png"
+    cached_path = cache_dir / f"{sticker_id}.{ext}"
+
+    if not cached_path.exists():
+        try:
+            run(
+                ["ffmpeg", "-y", "-i", image_url, str(cached_path)],
+                cwd=ROOT,
+                timeout=30.0,
+            )
+            logger.info(f"Downloaded sticker to {cached_path}")
+        except Exception as exc:
+            logger.error(f"Failed to download sticker image: {exc}")
+            import shutil
+            shutil.copy2(input_video_path, output_video_path)
+            return output_video_path
+
+    if not cached_path.exists():
+        import shutil
+        shutil.copy2(input_video_path, output_video_path)
+        return output_video_path
+
+    # Get video dimensions
+    video_meta = get_video_meta(input_video_path)
+    width = int(video_meta.get("width", 1920))
+    height = int(video_meta.get("height", 1080))
+    duration_ms = int(video_meta.get("durationMs", 0) or 0)
+
+    # Get sticker dimensions
+    sticker_meta = get_video_meta(cached_path) if ext == "gif" else {}
+    if sticker_meta:
+        sw = int(sticker_meta.get("width", width // 4))
+        sh = int(sticker_meta.get("height", height // 4))
+    else:
+        sw, sh = width // 4, height // 4
+
+    # Scale sticker
+    sw_scaled = int(sw * scale)
+    sh_scaled = int(sh * scale)
+    sw_scaled = max(1, sw_scaled)
+    sh_scaled = max(1, sh_scaled)
+
+    # Calculate position (ffmpeg overlay uses top-left origin)
+    # transform_x: -1 = left edge, 0 = center, 1 = right edge
+    # transform_y: -1 = top, 0 = center, 1 = bottom (but we want upper area)
+    overlay_x = int((width - sw_scaled) * ((transform_x + 1) / 2))
+    overlay_y = int((height - sh_scaled) * ((transform_y + 1) / 2))
+    overlay_x = max(0, overlay_x)
+    overlay_y = max(0, overlay_y)
+
+    logger.info(
+        f"Applying sticker overlay: size={sw_scaled}x{sh_scaled}, pos=({overlay_x},{overlay_y}), "
+        f"sticker_id={sticker_id}, type={'GIF' if ext == 'gif' else 'PNG'}"
+    )
+
+    # Build ffmpeg command
+    if ext == "gif":
+        # For GIF stickers, loop forever and scale to desired size
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(input_video_path),
+            "-ignore_loop", "1",
+            "-i", str(cached_path),
+            "-filter_complex",
+            f"[1:v]scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
+            f"pad={sw_scaled}:{sh_scaled}:(ow-iw)/2:(oh-ih)/2:color=0x00000000@0"
+            f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}:format=auto",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(output_video_path),
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(input_video_path),
+            "-i", str(cached_path),
+            "-filter_complex",
+            f"[1:v]scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
+            f"pad={sw_scaled}:{sh_scaled}:(ow-iw)/2:(oh-ih)/2:color=0x00000000@0"
+            f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}:format=auto",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(output_video_path),
+        ]
+
+    try:
+        run(cmd, cwd=ROOT)
+    except Exception as exc:
+        logger.error(f"Sticker overlay ffmpeg failed: {exc}")
+        import shutil
+        shutil.copy2(input_video_path, output_video_path)
+
+    return output_video_path
 
 
 def hex_to_rgb_float(hex_color: str) -> tuple[float, float, float]:
@@ -731,12 +931,14 @@ def create_capcut_draft(
     video_meta: dict[str, Any],
     analysis_name: str,
     flattened_video_path: Path | None = None,
+    sticker_options: dict[str, Any] | None = None,
     ) -> str:
     from src.pyJianYingDraft import (
         AudioMaterial,
         AudioSegment as DraftAudioSegment,
         ClipSettings,
         DraftFolder,
+        StickerSegment,
         TextBackground,
         TextBorder,
         TextSegment,
@@ -746,6 +948,7 @@ def create_capcut_draft(
         TrackType,
         VideoMaterial,
         VideoSegment,
+        trange,
     )
     from src.pyJianYingDraft.metadata import FontType
 
@@ -854,6 +1057,33 @@ def create_capcut_draft(
                 text_segment.add_effect(selected_text_effect)
             script.add_segment(text_segment, "vietsub_track")
 
+    sticker_id = (sticker_options or {}).get("stickerId", "")
+    if sticker_id:
+        sticker_scale = max(0.1, min(float((sticker_options or {}).get("scale", 1.0)), 5.0))
+        sticker_transform_x = max(
+            -1.0, min(float((sticker_options or {}).get("transform_x", 0.0)), 1.0)
+        )
+        sticker_transform_y = max(
+            -1.0, min(float((sticker_options or {}).get("transform_y", -0.3)), 1.0)
+        )
+        sticker_track_name = "sticker_track"
+        script.add_track(TrackType.sticker, sticker_track_name, relative_index=30)
+        video_duration_us = int(video_meta.get("durationMs", 0) or 0) * 1000
+        if video_duration_us <= 0:
+            video_duration_us = 3_000_000
+        clip_settings = ClipSettings(
+            scale_x=sticker_scale,
+            scale_y=sticker_scale,
+            transform_x=sticker_transform_x,
+            transform_y=sticker_transform_y,
+        )
+        sticker_seg = StickerSegment(
+            resource_id=sticker_id,
+            target_timerange=trange(0, video_duration_us),
+            clip_settings=clip_settings,
+        )
+        script.add_segment(sticker_seg, sticker_track_name)
+
     script.save()
     return str(Path(draft_root) / draft_name)
 
@@ -916,7 +1146,7 @@ def build_default_render_options(analysis: dict[str, Any]) -> dict[str, Any]:
             "enabled": True,
             "clipDurationMs": 15000,
             "voice": DEFAULT_VOICES[0],
-            "voicePresetKey": "edge:male",
+            "voicePresetKey": DEFAULT_VOICES[0],
             "voiceRateDeltaPercent": 0,
             "useBackgroundAudio": False,
             "backgroundVolume": 0.08,
@@ -1092,57 +1322,12 @@ def do_analyze(
                 "speakerId": speaker_id,
                 "sourceText": subtitle_text,
                 "translatedText": "",
-                "spokenText": "",
                 "delivery": "neutral",
                 "subtitleChunks": split_display_text(subtitle_text),
             }
         )
 
-    try:
-        local_speaker_llm_available = bool(
-            should_use_ollama(DUB_TRANSLATE_PROVIDER) or should_use_llama_cpp(DUB_TRANSLATE_PROVIDER)
-        )
-    except Exception:
-        local_speaker_llm_available = False
-    if local_speaker_llm_available and (
-        speaker_count <= 1 or voice_layout == "single_voice" or speaker_confidence < 0.56
-    ):
-        emit_progress(
-            phase="analysis",
-            step="speaker_refinement",
-            progress=0.63,
-            message="Đang dùng Gemma 4 suy luận lại số nhân vật từ transcript",
-        )
-        (
-            segments,
-            speaker_count,
-            speaker_confidence,
-            voice_layout,
-            upgraded_stats,
-            upgraded_main_speaker_id,
-            speaker_upgrade_note,
-        ) = maybe_upgrade_speaker_segmentation_with_llm(
-            segments,
-            speaker_count=speaker_count,
-            speaker_confidence=speaker_confidence,
-            voice_layout=voice_layout,
-            provider=DUB_TRANSLATE_PROVIDER,
-        )
-        if upgraded_stats:
-            speaker_stats = upgraded_stats
-            main_speaker_id = upgraded_main_speaker_id or main_speaker_id
-            sample_paths = extract_speaker_samples(
-                input_path,
-                segments,
-                dirs["analysis"] / "speakers",
-            )
-        if speaker_upgrade_note:
-            whisperx_analysis.setdefault("warnings", []).append(speaker_upgrade_note)
-
     refinement = {}
-    if speaker_count > 1 and local_speaker_llm_available:
-        emit_progress(phase="analysis", step="speaker_refinement", progress=0.65, message="Đang nhận diện vai trò nhân vật bằng AI")
-        refinement = refine_speakers_with_ollama(segments, [f"speaker_{i+1}" for i in range(speaker_count)])
 
     if segments:
         emit_progress(phase="analysis", step="samples", progress=0.68, message="Đang tách mẫu giọng từng nhân vật")
@@ -1357,56 +1542,11 @@ def do_analyze_resilient(
                 "speakerId": item.get("speakerId") or "speaker_1",
                 "sourceText": subtitle_text,
                 "translatedText": "",
-                "spokenText": "",
                 "delivery": "neutral",
                 "subtitleChunks": split_display_text(subtitle_text),
             }
         )
-    try:
-        local_speaker_llm_available = bool(
-            should_use_ollama(DUB_TRANSLATE_PROVIDER) or should_use_llama_cpp(DUB_TRANSLATE_PROVIDER)
-        )
-    except Exception:
-        local_speaker_llm_available = False
-    if local_speaker_llm_available and (
-        speaker_count <= 1 or voice_layout == "single_voice" or speaker_confidence < 0.56
-    ):
-        emit_progress(
-            phase="analyze",
-            step="speaker_refinement",
-            progress=0.63,
-            message="Đang dùng Gemma 4 suy luận lại số nhân vật từ transcript",
-        )
-        (
-            segments,
-            speaker_count,
-            speaker_confidence,
-            voice_layout,
-            upgraded_stats,
-            upgraded_main_speaker_id,
-            speaker_upgrade_note,
-        ) = maybe_upgrade_speaker_segmentation_with_llm(
-            segments,
-            speaker_count=speaker_count,
-            speaker_confidence=speaker_confidence,
-            voice_layout=voice_layout,
-            provider=DUB_TRANSLATE_PROVIDER,
-        )
-        if upgraded_stats:
-            speaker_stats = upgraded_stats
-            main_speaker_id = upgraded_main_speaker_id or main_speaker_id
-            sample_paths = extract_speaker_samples(
-                input_path,
-                segments,
-                dirs["analysis"] / "speakers",
-            )
-        if speaker_upgrade_note:
-            transcription.setdefault("warnings", []).append(speaker_upgrade_note)
-
     refinement = {}
-    if speaker_count > 1 and local_speaker_llm_available:
-        emit_progress(phase="analysis", step="speaker_refinement", progress=0.65, message="Đang nhận diện vai trò nhân vật bằng AI")
-        refinement = refine_speakers_with_ollama(segments, [f"speaker_{i+1}" for i in range(speaker_count)])
 
     if segments:
         emit_progress(phase="analyze", step="diarize", progress=0.69, message="Đang tách mẫu giọng từng nhân vật")
@@ -1510,6 +1650,10 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         is_vieneu_voice_preset(resolve_voice_preset(voice))
         for voice in voice_mapping.values()
     )
+    uses_valtec_voice = any(
+        is_valtec_voice_preset(resolve_voice_preset(voice))
+        for voice in voice_mapping.values()
+    )
     requested_cleanup_mode = render_options.get("sourceSubtitleCleanupMode")
     if requested_cleanup_mode is None:
         requested_cleanup_mode = analysis.get("subtitleRegion", {}).get("cleanupMode", "localized_blur")
@@ -1561,8 +1705,23 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     )
     if intro_hook.get("enabled") and is_vieneu_voice_preset(resolve_voice_preset(intro_hook.get("voice") or "")):
         uses_vieneu_voice = True
+    if intro_hook.get("enabled") and is_valtec_voice_preset(resolve_voice_preset(intro_hook.get("voice") or "")):
+        uses_valtec_voice = True
     if DUB_USE_VIENEU and uses_vieneu_voice:
         ensure_vieneu_runtime(phase="render", step="prepare", progress=0.05)
+    if DUB_USE_VALTEC and uses_valtec_voice:
+        ensure_valtec_runtime(
+            phase="render",
+            step="prepare",
+            progress=0.055,
+            preload_zeroshot=any(
+                resolve_voice_preset(voice) == VALTEC_CLONE_PRESET
+                or is_valtec_reference_voice(resolve_voice_preset(voice))
+                for voice in voice_mapping.values()
+            )
+            or resolve_voice_preset(intro_hook.get("voice") or "") == VALTEC_CLONE_PRESET
+            or is_valtec_reference_voice(resolve_voice_preset(intro_hook.get("voice") or "")),
+        )
 
     emit_progress(phase="render", step="prepare", progress=0.08, message="Đang chuẩn bị dữ liệu render")
     os.environ["CAPCUT_VIDEO_CODEC_MODE"] = video_codec_mode
@@ -1588,40 +1747,56 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         str(segment.get("id") or ""): normalize_text(
             pick_best_localized_text(
                 segment.get("translatedText") or "",
-                segment.get("spokenText") or "",
+                "",
                 segment.get("sourceText") or "",
             )
         )
         for segment in segments
         if str(segment.get("id") or "")
     }
+    timeline_source = str(analysis.get("subtitleTimelineSource") or "").strip().lower()
+    timeline_is_user_edited = timeline_source in {"edited", "imported"}
     missing_segment_mappings = len(timeline_text_by_segment) < len(rebuilt_subtitle_timeline)
-    timeline_is_stale = missing_segment_mappings or any(
-        segment_text_by_id.get(segment_id, "") != timeline_text
-        for segment_id, timeline_text in timeline_text_by_segment.items()
+    timeline_is_stale = (not timeline_is_user_edited) and (
+        missing_segment_mappings
+        or any(
+            segment_text_by_id.get(segment_id, "") != timeline_text
+            for segment_id, timeline_text in timeline_text_by_segment.items()
+        )
     )
     subtitle_timeline = (
         rebuilt_subtitle_timeline
         if not editable_subtitle_timeline or timeline_is_stale
         else editable_subtitle_timeline
     )
-    display_subtitles: list[SubtitleLine] = subtitle_timeline_to_lines(subtitle_timeline)
+    segments = apply_subtitle_timeline_to_segments(segments, subtitle_timeline)
+    subtitle_timeline = renumber_subtitle_timeline(subtitle_timeline)
+    display_subtitles: list[SubtitleLine] = split_subtitle_lines_for_display(
+        subtitle_timeline_to_lines(subtitle_timeline),
+        max_words=int(subtitle_preset.get("maxWordsPerChunk", 5)),
+        max_chars=int(subtitle_preset.get("maxCharsPerChunk", 22)),
+        punctuation_aware=bool(subtitle_preset.get("punctuationAwareSplit", True)),
+    )
     dynamic_regions: list[dict[str, Any]] = []
     subtitle_positions: list[dict[str, int]] = []
     subtitle_ass_path = dirs["render"] / "vietsub_display.ass"
     subtitle_srt_path = dirs["render"] / "vietsub_display.srt"
     if subtitle_enabled:
-        dynamic_regions, subtitle_positions = build_dynamic_subtitle_regions(
-            input_path,
-            video_meta=analysis["videoMeta"],
-            subtitles=display_subtitles,
-            fallback_region=effective_subtitle_region,
+        requested_cleanup_normalized = normalize_source_subtitle_cleanup_mode(
+            requested_cleanup_mode
         )
-        dynamic_regions = filter_dynamic_cleanup_regions(
-            dynamic_regions,
-            anchor_region=effective_subtitle_region,
-            video_meta=analysis["videoMeta"],
-        )
+        if requested_cleanup_normalized != "none":
+            dynamic_regions, subtitle_positions = build_dynamic_subtitle_regions(
+                input_path,
+                video_meta=analysis["videoMeta"],
+                subtitles=display_subtitles,
+                fallback_region=effective_subtitle_region,
+            )
+            dynamic_regions = filter_dynamic_cleanup_regions(
+                dynamic_regions,
+                anchor_region=effective_subtitle_region,
+                video_meta=analysis["videoMeta"],
+            )
         cleanup_mode = resolve_source_subtitle_cleanup_mode(
             requested_cleanup_mode,
             subtitle_region=effective_subtitle_region,
@@ -1636,7 +1811,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
             encoding="utf-8",
         )
         subtitle_srt_path.write_text(
-            compose_srt_from_timeline(subtitle_timeline), encoding="utf-8"
+            compose_srt(display_subtitles), encoding="utf-8"
         )
     else:
         cleanup_mode = resolve_source_subtitle_cleanup_mode(
@@ -1699,6 +1874,8 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         "introHook": {"enabled": False},
         "outputDirectory": output_directory,
     }
+
+    sticker_options = render_options.get("stickerOptions") or {}
 
     flattened_render_path: Path | None = None
     main_render_path: Path | None = None
@@ -1763,6 +1940,25 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         main_render_path = finalize_main_render_output(main_render_path, final_output_path)
         outputs["outputVideoPath"] = str(main_render_path)
 
+    # Apply sticker overlay to MP4 output
+    if output_targets.get("mp4", True) and sticker_options.get("stickerId"):
+        emit_progress(phase="render", step="sticker", progress=0.88, message="Đang thêm sticker vào video")
+        sticker_video_path = outputs.get("outputVideoPath") or str(main_render_path or "")
+        if sticker_video_path and Path(sticker_video_path).exists():
+            sticker_tmp = dirs["render"] / f"{Path(input_path).stem}_sticker_tmp.mp4"
+            apply_sticker_overlay(
+                input_video_path=Path(sticker_video_path),
+                output_video_path=sticker_tmp,
+                sticker_options=sticker_options,
+                scale=sticker_options.get("scale", 1.0),
+                transform_x=sticker_options.get("transform_x", 0.0),
+                transform_y=sticker_options.get("transform_y", -0.3),
+            )
+            if sticker_tmp.exists():
+                Path(sticker_video_path).unlink(missing_ok=True)
+                sticker_tmp.rename(Path(sticker_video_path))
+                outputs["outputVideoPath"] = sticker_video_path
+
     if output_targets.get("draft", True):
         try:
             emit_progress(phase="render", step="draft", progress=0.9, message="Đang tạo draft CapCut")
@@ -1776,6 +1972,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 video_meta=analysis["videoMeta"],
                 analysis_name=Path(input_path).stem,
                 flattened_video_path=flattened_render_path,
+                sticker_options=render_options.get("stickerOptions"),
             )
         except Exception as exc:
             outputs["warnings"].append(f"Tạo draft CapCut thất bại: {exc}")
@@ -1821,7 +2018,12 @@ def do_preview_voice(
     job_id: str,
     output_json: Path,
 ) -> dict[str, Any]:
-    preview_text = normalize_text(text) or "Xin chào, đây là giọng lồng tiếng thử nghiệm của mình. Bạn thấy có tự nhiên không?"
+    input_text = normalize_text(text) or "Xin chào, đây là giọng lồng tiếng thử nghiệm của mình. Bạn thấy có tự nhiên không?"
+    preview_text = sanitize_for_tts_or_raise(
+        input_text,
+        speaker_id=speaker_id or "speaker_1",
+        allow_generic_fallback=True,
+    )
     selected_voice = resolve_voice_preset(voice)
     extension = resolve_tts_output_extension(
         voice=selected_voice,
@@ -1829,10 +2031,52 @@ def do_preview_voice(
         job_id=job_id or "",
     )
     preview_dir = ensure_dir(DUB_STUDIO_DIR / "voice_preview")
+    reference_audio = resolve_valtec_reference_audio(selected_voice)
+    reference_signature = ""
+    if reference_audio is not None and reference_audio.exists():
+        stat = reference_audio.stat()
+        reference_signature = f"|ref={reference_audio.name}:{stat.st_size}:{stat.st_mtime_ns}"
+    cache_scope = (
+        f"reference:{selected_voice}{reference_signature}"
+        if is_valtec_reference_voice(selected_voice)
+        else ("shared" if selected_voice != VALTEC_CLONE_PRESET else f"{speaker_id}|{job_id}")
+    )
     cache_key = hashlib.sha1(
-        f"{selected_voice}|{speaker_id}|{job_id}|{preview_text}".encode("utf-8", errors="ignore")
+        f"{selected_voice}|{cache_scope}|{preview_text}".encode("utf-8", errors="ignore")
     ).hexdigest()[:16]
-    output_path = preview_dir / f"{speaker_id}_{cache_key}{extension}"
+    preview_file_prefix = (
+        "reference"
+        if is_valtec_reference_voice(selected_voice)
+        else ("shared" if selected_voice != VALTEC_CLONE_PRESET else (speaker_id or "speaker_1"))
+    )
+    output_path = preview_dir / f"{preview_file_prefix}_{cache_key}{extension}"
+    result = {
+        "voice": selected_voice,
+        "speakerId": speaker_id or "speaker_1",
+        "outputPath": str(output_path),
+        "text": preview_text,
+        "inputText": input_text,
+        "textRepaired": preview_text != input_text,
+    }
+    if output_path.exists() and output_path.stat().st_size > 0:
+        write_json(output_json, result)
+        emit_progress(
+            phase="preview",
+            step="done",
+            progress=1.0,
+            message="Đã dùng lại audio nghe thử có sẵn.",
+            status="success",
+        )
+        emit("RESULT", result)
+        return result
+    if DUB_USE_VALTEC and is_valtec_voice_preset(selected_voice):
+        ensure_valtec_runtime(
+            phase="preview",
+            step="prepare",
+            progress=0.12,
+            preload_zeroshot=selected_voice == VALTEC_CLONE_PRESET
+            or is_valtec_reference_voice(selected_voice),
+        )
     emit_progress(
         phase="preview",
         step="tts",
@@ -1847,12 +2091,6 @@ def do_preview_voice(
         speaker_id=speaker_id or "speaker_1",
         job_id=job_id or "",
     )
-    result = {
-        "voice": selected_voice,
-        "speakerId": speaker_id or "speaker_1",
-        "outputPath": str(output_path),
-        "text": preview_text,
-    }
     write_json(output_json, result)
     emit_progress(
         phase="preview",

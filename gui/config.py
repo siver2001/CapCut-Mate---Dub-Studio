@@ -2,11 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-try:
-    import config
-except Exception:  # pragma: no cover
-    config = None
-
 try:  # Optional UI enhancement packages.
     import qtawesome as qta
 except Exception:  # pragma: no cover
@@ -81,6 +76,56 @@ def _load_text_effect_options_v2():
 
 TEXT_EFFECT_OPTIONS = _load_text_effect_options_v2()
 
+
+def _load_sticker_options():
+    fallback = [("none", "Không dùng sticker")]
+    try:
+        raw = (ROOT / "config" / "sticker.json").read_text(encoding="utf-8-sig")
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return fallback
+        options: list[tuple[str, str]] = list(fallback)
+        seen_ids = {"none"}
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            sticker_id = str(item.get("sticker_id") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not sticker_id or not title or sticker_id in seen_ids:
+                continue
+            # sticker_type: 1=static image, 2=animated (GIF)
+            sticker_type = int(item.get("sticker_type", 1))
+            is_animated = "[Animated]" if sticker_type == 2 else ""
+            options.append((sticker_id, f"{title} {is_animated}".strip()))
+            seen_ids.add(sticker_id)
+        return options if len(options) > 1 else fallback
+    except Exception:
+        return fallback
+
+
+STICKER_OPTIONS = _load_sticker_options()
+
+
+_STICKER_MAP: dict[str, dict] = {}
+
+
+def _load_sticker_map() -> dict[str, dict]:
+    try:
+        raw = (ROOT / "config" / "sticker.json").read_text(encoding="utf-8-sig")
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return {}
+        return {str(item.get("sticker_id", "")): item for item in data if isinstance(item, dict)}
+    except Exception:
+        return {}
+
+
+def get_sticker_by_id(sticker_id: str) -> dict:
+    if not _STICKER_MAP:
+        _STICKER_MAP.update(_load_sticker_map())
+    return _STICKER_MAP.get(sticker_id, {})
+
+
 LANGUAGE_OPTIONS = [
     ("auto", "Tự động nhận diện"),
     ("en", "Tiếng Anh"),
@@ -98,72 +143,52 @@ TARGET_LANGUAGE_OPTIONS = [
 ]
 
 EDGE_VOICE_OPTIONS = [
-    ("edge:male", "EdgeTTS • Nam Nam Minh"),
-    ("edge:female", "EdgeTTS • Nữ Hoài My"),
+    ("edge:male", "Nam Minh"),
+    ("edge:female", "Hoài My"),
 ]
+
 
 VIENEU_PRESET_OPTIONS = [
-    ("vieneu:ngoc", "VieNeu-TTS • Bích Ngọc (Nữ - Miền Bắc)"),
-    ("vieneu:tuyen", "VieNeu-TTS • Phạm Tuyên (Nam - Miền Bắc)"),
-    ("vieneu:doan", "VieNeu-TTS • Thục Đoan (Nữ - Miền Nam)"),
-    ("vieneu:vinh", "VieNeu-TTS • Xuân Vĩnh (Nam - Miền Nam)"),
+    ("vieneu:ngoc", "Bích Ngọc"),
+    ("vieneu:tuyen", "Phạm Tuyên"),
+    ("vieneu:doan", "Thục Đoan"),
+    ("vieneu:vinh", "Xuân Vĩnh"),
 ]
 
-VIENEU_CLONE_OPTIONS = [
-    ("vieneu:clone", "VieNeu-TTS • Clone từ mẫu speaker"),
+VALTEC_PRESET_OPTIONS = [
+    ("valtec:nf", "Nữ miền Bắc"),
+    ("valtec:sf", "Nữ miền Nam"),
+    ("valtec:nm1", "Nam miền Bắc"),
+    ("valtec:sm", "Nam miền Nam"),
+    ("valtec:nm2", "Nam miền Bắc 2"),
 ]
+VALTEC_REFERENCE_OPTIONS = []
 
-VOICE_OPTIONS = [*EDGE_VOICE_OPTIONS, *VIENEU_PRESET_OPTIONS]
-INTRO_TTS_OPTIONS = [*EDGE_VOICE_OPTIONS, *VIENEU_PRESET_OPTIONS]
-VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
-VOICE_LABELS.update({value: label for value, label in VIENEU_CLONE_OPTIONS})
-
-INTRO_VOICE_PRESETS = {
-    "female_soft": {
-        "voice": "vi-VN-HoaiMyNeural",
-        "label": "Nữ nhẹ nhàng",
-        "rateDeltaPercent": -4,
-    },
-    "female_story": {
-        "voice": "vi-VN-HoaiMyNeural",
-        "label": "Nữ kể chuyện",
-        "rateDeltaPercent": 0,
-    },
-    "female_bright": {
-        "voice": "vi-VN-HoaiMyNeural",
-        "label": "Nữ tươi sáng",
-        "rateDeltaPercent": 6,
-    },
-    "female_urgent": {
-        "voice": "vi-VN-HoaiMyNeural",
-        "label": "Nữ dồn nhịp",
-        "rateDeltaPercent": 12,
-    },
-    "male_calm": {
-        "voice": "vi-VN-NamMinhNeural",
-        "label": "Nam trầm chậm",
-        "rateDeltaPercent": -4,
-    },
-    "male_story": {
-        "voice": "vi-VN-NamMinhNeural",
-        "label": "Nam kể chuyện",
-        "rateDeltaPercent": 0,
-    },
-    "male_strong": {
-        "voice": "vi-VN-NamMinhNeural",
-        "label": "Nam dứt khoát",
-        "rateDeltaPercent": 6,
-    },
-    "male_fast": {
-        "voice": "vi-VN-NamMinhNeural",
-        "label": "Nam nhịp nhanh",
-        "rateDeltaPercent": 12,
-    },
+# Short labels for status display (nghe thử, đề xuất)
+SHORT_VOICE_LABELS = {
+    "valtec:nf": "Nữ miền Bắc",
+    "valtec:sf": "Nữ miền Nam",
+    "valtec:nm1": "Nam miền Bắc",
+    "valtec:sm": "Nam miền Nam",
+    "valtec:nm2": "Nam miền Bắc 2",
+    "vieneu:ngoc": "Bích Ngọc",
+    "vieneu:tuyen": "Phạm Tuyên",
+    "vieneu:doan": "Thục Đoan",
+    "vieneu:vinh": "Xuân Vĩnh",
+    "edge:male": "Nam Minh",
+    "edge:female": "Hoài My",
 }
-
-INTRO_VOICE_OPTIONS = [
-    (key, preset["label"]) for key, preset in INTRO_VOICE_PRESETS.items()
+VOICE_OPTIONS = [
+    *VALTEC_PRESET_OPTIONS,
+    *VIENEU_PRESET_OPTIONS,
+    *EDGE_VOICE_OPTIONS,
 ]
+INTRO_TTS_OPTIONS = [
+    *VALTEC_PRESET_OPTIONS,
+    *VIENEU_PRESET_OPTIONS,
+    *EDGE_VOICE_OPTIONS,
+]
+VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
 
 FONT_OPTIONS = [
     {
@@ -323,11 +348,20 @@ TRANSLATE_PROVIDER_OPTIONS = [
     ("llama.cpp", "llama.cpp (local CLI, Gemma 4 E2B)"),
 ]
 
+VOICE_OPTIONS = [
+    *VALTEC_PRESET_OPTIONS,
+    *VIENEU_PRESET_OPTIONS,
+    *EDGE_VOICE_OPTIONS,
+]
+INTRO_TTS_OPTIONS = list(VOICE_OPTIONS)
+VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
+
 DEFAULT_VOICES = [
-    "edge:male",
-    "edge:male",
-    "edge:male",
-    "edge:male",
+    "valtec:nf",
+    "valtec:nm1",
+    "valtec:sf",
+    "valtec:sm",
+    "valtec:nm2",
 ]
 
 SPEAKER_COLORS = ["#FFB703", "#56CFE1", "#EF476F", "#90BE6D"]
@@ -959,5 +993,297 @@ UI_THEME_PRESETS = {
     },
 }
 
-BOX_STYLE_OPTIONS = BOX_STYLE_OPTIONS + _EXTRA_BOX_STYLE_OPTIONS
-BOX_STYLE_PRESETS = {**BOX_STYLE_PRESETS, **_EXTRA_BOX_STYLE_PRESETS}
+CAPCUT_BOX_STYLE_OPTIONS = [
+    ("cc_clean_caption", "CapCut clean caption"),
+    ("cc_viral_yellow", "CapCut viral yellow"),
+    ("cc_creator_black", "Creator black pill"),
+    ("cc_karaoke_blue", "Karaoke blue"),
+    ("cc_comment_card", "Comment card"),
+    ("cc_breaking_news", "Breaking news bar"),
+    ("cc_comic_burst", "Comic burst"),
+    ("cc_neon_lime", "Neon lime"),
+    ("cc_glass_dark", "Glass dark"),
+    ("cc_soft_shadow", "Soft shadow card"),
+    ("cc_minimal_white", "Minimal white chip"),
+    ("cc_red_alert", "Red alert tag"),
+    ("cc_podcast_lower", "Podcast lower third"),
+    ("cc_gaming_plate", "Gaming plate"),
+    ("cc_story_note", "Story note"),
+    ("cc_lux_gold", "Luxury gold"),
+    ("cc_candy_pop", "Candy pop"),
+    ("cc_no_box", "Khong box - text vien"),
+]
+
+CAPCUT_BOX_STYLE_PRESETS = {
+    "cc_clean_caption": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#111827",
+        "boxFillOpacity": 0.88,
+        "boxBorderColor": "#374151",
+        "boxBorderOpacity": 0.95,
+        "boxBorderWidth": 1,
+        "boxRadius": 14,
+        "boxPaddingX": 24,
+        "boxPaddingY": 11,
+        "fontColor": "#ffffff",
+        "strokeColor": "#000000",
+        "strokeWidth": 1,
+    },
+    "cc_viral_yellow": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#facc15",
+        "boxFillOpacity": 0.96,
+        "boxBorderColor": "#111827",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 3,
+        "boxRadius": 16,
+        "boxPaddingX": 28,
+        "boxPaddingY": 13,
+        "fontColor": "#111827",
+        "strokeColor": "#ffffff",
+        "strokeWidth": 1,
+    },
+    "cc_creator_black": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#050505",
+        "boxFillOpacity": 0.92,
+        "boxBorderColor": "#ffffff",
+        "boxBorderOpacity": 0.88,
+        "boxBorderWidth": 2,
+        "boxRadius": 999,
+        "boxPaddingX": 34,
+        "boxPaddingY": 13,
+        "fontColor": "#ffffff",
+        "strokeColor": "#000000",
+        "strokeWidth": 0,
+    },
+    "cc_karaoke_blue": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#1d4ed8",
+        "boxFillOpacity": 0.9,
+        "boxBorderColor": "#bae6fd",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 3,
+        "boxRadius": 18,
+        "boxPaddingX": 30,
+        "boxPaddingY": 14,
+        "fontColor": "#fef08a",
+        "strokeColor": "#0f172a",
+        "strokeWidth": 2,
+    },
+    "cc_comment_card": {
+        "boxEnabled": True,
+        "boxLayoutMode": "unified",
+        "boxFillColor": "#f8fafc",
+        "boxFillOpacity": 0.94,
+        "boxBorderColor": "#cbd5e1",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 1,
+        "boxRadius": 20,
+        "boxPaddingX": 30,
+        "boxPaddingY": 16,
+        "fontColor": "#0f172a",
+        "strokeColor": "#ffffff",
+        "strokeWidth": 0,
+    },
+    "cc_breaking_news": {
+        "boxEnabled": True,
+        "boxLayoutMode": "unified",
+        "boxFillColor": "#b91c1c",
+        "boxFillOpacity": 0.94,
+        "boxBorderColor": "#fef2f2",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 2,
+        "boxRadius": 6,
+        "boxPaddingX": 28,
+        "boxPaddingY": 12,
+        "fontColor": "#ffffff",
+        "strokeColor": "#450a0a",
+        "strokeWidth": 2,
+    },
+    "cc_comic_burst": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#fef08a",
+        "boxFillOpacity": 0.98,
+        "boxBorderColor": "#111827",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 4,
+        "boxRadius": 18,
+        "boxPaddingX": 32,
+        "boxPaddingY": 15,
+        "fontColor": "#ef4444",
+        "strokeColor": "#111827",
+        "strokeWidth": 2,
+    },
+    "cc_neon_lime": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#052e16",
+        "boxFillOpacity": 0.9,
+        "boxBorderColor": "#a3e635",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 3,
+        "boxRadius": 22,
+        "boxPaddingX": 28,
+        "boxPaddingY": 14,
+        "fontColor": "#ecfccb",
+        "strokeColor": "#000000",
+        "strokeWidth": 2,
+    },
+    "cc_glass_dark": {
+        "boxEnabled": True,
+        "boxLayoutMode": "unified",
+        "boxFillColor": "#0f172a",
+        "boxFillOpacity": 0.46,
+        "boxBorderColor": "#e2e8f0",
+        "boxBorderOpacity": 0.74,
+        "boxBorderWidth": 2,
+        "boxRadius": 24,
+        "boxPaddingX": 34,
+        "boxPaddingY": 16,
+        "fontColor": "#ffffff",
+        "strokeColor": "#020617",
+        "strokeWidth": 2,
+    },
+    "cc_soft_shadow": {
+        "boxEnabled": True,
+        "boxLayoutMode": "unified",
+        "boxFillColor": "#e0f2fe",
+        "boxFillOpacity": 0.92,
+        "boxBorderColor": "#38bdf8",
+        "boxBorderOpacity": 0.95,
+        "boxBorderWidth": 2,
+        "boxRadius": 18,
+        "boxPaddingX": 30,
+        "boxPaddingY": 15,
+        "fontColor": "#0c4a6e",
+        "strokeColor": "#ffffff",
+        "strokeWidth": 1,
+    },
+    "cc_minimal_white": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#ffffff",
+        "boxFillOpacity": 0.96,
+        "boxBorderColor": "#e5e7eb",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 1,
+        "boxRadius": 999,
+        "boxPaddingX": 32,
+        "boxPaddingY": 12,
+        "fontColor": "#111827",
+        "strokeColor": "#ffffff",
+        "strokeWidth": 0,
+    },
+    "cc_red_alert": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#991b1b",
+        "boxFillOpacity": 0.92,
+        "boxBorderColor": "#fecaca",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 3,
+        "boxRadius": 12,
+        "boxPaddingX": 26,
+        "boxPaddingY": 12,
+        "fontColor": "#ffffff",
+        "strokeColor": "#450a0a",
+        "strokeWidth": 2,
+    },
+    "cc_podcast_lower": {
+        "boxEnabled": True,
+        "boxLayoutMode": "unified",
+        "boxFillColor": "#1e1b4b",
+        "boxFillOpacity": 0.9,
+        "boxBorderColor": "#818cf8",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 2,
+        "boxRadius": 10,
+        "boxPaddingX": 34,
+        "boxPaddingY": 13,
+        "fontColor": "#ffffff",
+        "strokeColor": "#000000",
+        "strokeWidth": 1,
+    },
+    "cc_gaming_plate": {
+        "boxEnabled": True,
+        "boxLayoutMode": "unified",
+        "boxFillColor": "#18181b",
+        "boxFillOpacity": 0.94,
+        "boxBorderColor": "#22d3ee",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 3,
+        "boxRadius": 8,
+        "boxPaddingX": 30,
+        "boxPaddingY": 14,
+        "fontColor": "#fef08a",
+        "strokeColor": "#000000",
+        "strokeWidth": 2,
+    },
+    "cc_story_note": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#fef3c7",
+        "boxFillOpacity": 0.94,
+        "boxBorderColor": "#d97706",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 2,
+        "boxRadius": 14,
+        "boxPaddingX": 26,
+        "boxPaddingY": 12,
+        "fontColor": "#78350f",
+        "strokeColor": "#ffffff",
+        "strokeWidth": 1,
+    },
+    "cc_lux_gold": {
+        "boxEnabled": True,
+        "boxLayoutMode": "unified",
+        "boxFillColor": "#1c1917",
+        "boxFillOpacity": 0.92,
+        "boxBorderColor": "#fbbf24",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 2,
+        "boxRadius": 18,
+        "boxPaddingX": 34,
+        "boxPaddingY": 14,
+        "fontColor": "#fef3c7",
+        "strokeColor": "#000000",
+        "strokeWidth": 1,
+    },
+    "cc_candy_pop": {
+        "boxEnabled": True,
+        "boxLayoutMode": "line",
+        "boxFillColor": "#fbcfe8",
+        "boxFillOpacity": 0.95,
+        "boxBorderColor": "#38bdf8",
+        "boxBorderOpacity": 1.0,
+        "boxBorderWidth": 3,
+        "boxRadius": 24,
+        "boxPaddingX": 30,
+        "boxPaddingY": 14,
+        "fontColor": "#831843",
+        "strokeColor": "#ffffff",
+        "strokeWidth": 1,
+    },
+    "cc_no_box": {
+        "boxEnabled": False,
+        "boxStylePreset": "cc_no_box",
+        "fontColor": "#ffffff",
+        "strokeColor": "#000000",
+        "strokeWidth": 3,
+    },
+}
+
+BOX_STYLE_OPTIONS = (
+    BOX_STYLE_OPTIONS + _EXTRA_BOX_STYLE_OPTIONS + CAPCUT_BOX_STYLE_OPTIONS
+)
+BOX_STYLE_PRESETS = {
+    **BOX_STYLE_PRESETS,
+    **_EXTRA_BOX_STYLE_PRESETS,
+    **CAPCUT_BOX_STYLE_PRESETS,
+}

@@ -563,7 +563,7 @@ def detect_source_language(text: str) -> tuple[str, float, list[dict[str, Any]]]
 
 def ends_like_dialogue(text: str) -> bool:
     stripped = text.strip()
-    return stripped.endswith(("?", "ï¼Ÿ", "!", "ï¼", "...", "â€¦", "ã€‚"))
+    return stripped.endswith(("?", "？", "!", "！", "...", "…", "。"))
 
 
 def is_same_speaker_continuation(previous: SubtitleLine, current: SubtitleLine) -> bool:
@@ -793,6 +793,20 @@ def is_vieneu_voice_preset(candidate: str) -> bool:
     return value == VIENEU_CLONE_PRESET or value in VIENEU_PRESET_VOICE_IDS
 
 
+def is_valtec_reference_voice(candidate: str) -> bool:
+    value = str(candidate or "").strip()
+    return value in VALTEC_REFERENCE_VOICES
+
+
+def is_valtec_voice_preset(candidate: str) -> bool:
+    value = str(candidate or "").strip()
+    return (
+        value == VALTEC_CLONE_PRESET
+        or value in VALTEC_PRESET_SPEAKER_IDS
+        or value in VALTEC_REFERENCE_VOICES
+    )
+
+
 def resolve_vieneu_prompt_audio(*, speaker_id: str = "speaker_1", job_id: str = "") -> Path | None:
     if not job_id:
         return None
@@ -804,6 +818,19 @@ def resolve_vieneu_prompt_audio(*, speaker_id: str = "speaker_1", job_id: str = 
     return None
 
 
+def resolve_valtec_prompt_audio(*, speaker_id: str = "speaker_1", job_id: str = "") -> Path | None:
+    return resolve_vieneu_prompt_audio(speaker_id=speaker_id, job_id=job_id)
+
+
+def resolve_valtec_reference_audio(voice: str) -> Path | None:
+    selected_voice = resolve_voice_preset(voice)
+    meta = VALTEC_REFERENCE_VOICES.get(selected_voice)
+    if not meta:
+        return None
+    reference_path = VALTEC_REFERENCE_DIR / str(meta.get("filename") or "")
+    return reference_path if reference_path.exists() else None
+
+
 def should_use_vieneu_voice(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> bool:
     selected_voice = resolve_voice_preset(voice)
     if not DUB_USE_VIENEU or not is_vieneu_voice_preset(selected_voice):
@@ -813,8 +840,24 @@ def should_use_vieneu_voice(*, voice: str, speaker_id: str = "speaker_1", job_id
     return resolve_vieneu_prompt_audio(speaker_id=speaker_id, job_id=job_id) is not None
 
 
+def should_use_valtec_voice(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> bool:
+    selected_voice = resolve_voice_preset(voice)
+    if not DUB_USE_VALTEC or not is_valtec_voice_preset(selected_voice):
+        return False
+    if selected_voice in VALTEC_REFERENCE_VOICES:
+        return True
+    if selected_voice != VALTEC_CLONE_PRESET:
+        return True
+    return resolve_valtec_prompt_audio(speaker_id=speaker_id, job_id=job_id) is not None
+
+
 def resolve_tts_output_extension(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> str:
-    return ".wav" if should_use_vieneu_voice(voice=voice, speaker_id=speaker_id, job_id=job_id) else ".mp3"
+    return (
+        ".wav"
+        if should_use_vieneu_voice(voice=voice, speaker_id=speaker_id, job_id=job_id)
+        or should_use_valtec_voice(voice=voice, speaker_id=speaker_id, job_id=job_id)
+        else ".mp3"
+    )
 
 
 def resolve_edge_voice_name(candidate: str) -> str:
@@ -830,7 +873,12 @@ def resolve_edge_voice_name(candidate: str) -> str:
 
 def is_custom_edge_voice_name(candidate: str) -> bool:
     value = str(candidate or "").strip()
-    if not value or value in EDGE_VOICE_PRESETS or is_vieneu_voice_preset(value):
+    if (
+        not value
+        or value in EDGE_VOICE_PRESETS
+        or is_vieneu_voice_preset(value)
+        or is_valtec_voice_preset(value)
+    ):
         return False
     return bool(EDGE_VOICE_NAME_PATTERN.match(value))
 
@@ -850,16 +898,27 @@ def recommend_voice_preset(
         for preset_id, edge_voice in EDGE_VOICE_PRESETS.items():
             if edge_voice == value:
                 return preset_id
+    if value in VALTEC_REFERENCE_VOICES:
+        return value
     normalized = normalize_text(value).lower().replace("-", "_")
     gender = normalize_text(estimated_gender).lower()
+    female_reference_voices = (
+        "valtec:nf",
+        "valtec:sf",
+    )
+    male_reference_voices = (
+        "valtec:nm1",
+        "valtec:sm",
+        "valtec:nm2",
+    )
     if any(token in gender for token in ("female", "woman", "girl", "nu")):
-        return "edge:female"
+        return female_reference_voices[index % len(female_reference_voices)]
     if any(token in gender for token in ("male", "man", "boy", "nam")):
-        return "edge:male"
+        return male_reference_voices[index % len(male_reference_voices)]
     if any(token in normalized for token in ("female", "woman", "girl", "nu")):
-        return "edge:female"
+        return female_reference_voices[index % len(female_reference_voices)]
     if any(token in normalized for token in ("male", "man", "boy", "nam")):
-        return "edge:male"
+        return male_reference_voices[index % len(male_reference_voices)]
     return DEFAULT_VOICES[index % len(DEFAULT_VOICES)]
 
 
@@ -1358,19 +1417,19 @@ def expand_subtitle_region(region: dict[str, Any], *, video_meta: dict[str, Any]
     confidence = float(region.get("confidence", 0.0))
     width = int(region.get("w", 0))
     height = int(region.get("h", 0))
-    pad_x = max(4, int(width * 0.02), int(video_meta["width"] * 0.002))
-    pad_y = max(3, int(height * 0.04), int(video_meta["height"] * 0.002))
+    pad_x = max(28, int(width * 0.18), int(video_meta["width"] * 0.025))
+    pad_y = max(14, int(height * 0.34), int(video_meta["height"] * 0.012))
     if confidence < 0.38:
-        pad_x += max(2, int(width * 0.01))
-        pad_y += max(2, int(height * 0.025))
+        pad_x += max(18, int(width * 0.10))
+        pad_y += max(8, int(height * 0.14))
     x = max(int(region.get("x", 0)) - pad_x, 0)
     y = max(int(region.get("y", 0)) - pad_y, 0)
     right = min(int(region.get("x", 0)) + width + pad_x, int(video_meta["width"]))
     bottom = min(int(region.get("y", 0)) + height + pad_y, int(video_meta["height"]))
     expanded_w = max(right - x, 1)
     expanded_h = max(bottom - y, 1)
-    # Cap width expansion to prevent oversized blur/mask
-    max_expanded_w = max(width * 3, int(video_meta["width"] * 0.30))
+    # Keep enough room for anti-aliased caption edges and longer source captions.
+    max_expanded_w = max(width * 4, int(video_meta["width"] * 0.86))
     if expanded_w > max_expanded_w:
         center_x = x + expanded_w // 2
         expanded_w = max_expanded_w
@@ -1832,25 +1891,19 @@ def build_dynamic_subtitle_regions(
         sub_end = int(subtitle.end_ms)
         subtitle_duration = max(sub_end - sub_start, 1)
 
-        # Pass 1: Better sample distribution
-        # Previous: 5 points clustered at boundaries (start, start+22%, 50%, end-22%, end)
-        # New: 8 evenly-spaced points to maximize coverage across the subtitle duration
-        # Also sample from adjacent subtitle periods to handle timing overlap
-        num_samples = 8
+        # Sample only a few points per subtitle; frame extraction is one of the
+        # most expensive parts of render when cleanup is enabled.
+        num_samples = min(max(int(DUB_SUBTITLE_REGION_SAMPLES), 1), 8)
         sample_points = set()
-        for i in range(num_samples):
-            frac = i / max(num_samples - 1, 1)
+        if num_samples == 1:
+            fractions = [0.5]
+        elif num_samples == 2:
+            fractions = [0.25, 0.75]
+        else:
+            fractions = [i / max(num_samples - 1, 1) for i in range(num_samples)]
+        for frac in fractions:
             pt = int(sub_start + frac * subtitle_duration)
             sample_points.add(pt)
-        # Add points from adjacent subtitles for better boundary coverage
-        if index > 0:
-            prev_end = int(subtitles[index - 1].end_ms)
-            if prev_end < sub_start:
-                sample_points.add(int((prev_end + sub_start) / 2))
-        if index + 1 < len(subtitles):
-            next_start = int(subtitles[index + 1].start_ms)
-            if next_start > sub_end:
-                sample_points.add(int((sub_end + next_start) / 2))
 
         detected_regions: list[dict[str, Any]] = []
         for sample_point in sorted(sample_points):
@@ -1885,7 +1938,9 @@ def build_dynamic_subtitle_regions(
             region = fallback_anchor_region.copy()
 
         if region is None:
-            continue
+            region = fallback_anchor_region.copy()
+            region["detected"] = True
+            region["confidence"] = SOURCE_SUBTITLE_DETECTION_CONFIDENCE
 
         if detected_regions and previous_detected_region is not None:
             big_vertical_jump = abs(int(region.get("centerY", 0)) - int(previous_detected_region.get("centerY", 0))) > int(video_meta["height"] * 0.18)
@@ -1913,9 +1968,8 @@ def build_dynamic_subtitle_regions(
         next_start = int(subtitles[index + 1].start_ms) if index + 1 < len(subtitles) else int(subtitle.end_ms)
         gap_before = max(sub_start - previous_end, 0)
         gap_after = max(next_start - sub_end, 0)
-        # Leaner padding: 40% of gap (not 50%), capped tighter
-        lead_ms = min(max(int(gap_before * 0.4), 30), 120)
-        trail_ms = min(max(int(gap_after * 0.4), 30), 120)
+        lead_ms = min(max(int(gap_before * 0.65), 120), 360)
+        trail_ms = min(max(int(gap_after * 0.65), 160), 520)
         padded_region["startMs"] = max(sub_start - lead_ms, 0)
         padded_region["endMs"] = max(sub_end + trail_ms, padded_region["startMs"] + 120)
         padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
@@ -1930,3 +1984,4 @@ def build_dynamic_subtitle_regions(
         video_meta=video_meta,
     )
     return dynamic_regions, subtitle_positions
+

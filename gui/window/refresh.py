@@ -1,15 +1,41 @@
 from __future__ import annotations
 
 import json
+import time
 
 from PyQt6.QtCore import QProcess, QProcessEnvironment
 from PyQt6.QtWidgets import QMessageBox
 
 from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, UI_THEME_OPTIONS
-from gui.utils import normalize_preview_text, repair_mojibake_text
+from gui.utils import (
+    decode_process_bytes,
+    find_font_option,
+    normalize_preview_text,
+    repair_mojibake_text,
+)
 
 
 class WindowRefreshMixin:
+    def _maybe_repair_widget_texts(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        last_run = float(getattr(self, "_last_widget_repair_at", 0.0) or 0.0)
+        if not force and (now - last_run) < 2.5:
+            return
+        self._last_widget_repair_at = now
+        self._repair_widget_texts()
+
+    @staticmethod
+    def _subtitle_timeline_signature(timeline: list[dict]) -> tuple:
+        return tuple(
+            (
+                int(item.get("startMs", 0) or 0),
+                int(item.get("endMs", 0) or 0),
+                str(item.get("text") or ""),
+                str(item.get("voice") or item.get("voicePreset") or item.get("voiceOverride") or ""),
+            )
+            for item in (timeline or [])
+        )
+
     def _sync_settings_lock_state(self, running: bool) -> None:
         widget_names = [
             "source_language_combo",
@@ -40,6 +66,8 @@ class WindowRefreshMixin:
             "intro_enabled_check",
             "intro_duration_spin",
             "intro_voice_combo",
+            "default_voice_combo",
+            "default_voice_test_btn",
             "intro_background_check",
             "intro_background_volume_spin",
             "keep_original_audio_check",
@@ -101,9 +129,71 @@ class WindowRefreshMixin:
         preview_canvas = getattr(self, "preview_canvas", None)
         if preview_canvas is not None:
             preview_canvas.update_state(analysis, self.settings, text)
-        full_canvas = getattr(self, "_preview_canvas_full", None)
-        if full_canvas is not None:
-            full_canvas.update_state(analysis, self.settings, text)
+        video_preview = getattr(self, "_video_preview_widget", None)
+        if video_preview is not None:
+            video_preview.update_state(
+                {
+                    "subtitlePreset": self.settings.get("subtitlePreset") or {},
+                    "subtitleTimeline": (analysis or {}).get("subtitleTimeline") or [],
+                    "preview_text": text,
+                },
+                self.settings.get("stickerOptions") or {},
+            )
+
+    def refresh_style_preview_card(self) -> None:
+        subtitle_preset = self.settings.get("subtitlePreset") or {}
+        text = self.compute_preview_text()
+        font_option = find_font_option(str(subtitle_preset.get("fontFamily") or "arial-bold"))
+        font_family = str(
+            subtitle_preset.get("fontFamilyName") or font_option["fontFamilyName"]
+        )
+        font_size = max(13, min(int(subtitle_preset.get("fontSize", 14)), 28))
+        font_color = str(subtitle_preset.get("fontColor") or "#ffffff")
+        box_enabled = bool(subtitle_preset.get("boxEnabled", False))
+        background = (
+            str(subtitle_preset.get("boxFillColor") or "#111827")
+            if box_enabled
+            else "rgba(255,255,255,0.06)"
+        )
+        border_color = (
+            str(subtitle_preset.get("boxBorderColor") or "#334155")
+            if box_enabled
+            else "rgba(255,255,255,0.12)"
+        )
+        border_width = int(subtitle_preset.get("boxBorderWidth", 1)) if box_enabled else 1
+        radius = max(6, min(int(subtitle_preset.get("boxRadius", 12)), 28))
+        label_style = (
+            f'font-family: "{font_family}"; font-size: {font_size}px; '
+            f"font-weight: 800; color: {font_color}; background: {background}; "
+            f"border: {border_width}px solid {border_color}; "
+            f"border-radius: {radius}px; padding: 10px 12px;"
+        )
+        compact_text = self._compact_preview_text(text, 80)
+        for attr_name in ("preview_style_label", "_preview_style_label_full"):
+            label = getattr(self, attr_name, None)
+            if label is not None:
+                label.setText(compact_text)
+                label.setStyleSheet(label_style)
+        sticker_options = self.settings.get("stickerOptions") or {}
+        sticker_label = str(sticker_options.get("stickerName") or "Không sticker")
+        if not str(sticker_options.get("stickerId") or "").strip():
+            sticker_label = "Không sticker"
+        meta_text = (
+            f"{font_option['label']} | "
+            f"Box: {'bật' if box_enabled else 'tắt'} | "
+            f"Sticker: {sticker_label}"
+        )
+        for attr_name in ("preview_style_meta", "_preview_style_meta_full"):
+            meta_label = getattr(self, attr_name, None)
+            if meta_label is not None:
+                meta_label.setText(repair_mojibake_text(meta_text))
+
+    @staticmethod
+    def _compact_preview_text(text: str, limit: int) -> str:
+        clean = repair_mojibake_text(normalize_preview_text(text))
+        if len(clean) <= limit:
+            return clean
+        return clean[: max(0, limit - 3)].rstrip() + "..."
 
     def refresh_status_only(self) -> None:
         status = self.job_status or {}
@@ -128,7 +218,7 @@ class WindowRefreshMixin:
         )
         if self.log_box.toPlainText() != log_text:
             self.log_box.setPlainText(log_text)
-        self._repair_widget_texts()
+        self._maybe_repair_widget_texts()
         self._sync_action_buttons()
 
     def _sync_action_buttons(self) -> None:
@@ -226,12 +316,12 @@ class WindowRefreshMixin:
             )
         warning_box = getattr(self, "warning_box", None)
         if warning_box is not None:
-            warning_box.setPlainText(
-                "\\n".join(
-                    repair_mojibake_text(item)
-                    for item in (analysis.get("warnings") or [])
-                )
+            warning_text = "\\n".join(
+                repair_mojibake_text(item)
+                for item in (analysis.get("warnings") or [])
             )
+            if warning_box.toPlainText() != warning_text:
+                warning_box.setPlainText(warning_text)
         subtitle_timeline = analysis.get("subtitleTimeline") or []
         timeline_lines = []
         for item in subtitle_timeline[:12]:
@@ -242,7 +332,9 @@ class WindowRefreshMixin:
             )
         timeline_box = getattr(self, "timeline_box", None)
         if timeline_box is not None:
-            timeline_box.setPlainText("\\n".join(timeline_lines))
+            timeline_text = "\\n".join(timeline_lines)
+            if timeline_box.toPlainText() != timeline_text:
+                timeline_box.setPlainText(timeline_text)
         if hasattr(self, "subtitle_editor_status"):
             source_label = str(analysis.get("subtitleTimelineSource") or "ai_generated")
             pretty_source = {
@@ -253,9 +345,14 @@ class WindowRefreshMixin:
             status_text = (
                 f"{len(subtitle_timeline)} dong subtitle dang hoat dong • Nguon: {pretty_source}"
             )
-            self.subtitle_editor_status.setText(repair_mojibake_text(status_text))
+            repaired_status = repair_mojibake_text(status_text)
+            if self.subtitle_editor_status.text() != repaired_status:
+                self.subtitle_editor_status.setText(repaired_status)
         if hasattr(self, "rebuild_subtitle_table"):
-            self.rebuild_subtitle_table()
+            timeline_signature = self._subtitle_timeline_signature(subtitle_timeline)
+            if getattr(self, "_last_subtitle_table_signature", None) != timeline_signature:
+                self.rebuild_subtitle_table()
+                self._last_subtitle_table_signature = timeline_signature
         self._set_chip_display_text(
             self.mode_chip,
             "Audio: Giọng chung"
@@ -343,7 +440,7 @@ class WindowRefreshMixin:
             self._update_render_preview_button_labels()
         self._update_color_button_styles()
         self._configure_responsive_widgets()
-        self._repair_widget_texts()
+        self._maybe_repair_widget_texts(force=True)
 
     def _append_install_log(self, message: str) -> None:
         existing = self.log_box.toPlainText().splitlines()
@@ -375,15 +472,11 @@ class WindowRefreshMixin:
         if process is None:
             return
         if stream == "stdout":
-            chunk = bytes(process.readAllStandardOutput()).decode(
-                "utf-8", errors="ignore"
-            )
+            chunk = decode_process_bytes(bytes(process.readAllStandardOutput()))
             self._install_stdout_buffer += chunk
             buffer = self._install_stdout_buffer
         else:
-            chunk = bytes(process.readAllStandardError()).decode(
-                "utf-8", errors="ignore"
-            )
+            chunk = decode_process_bytes(bytes(process.readAllStandardError()))
             self._install_stderr_buffer += chunk
             buffer = self._install_stderr_buffer
         lines = buffer.splitlines(keepends=False)
@@ -485,6 +578,3 @@ class WindowRefreshMixin:
 
     def install_environment(self) -> None:
         self._start_install_environment_process()
-
-
-

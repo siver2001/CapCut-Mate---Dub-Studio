@@ -18,10 +18,19 @@ def safe_print(*parts: Any, flush: bool = False, file: Any | None = None) -> Non
     try:
         print(*parts, **kwargs)
     except UnicodeEncodeError:
-        safe_parts = [
-            str(part).encode("ascii", errors="backslashreplace").decode("ascii")
-            for part in parts
-        ]
+        target = file or sys.stdout
+        buffer = getattr(target, "buffer", None)
+        if buffer is not None:
+            try:
+                buffer.write((" ".join(str(part) for part in parts) + "\n").encode("utf-8"))
+                if flush:
+                    buffer.flush()
+                return
+            except (BrokenPipeError, OSError):
+                return
+            except Exception:
+                pass
+        safe_parts = [str(part).encode("ascii", errors="backslashreplace").decode("ascii") for part in parts]
         try:
             print(*safe_parts, **kwargs)
         except (BrokenPipeError, OSError):

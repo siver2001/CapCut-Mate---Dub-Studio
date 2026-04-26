@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QCloseEvent, QIcon
+from PyQt6.QtCore import QEvent, Qt, QTimer
+from PyQt6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
 
 try:
     from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -88,6 +88,7 @@ class DubStudioWindow(
         self._voice_preview_result_path = None
         self._voice_preview_active_speaker_id = ""
         self._voice_preview_audio_path = ""
+        self._voice_preview_timed_out = False
         self.voice_test_button_map: dict[str, Any] = {}
         self.voice_status_label_map: dict[str, Any] = {}
         self.voice_audio_output = QAudioOutput(self) if QAudioOutput else None
@@ -95,6 +96,7 @@ class DubStudioWindow(
         self.render_preview_audio_output = QAudioOutput(self) if QAudioOutput else None
         self.render_preview_player = QMediaPlayer(self) if QMediaPlayer else None
         self.render_video_widget = QVideoWidget(self) if QVideoWidget else None
+        self._render_fullscreen_shortcuts: list[Any] = []
         self._render_preview_duration_ms = 0
         self._render_preview_scrubbing = False
         self._render_preview_muted = False
@@ -115,6 +117,12 @@ class DubStudioWindow(
             self.render_preview_player.setAudioOutput(self.render_preview_audio_output)
             if self.render_video_widget is not None:
                 self.render_preview_player.setVideoOutput(self.render_video_widget)
+                self.render_video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                self.render_video_widget.installEventFilter(self)
+                for sequence in (QKeySequence(Qt.Key.Key_Escape), QKeySequence(Qt.Key.Key_F11)):
+                    shortcut = QShortcut(sequence, self.render_video_widget)
+                    shortcut.activated.connect(self.exit_render_preview_fullscreen)
+                    self._render_fullscreen_shortcuts.append(shortcut)
                 try:
                     self.render_video_widget.fullScreenChanged.connect(
                         self._on_render_preview_fullscreen_changed
@@ -138,6 +146,24 @@ class DubStudioWindow(
         self._repair_widget_texts()
         self.refresh_all()
         QTimer.singleShot(90, self.play_intro_animation)
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:
+        if watched is getattr(self, "render_video_widget", None):
+            event_type = event.type()
+            if event_type == QEvent.Type.KeyPress and event.key() in {
+                Qt.Key.Key_Escape,
+                Qt.Key.Key_F11,
+            }:
+                self.exit_render_preview_fullscreen()
+                return True
+            if event_type == QEvent.Type.MouseButtonDblClick:
+                is_fullscreen = bool(
+                    getattr(self.render_video_widget, "isFullScreen", lambda: False)()
+                )
+                if is_fullscreen:
+                    self.exit_render_preview_fullscreen()
+                    return True
+        return super().eventFilter(watched, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Ensure running processes are killed before the window is destroyed."""

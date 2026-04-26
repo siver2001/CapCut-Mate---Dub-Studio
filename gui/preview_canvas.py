@@ -2,6 +2,7 @@ from gui.utils import (
     Any,
     copy,
     default_settings,
+    ensure_qt_readable_sticker_preview,
     find_font_option,
     normalize_preview_text,
     repair_mojibake_text,
@@ -15,6 +16,13 @@ from tools.dub_studio.font_cache import preload_font
 
 # Track which fonts have been loaded into Qt's font database
 _loaded_fonts: set[str] = set()
+
+
+def _fix_black_color(color: QColor) -> QColor:
+    """If color is too dark (near black), return white instead for visibility."""
+    if color.red() < 30 and color.green() < 30 and color.blue() < 30:
+        return QColor("#ffffff")
+    return color
 
 
 class PreviewCanvas(QWidget):
@@ -32,6 +40,8 @@ class PreviewCanvas(QWidget):
         self._caption_rect = QRectF()
         self._watermark_rect = QRectF()
         self._watermark_handle_rect = QRectF()
+        self._sticker_pixmap = None
+        self._sticker_cache_key = ""
         # Preload all Google Fonts in background to avoid delay on first paint
         self._preload_fonts_in_background()
 
@@ -67,7 +77,40 @@ class PreviewCanvas(QWidget):
         self.analysis = analysis
         self.settings = copy.deepcopy(settings)
         self.preview_text = preview_text
+        self._load_sticker_preview()
         self.update()
+
+    def _load_sticker_preview(self) -> None:
+        """Preload sticker image for preview rendering."""
+        self._sticker_pixmap = None
+        sticker_opts = self.settings.get("stickerOptions") or {}
+        sticker_id = str(sticker_opts.get("stickerId") or "")
+        if not sticker_id:
+            self._sticker_cache_key = ""
+            return
+        image_url = str(sticker_opts.get("image_url") or "").strip()
+        if not image_url:
+            self._sticker_cache_key = ""
+            return
+        cache_key = "|".join(
+            [
+                sticker_id,
+                image_url,
+                str(sticker_opts.get("sticker_type") or ""),
+            ]
+        )
+        if cache_key == self._sticker_cache_key and self._sticker_pixmap is not None:
+            return
+        try:
+            cached = ensure_qt_readable_sticker_preview(sticker_opts)
+            if cached is None:
+                return
+            img = QImage(str(cached))
+            if not img.isNull():
+                self._sticker_pixmap = QPixmap.fromImage(img)
+                self._sticker_cache_key = cache_key
+        except Exception:
+            pass
 
     @staticmethod
     def _build_preview_text(text: str, max_words_per_line: int) -> str:
@@ -127,6 +170,39 @@ class PreviewCanvas(QWidget):
         self._target_rect = QRectF(target)
         painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
 
+        # Sticker Preview
+        sticker_opts = self.settings.get("stickerOptions") or {}
+        sticker_id = str(sticker_opts.get("stickerId") or "")
+        if sticker_id and self._sticker_pixmap and not self._sticker_pixmap.isNull():
+            scale = float(sticker_opts.get("scale", 1.0))
+            base_w = target.width() // 4
+            sw = max(20, int(base_w * scale))
+            sw = min(sw, int(target.width() * 0.5))
+            sticker_pm = self._sticker_pixmap.scaledToWidth(
+                sw, Qt.TransformationMode.SmoothTransformation
+            )
+            # Position: upper area, center horizontally
+            sx = target.center().x() - sticker_pm.width() * 0.5
+            sy = target.top() + 16
+            painter.drawPixmap(int(sx), int(sy), sticker_pm)
+            # Subtle dashed border
+            sticker_border_rect = QRectF(
+                sx, sy, sticker_pm.width(), sticker_pm.height()
+            )
+            painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine))
+            painter.drawRect(sticker_border_rect)
+        elif sticker_id:
+            # Sticker selected but image not cached (or is GIF) — show label
+            painter.setPen(QColor(255, 200, 0, 200))
+            painter.setFont(QFont("Segoe UI", 9))
+            label = "[Sticker]"
+            if int(sticker_opts.get("sticker_type", 1)) == 2:
+                label = "[Sticker Animated]"
+            tw = painter.fontMetrics().horizontalAdvance(label)
+            painter.drawText(
+                int(target.center().x() - tw * 0.5), int(target.top() + 30), label
+            )
+
         subtitle_preset = self.settings.get("subtitlePreset") or {}
         if subtitle_preset.get("enabled", True):
             font_option = find_font_option(
@@ -140,10 +216,8 @@ class PreviewCanvas(QWidget):
             if font_family not in _loaded_fonts:
                 if preload_font(font_family):
                     _loaded_fonts.add(font_family)
-            base_font = QFont(
-                font_family,
-                max(int(subtitle_preset.get("fontSize", 14) * 0.8), 12),
-            )
+            base_font = QFont(font_family)
+            base_font.setPixelSize(max(int(subtitle_preset.get("fontSize", 14)), 8))
             base_font.setBold(True)
             placement, offset = resolve_preview_caption_placement(
                 str(subtitle_preset.get("positionPreset") or "bottom"),
@@ -160,9 +234,9 @@ class PreviewCanvas(QWidget):
             text_width = min(metrics.horizontalAdvance(preview_text.replace("\n", " ")), max_text_width)
             box_enabled = bool(subtitle_preset.get("boxEnabled", False))
             box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()
-            box_padding_x = max(int(subtitle_preset.get("boxPaddingX", 24) * 0.55), 12)
-            box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12) * 0.6), 8)
-            box_radius = max(int(subtitle_preset.get("boxRadius", 16) * 0.6), 8)
+            box_padding_x = max(int(subtitle_preset.get("boxPaddingX", 24)), 0)
+            box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12)), 0)
+            box_radius = max(int(subtitle_preset.get("boxRadius", 16)), 0)
             box_border_width = max(int(subtitle_preset.get("boxBorderWidth", 2)), 0)
             box_fill_opacity = max(min(float(subtitle_preset.get("boxFillOpacity", 0.86)), 1.0), 0.0)
             box_border_opacity = max(min(float(subtitle_preset.get("boxBorderOpacity", 1.0)), 1.0), 0.0)
@@ -229,7 +303,7 @@ class PreviewCanvas(QWidget):
             for rect in caption_rects[1:]:
                 outline_union_rect = outline_union_rect.united(rect)
             self._caption_rect = QRectF(outline_union_rect.adjusted(-8, -8, 8, 8))
-            stroke_width = max(int(round(float(subtitle_preset.get("strokeWidth", 2)) * 1.2)), 1)
+            stroke_width = max(int(round(float(subtitle_preset.get("strokeWidth", 2)))), 0)
             text_rect = outline_union_rect.adjusted(
                 box_padding_x,
                 box_padding_y - 2,
@@ -240,7 +314,7 @@ class PreviewCanvas(QWidget):
                 "font": QFont(base_font),
                 "textRect": QRectF(text_rect),
                 "text": preview_text,
-                "fontColor": QColor(str(subtitle_preset.get("fontColor", "#ffd200"))),
+                "fontColor": _fix_black_color(QColor(str(subtitle_preset.get("fontColor", "#ffd200")))),
                 "strokeColor": QColor(str(subtitle_preset.get("strokeColor", "#000000"))),
                 "strokeWidth": stroke_width,
             }
@@ -422,4 +496,3 @@ class PreviewCanvas(QWidget):
             position = "bottom"
             offset = int(round(distance_from_bottom / 0.7))
         return position, max(0, min(offset, 240))
-

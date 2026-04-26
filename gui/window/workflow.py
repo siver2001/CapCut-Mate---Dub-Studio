@@ -16,18 +16,20 @@ except Exception:  # pragma: no cover
 
 from PyQt6.QtWidgets import (
     QColorDialog,
+    QComboBox,
     QFileDialog,
     QLineEdit,
     QMessageBox,
     QTableWidgetItem,
 )
 
-from gui.config import BOX_STYLE_PRESETS, DEFAULT_OUTPUT_DIR, FONT_OPTIONS, ROOT, VOICE_LABELS, VOICE_OPTIONS
+from gui.config import BOX_STYLE_PRESETS, DEFAULT_OUTPUT_DIR, FONT_OPTIONS, get_sticker_by_id, ROOT, VOICE_LABELS, VOICE_OPTIONS
 from gui.utils import (
     default_settings,
     ensure_dir,
     find_font_option,
     normalize_preview_text,
+    preferred_default_voice,
     repair_mojibake_text,
     resolve_intro_voice_preset,
 )
@@ -68,12 +70,20 @@ class WindowWorkflowMixin:
         switch_to_preview_tab: bool = False,
         refresh_all: bool = False,
     ) -> None:
+        source_path = Path(video_path)
         try:
-            preview_analysis = self._build_quick_preview_analysis(Path(video_path))
+            preview_analysis = self._build_quick_preview_analysis(source_path)
         except Exception:
             preview_analysis = None
         self.preview_media_analysis = preview_analysis
-        if switch_to_preview_tab and hasattr(self, "main_tabs") and hasattr(
+
+        video_preview = getattr(self, "_video_preview_widget", None)
+        if video_preview is not None:
+            video_preview.load_video(source_path)
+
+        if switch_to_preview_tab and hasattr(self, "_page_stack"):
+            self._switch_page(1)
+        elif switch_to_preview_tab and hasattr(self, "main_tabs") and hasattr(
             self, "preview_page"
         ):
             _tabs = getattr(self, "main_tabs", None)
@@ -141,7 +151,7 @@ class WindowWorkflowMixin:
                 getattr(self.render_video_widget, "isFullScreen", lambda: False)()
             )
             self.fullscreen_preview_btn.setText(
-                "Thu nhỏ" if is_fullscreen else "Toàn màn hình"
+                "Thu nhỏ" if is_fullscreen else "Phóng To"
             )
 
     def _apply_render_preview_audio_state(self) -> None:
@@ -503,12 +513,28 @@ class WindowWorkflowMixin:
         is_fullscreen = bool(
             getattr(self.render_video_widget, "isFullScreen", lambda: False)()
         )
+        if is_fullscreen:
+            self.exit_render_preview_fullscreen()
+            return
         if hasattr(self.render_video_widget, "setFullScreen"):
-            self.render_video_widget.setFullScreen(not is_fullscreen)
-        elif is_fullscreen:
-            self.render_video_widget.showNormal()
+            self.render_video_widget.setFullScreen(True)
         else:
             self.render_video_widget.showFullScreen()
+        self.render_video_widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._update_render_preview_button_labels()
+
+    def exit_render_preview_fullscreen(self) -> None:
+        if self.render_video_widget is None:
+            return
+        is_fullscreen = bool(
+            getattr(self.render_video_widget, "isFullScreen", lambda: False)()
+        )
+        if not is_fullscreen:
+            return
+        if hasattr(self.render_video_widget, "setFullScreen"):
+            self.render_video_widget.setFullScreen(False)
+        else:
+            self.render_video_widget.showNormal()
         self._update_render_preview_button_labels()
 
     def _on_render_preview_duration_changed(self, duration: int) -> None:
@@ -546,6 +572,8 @@ class WindowWorkflowMixin:
         self._update_render_preview_button_labels()
 
     def _on_render_preview_fullscreen_changed(self, _fullscreen: bool) -> None:
+        if _fullscreen and self.render_video_widget is not None:
+            self.render_video_widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self._update_render_preview_button_labels()
 
     def on_render_preview_slider_pressed(self) -> None:
@@ -737,6 +765,7 @@ class WindowWorkflowMixin:
         self._subtitle_table_syncing = True
         self.subtitle_table.blockSignals(True)
         self.subtitle_table.setRowCount(len(timeline))
+        self.subtitle_table.verticalHeader().setDefaultSectionSize(30)
         for row, item in enumerate(timeline):
             start_ms = int(item.get("startMs") or 0)
             end_ms = int(item.get("endMs") or 0)
@@ -745,19 +774,96 @@ class WindowWorkflowMixin:
             for column, value, editable in [
                 (0, start_text, False),
                 (1, end_text, False),
-                (2, repair_mojibake_text(item.get("text") or ""), True),
+                (3, repair_mojibake_text(item.get("text") or ""), True),
             ]:
                 cell = QTableWidgetItem(value)
                 if not editable:
                     cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.subtitle_table.setItem(row, column, cell)
+            voice_combo = QComboBox()
+            voice_combo.setEditable(True)
+            voice_combo.setMinimumHeight(26)
+            voice_combo.setMaximumHeight(26)
+            voice_combo.setStyleSheet(
+                """
+                QComboBox {
+                    min-height: 26px;
+                    padding: 2px 22px 2px 8px;
+                    border-radius: 8px;
+                }
+                QComboBox QAbstractItemView {
+                    padding: 4px;
+                }
+                QComboBox QAbstractItemView::item {
+                    min-height: 24px;
+                    padding: 4px 8px;
+                }
+                """
+            )
+            voice_combo.addItem("Mặc định", "")
+            for value, label in VOICE_OPTIONS:
+                voice_combo.addItem(repair_mojibake_text(label), value)
+            selected_voice = str(
+                item.get("voice")
+                or item.get("voicePreset")
+                or item.get("voiceOverride")
+                or ""
+            ).strip()
+            if selected_voice:
+                found_index = voice_combo.findData(selected_voice)
+                if found_index >= 0:
+                    voice_combo.setCurrentIndex(found_index)
+                else:
+                    voice_combo.setCurrentText(selected_voice)
+            else:
+                voice_combo.setCurrentIndex(0)
+            voice_combo.setToolTip("Chọn voice riêng cho câu này; để Mặc định nếu muốn dùng voice chung.")
+            voice_combo.currentIndexChanged.connect(
+                lambda _index, row=row, combo=voice_combo: self._on_subtitle_voice_combo_changed(row, combo)
+            )
+            if voice_combo.lineEdit() is not None:
+                voice_combo.lineEdit().setStyleSheet("padding: 0px; margin: 0px;")
+                voice_combo.lineEdit().editingFinished.connect(
+                    lambda row=row, combo=voice_combo: self._on_subtitle_voice_combo_changed(row, combo)
+                )
+            self.subtitle_table.setCellWidget(row, 2, voice_combo)
+            self.subtitle_table.setRowHeight(row, 30)
         self.subtitle_table.blockSignals(False)
         self._subtitle_table_syncing = False
+
+    @staticmethod
+    def _resolve_subtitle_voice_value(combo: QComboBox) -> str:
+        current_text = str(combo.currentText() or "").strip()
+        index = combo.currentIndex()
+        if index >= 0 and current_text == combo.itemText(index):
+            data = combo.itemData(index)
+            return str(data or "").strip()
+        if current_text.lower() in {"", "mặc định", "mac dinh", "default"}:
+            return ""
+        return current_text
+
+    def _on_subtitle_voice_combo_changed(self, row: int, combo: QComboBox) -> None:
+        if getattr(self, "_subtitle_table_syncing", False):
+            return
+        timeline = self._current_subtitle_timeline()
+        if row >= len(timeline):
+            return
+        voice = self._resolve_subtitle_voice_value(combo)
+        current_voice = str(timeline[row].get("voice") or "").strip()
+        if voice == current_voice:
+            return
+        if voice:
+            timeline[row]["voice"] = voice
+        else:
+            timeline[row].pop("voice", None)
+            timeline[row].pop("voicePreset", None)
+            timeline[row].pop("voiceOverride", None)
+        self._set_subtitle_timeline(timeline, source="edited")
 
     def on_subtitle_table_item_changed(self, item: QTableWidgetItem) -> None:
         if getattr(self, "_subtitle_table_syncing", False):
             return
-        if item.column() != 2:
+        if item.column() != 3:
             return
         timeline = self._current_subtitle_timeline()
         if item.row() >= len(timeline):
@@ -821,8 +927,18 @@ class WindowWorkflowMixin:
         QMessageBox.warning(self, "Không thể xem preview", message)
 
     def on_font_size_changed(self, value: int) -> None:
-        self.settings["subtitlePreset"]["fontSize"] = int(value)
-        self.font_size_value.setText(f"{value}px")
+        safe_value = int(value)
+        self.settings["subtitlePreset"]["fontSize"] = safe_value
+        sender = self.sender()
+        if hasattr(self, "font_size_spin") and sender is not self.font_size_spin:
+            self.font_size_spin.blockSignals(True)
+            self.font_size_spin.setValue(safe_value)
+            self.font_size_spin.blockSignals(False)
+        if hasattr(self, "font_size_slider") and sender is not self.font_size_slider:
+            self.font_size_slider.blockSignals(True)
+            self.font_size_slider.setValue(safe_value)
+            self.font_size_slider.blockSignals(False)
+        self.font_size_value.setText(f"{safe_value}px")
         self.refresh_preview()
 
     def on_blur_changed(self, value: int) -> None:
@@ -877,18 +993,25 @@ class WindowWorkflowMixin:
         self.on_basic_settings_changed()
 
     def apply_box_style_preset(self, preset_name: str) -> None:
-        preset = BOX_STYLE_PRESETS.get(str(preset_name) or "")
+        preset_key = str(preset_name or "").strip()
+        preset = BOX_STYLE_PRESETS.get(preset_key)
         if not preset:
             return
         self.settings["subtitlePreset"].update(preset)
+        self.settings["subtitlePreset"]["boxStylePreset"] = preset_key
         self.sync_widgets_from_settings()
-        self.refresh_preview()
+        self.refresh_all()
 
     def on_box_style_changed(self) -> None:
         self.apply_box_style_preset(str(self.box_style_combo.currentData() or ""))
         self.refresh_preview()
 
     def on_box_style_detail_changed(self) -> None:
+        self.settings["subtitlePreset"]["boxStylePreset"] = "custom"
+        if hasattr(self, "box_style_combo"):
+            self.box_style_combo.blockSignals(True)
+            self._set_combo_value(self.box_style_combo, "custom")
+            self.box_style_combo.blockSignals(False)
         self.on_basic_settings_changed()
         self.refresh_preview()
 
@@ -977,6 +1100,31 @@ class WindowWorkflowMixin:
                 )
         self.settings["voiceMapping"] = voice_mapping
 
+    def _selected_default_voice(self) -> str:
+        combo = getattr(self, "default_voice_combo", None)
+        voice = ""
+        if combo is not None:
+            voice = str(self._resolve_voice_combo_value(combo) or "").strip()
+        if not voice:
+            voice = str(self.settings.get("defaultVoice") or "").strip()
+        if not voice:
+            voice = str((self.settings.get("voiceMapping") or {}).get("speaker_1") or "").strip()
+        return voice or preferred_default_voice()
+
+    def _expanded_voice_mapping(self) -> dict[str, str]:
+        voice_mapping = copy.deepcopy(self.settings.get("voiceMapping") or {})
+        default_voice = str(self.settings.get("defaultVoice") or self._selected_default_voice()).strip()
+        if not default_voice:
+            default_voice = preferred_default_voice()
+        try:
+            speaker_count = int(self.settings.get("speakerCount") or 1)
+        except Exception:
+            speaker_count = 1
+        speaker_count = max(1, min(speaker_count, 4))
+        for index in range(speaker_count):
+            voice_mapping.setdefault(f"speaker_{index + 1}", default_voice)
+        return voice_mapping
+
     def read_settings_from_widgets(self) -> None:
         self.settings["sourceLanguage"] = str(self.source_language_combo.currentData())
         self.settings["targetLanguage"] = str(self.target_language_combo.currentData())
@@ -984,6 +1132,7 @@ class WindowWorkflowMixin:
             self.speaker_detection_combo.currentData()
         )
         self.settings["speakerCount"] = int(self.speaker_count_spin.value())
+        self.settings["defaultVoice"] = self._selected_default_voice()
         self.settings["timingMode"] = str(self.timing_mode_combo.currentData())
         self.settings["videoCodecMode"] = str(
             self.video_codec_combo.currentData() or "gpu_preferred"
@@ -1000,19 +1149,79 @@ class WindowWorkflowMixin:
         self.settings["subtitlePreset"]["positionPreset"] = str(
             self.subtitle_position_combo.currentData()
         )
+        if hasattr(self, "font_group_combo"):
+            self.settings["subtitlePreset"]["fontGroup"] = str(
+                self.font_group_combo.currentData() or "all"
+            )
+        if hasattr(self, "font_size_spin"):
+            self.settings["subtitlePreset"]["fontSize"] = int(
+                self.font_size_spin.value()
+            )
         self.settings["subtitlePreset"]["strokeWidth"] = int(
             self.stroke_width_spin.value()
         )
         self.settings["subtitlePreset"]["maxWordsPerChunk"] = int(
             self.max_words_spin.value()
         )
+        if hasattr(self, "subtitle_box_check"):
+            self.settings["subtitlePreset"]["boxEnabled"] = bool(
+                self.subtitle_box_check.isChecked()
+            )
+        if hasattr(self, "box_style_combo"):
+            self.settings["subtitlePreset"]["boxStylePreset"] = str(
+                self.box_style_combo.currentData() or "custom"
+            )
+        self.settings["subtitlePreset"]["boxLayoutMode"] = str(
+            self.settings["subtitlePreset"].get("boxLayoutMode", "line") or "line"
+        )
+        if hasattr(self, "box_radius_spin"):
+            self.settings["subtitlePreset"]["boxRadius"] = int(
+                self.box_radius_spin.value()
+            )
+        if hasattr(self, "box_border_width_spin"):
+            self.settings["subtitlePreset"]["boxBorderWidth"] = int(
+                self.box_border_width_spin.value()
+            )
+        if hasattr(self, "box_fill_opacity_spin"):
+            self.settings["subtitlePreset"]["boxFillOpacity"] = float(
+                self.box_fill_opacity_spin.value()
+            )
+        if hasattr(self, "text_effect_combo"):
+            self.settings["subtitlePreset"]["textEffect"] = str(
+                self.text_effect_combo.currentData() or "none"
+            )
+        sticker_id = str(self.sticker_combo.currentData() or "none")
+        sticker_data = get_sticker_by_id(sticker_id) if sticker_id != "none" else {}
+        sticker_transform_x = float(
+            self.sticker_x_spin.value()
+            if hasattr(self, "sticker_x_spin")
+            else (self.settings.get("stickerOptions") or {}).get("transform_x", 0.0)
+        )
+        sticker_transform_y = float(
+            self.sticker_y_spin.value()
+            if hasattr(self, "sticker_y_spin")
+            else (self.settings.get("stickerOptions") or {}).get("transform_y", -0.3)
+        )
+        self.settings["stickerOptions"] = {
+            "stickerId": sticker_id if sticker_id != "none" else "",
+            "sticker_id": sticker_id if sticker_id != "none" else "",
+            "stickerName": str(self.sticker_combo.currentText() or ""),
+            "image_url": str(sticker_data.get("image_url", "") or ""),
+            "sticker_type": int(sticker_data.get("sticker_type", 1)),
+            "scale": float(getattr(self, "sticker_scale_spin", None) and self.sticker_scale_spin.value() or 1.0),
+            "transform_x": max(-1.0, min(sticker_transform_x, 1.0)),
+            "transform_y": max(-1.0, min(sticker_transform_y, 1.0)),
+        }
         self.settings["introHook"]["enabled"] = self.intro_enabled_check.isChecked()
         self.settings["introHook"]["clipDurationMs"] = int(
             round(self.intro_duration_spin.value() * 1000)
         )
-        intro_voice_value = self._resolve_voice_combo_value(self.intro_voice_combo) or "edge:male"
-        if str(intro_voice_value) == "vieneu:clone":
-            intro_voice_value = "edge:male"
+        intro_voice_value = (
+            self._resolve_voice_combo_value(self.intro_voice_combo)
+            or preferred_default_voice()
+        )
+        if str(intro_voice_value) in {"vieneu:clone", "valtec:clone"}:
+            intro_voice_value = preferred_default_voice()
         intro_preset = resolve_intro_voice_preset(intro_voice_value)
         self.settings["introHook"]["voicePresetKey"] = intro_preset["key"]
         self.settings["introHook"]["voice"] = str(intro_preset["voice"])
@@ -1044,6 +1253,9 @@ class WindowWorkflowMixin:
         self.settings["watermark"]["position"] = str(self.watermark_position_combo.currentData())
         self.settings["watermark"]["scale"] = float(self.watermark_scale_slider.value()) / 100.0
         self._sync_voice_mapping_from_widgets()
+        if not getattr(self, "voice_combo_map", {}):
+            self.settings["voiceMapping"] = {}
+        self.settings["voiceMapping"] = self._expanded_voice_mapping()
         self.on_font_changed()
 
     def current_analysis_overrides(self) -> dict[str, Any]:
@@ -1054,7 +1266,7 @@ class WindowWorkflowMixin:
             "targetLanguage": self.settings["targetLanguage"],
             "speakerDetectionMode": self.settings["speakerDetectionMode"],
             "speakerCount": int(self.settings["speakerCount"]),
-            "voiceMapping": copy.deepcopy(self.settings["voiceMapping"]),
+            "voiceMapping": self._expanded_voice_mapping(),
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
         }
 
@@ -1068,7 +1280,7 @@ class WindowWorkflowMixin:
             "sourceLanguage": effective_source_language or "",
             "targetLanguage": self.settings["targetLanguage"],
             "speakerDetectionMode": self.settings["speakerDetectionMode"],
-            "voiceMapping": copy.deepcopy(self.settings["voiceMapping"]),
+            "voiceMapping": self._expanded_voice_mapping(),
             "introHook": copy.deepcopy(self.settings["introHook"]),
             "subtitlePreset": copy.deepcopy(self.settings["subtitlePreset"]),
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
@@ -1083,6 +1295,7 @@ class WindowWorkflowMixin:
             "watermarkPath": self.settings.get("watermark", {}).get("path", ""),
             "watermarkPosition": self.settings.get("watermark", {}).get("position", "top-right"),
             "watermarkScale": self.settings.get("watermark", {}).get("scale", 0.15),
+            "stickerOptions": copy.deepcopy(self.settings.get("stickerOptions", {})),
         }
 
     def _push_analysis_overrides(self, *, rebuild_voice_ui: bool = True) -> None:
@@ -1110,10 +1323,18 @@ class WindowWorkflowMixin:
             "speakerDetectionMode", merged["speakerDetectionMode"]
         )
         merged["speakerCount"] = len(analysis.get("speakers") or []) or 1
+        merged["defaultVoice"] = str(
+            self.settings.get("defaultVoice")
+            or (self.settings.get("voiceMapping") or {}).get("speaker_1")
+            or merged.get("defaultVoice")
+            or preferred_default_voice()
+        )
         merged["voiceMapping"] = {
             speaker.get("speakerId"): speaker.get("voicePreset")
             for speaker in analysis.get("speakers", [])
         }
+        for index in range(max(1, min(int(merged["speakerCount"] or 1), 4))):
+            merged["voiceMapping"].setdefault(f"speaker_{index + 1}", merged["defaultVoice"])
         merged["introHook"].update(render_defaults.get("introHook") or {})
         merged["subtitlePreset"].update(render_defaults.get("subtitlePreset") or {})
         merged["subtitleRegion"].update(analysis.get("subtitleRegion") or {})
@@ -1163,6 +1384,11 @@ class WindowWorkflowMixin:
         merged["watermark"]["path"] = render_defaults.get("watermarkPath", merged["watermark"].get("path", ""))
         merged["watermark"]["position"] = render_defaults.get("watermarkPosition", merged["watermark"].get("position", "top-right"))
         merged["watermark"]["scale"] = render_defaults.get("watermarkScale", merged["watermark"].get("scale", 0.15))
+        merged.setdefault("stickerOptions", {}).update(
+            self.settings.get("stickerOptions")
+            or render_defaults.get("stickerOptions")
+            or {}
+        )
         self.settings = merged
         self.sync_widgets_from_settings()
 
@@ -1178,7 +1404,19 @@ class WindowWorkflowMixin:
             self.cleanup_combo,
             self.subtitle_enabled_combo,
             self.subtitle_position_combo,
+            self.font_group_combo,
             self.font_combo,
+            self.font_size_spin,
+            self.subtitle_box_check,
+            self.box_style_combo,
+              self.box_radius_spin,
+            self.box_border_width_spin,
+            self.box_fill_opacity_spin,
+            self.text_effect_combo,
+            self.sticker_combo,
+            self.sticker_scale_spin,
+            self.sticker_x_spin,
+            self.sticker_y_spin,
             self.stroke_width_spin,
             self.max_words_spin,
             self.intro_enabled_check,
@@ -1203,6 +1441,10 @@ class WindowWorkflowMixin:
             self.watermark_position_combo,
             self.watermark_scale_slider,
         ]
+        for optional_name in ("default_voice_combo", "default_voice_test_btn"):
+            widget = getattr(self, optional_name, None)
+            if widget is not None:
+                widgets.append(widget)
         for widget in widgets:
             widget.blockSignals(True)
         self._set_combo_value(
@@ -1234,14 +1476,52 @@ class WindowWorkflowMixin:
             self.settings["subtitlePreset"]["positionPreset"],
         )
         self._set_combo_value(
+            self.font_group_combo,
+            self.settings["subtitlePreset"].get("fontGroup", "all"),
+        )
+        self._set_combo_value(
             self.font_combo, self.settings["subtitlePreset"]["fontFamily"]
         )
+        self.font_size_spin.setValue(int(self.settings["subtitlePreset"]["fontSize"]))
         self.stroke_width_spin.setValue(
             int(self.settings["subtitlePreset"]["strokeWidth"])
         )
         self.max_words_spin.setValue(
             int(self.settings["subtitlePreset"]["maxWordsPerChunk"])
         )
+        self.subtitle_box_check.setChecked(
+            bool(self.settings["subtitlePreset"].get("boxEnabled", False))
+        )
+        self._set_combo_value(
+            self.box_style_combo,
+            self.settings["subtitlePreset"].get("boxStylePreset", "custom"),
+        )
+        if hasattr(self, "box_layout_combo"):
+            self._set_combo_value(
+                self.box_layout_combo,
+                self.settings["subtitlePreset"].get("boxLayoutMode", "line"),
+            )
+        self.box_radius_spin.setValue(
+            int(self.settings["subtitlePreset"].get("boxRadius", 16))
+        )
+        self.box_border_width_spin.setValue(
+            int(self.settings["subtitlePreset"].get("boxBorderWidth", 2))
+        )
+        self.box_fill_opacity_spin.setValue(
+            float(self.settings["subtitlePreset"].get("boxFillOpacity", 0.86))
+        )
+        self._set_combo_value(
+            self.text_effect_combo,
+            self.settings["subtitlePreset"].get("textEffect", "none"),
+        )
+        sticker_options = self.settings.get("stickerOptions") or {}
+        self._set_combo_value(
+            self.sticker_combo,
+            str(sticker_options.get("stickerId") or sticker_options.get("sticker_id") or "none"),
+        )
+        self.sticker_scale_spin.setValue(float(sticker_options.get("scale", 1.0)))
+        self.sticker_x_spin.setValue(float(sticker_options.get("transform_x", 0.0)))
+        self.sticker_y_spin.setValue(float(sticker_options.get("transform_y", -0.3)))
         self.intro_enabled_check.setChecked(bool(self.settings["introHook"]["enabled"]))
         self.intro_duration_spin.setValue(
             float(self.settings["introHook"]["clipDurationMs"]) / 1000.0
@@ -1249,14 +1529,25 @@ class WindowWorkflowMixin:
         intro_voice_key = str(
             self.settings["introHook"].get("voicePresetKey")
             or self.settings["introHook"].get("voice")
-            or VOICE_OPTIONS[0][0]
+            or preferred_default_voice()
         )
-        if intro_voice_key == "vieneu:clone":
-            intro_voice_key = "edge:male"
+        if intro_voice_key in {"vieneu:clone", "valtec:clone"}:
+            intro_voice_key = preferred_default_voice()
         if self.intro_voice_combo.findData(intro_voice_key) >= 0:
             self._set_combo_value(self.intro_voice_combo, intro_voice_key)
         else:
             self.intro_voice_combo.setEditText(intro_voice_key)
+        default_voice = str(
+            self.settings.get("defaultVoice")
+            or (self.settings.get("voiceMapping") or {}).get("speaker_1")
+            or preferred_default_voice()
+        )
+        default_voice_combo = getattr(self, "default_voice_combo", None)
+        if default_voice_combo is not None:
+            if default_voice_combo.findData(default_voice) >= 0:
+                self._set_combo_value(default_voice_combo, default_voice)
+            else:
+                default_voice_combo.setEditText(default_voice)
         self.intro_background_check.setChecked(
             bool(self.settings["introHook"]["useBackgroundAudio"])
         )
@@ -1301,6 +1592,11 @@ class WindowWorkflowMixin:
         if hasattr(self, "watermark_scale_value"):
             self.watermark_scale_value.setText(
                 f"{int(round(float(watermark.get('scale', 0.15)) * 100))}%"
+            )
+        default_voice_status_label = getattr(self, "default_voice_status_label", None)
+        if default_voice_status_label is not None:
+            default_voice_status_label.setText(
+                f"Giọng mặc định: {self._format_voice_label(default_voice)}"
             )
 
 

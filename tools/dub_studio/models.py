@@ -22,7 +22,6 @@ class ClipManifest:
     pitch: str
     volume: str
     translated_text: str
-    spoken_text: str
     delivery: str
     clip_ms: int
     target_ms: int

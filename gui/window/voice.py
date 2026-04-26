@@ -4,13 +4,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, QUrl
+from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
 from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS
-from gui.utils import ensure_dir, normalize_preview_text, repair_mojibake_text
+from gui.utils import decode_process_bytes, ensure_dir, repair_mojibake_text
 from .helpers import SafeComboBox
+
+
+VOICE_PREVIEW_TEXT = "Xin chào, đây là giọng nói tiếng Việt."
 
 
 class WindowVoiceMixin:
@@ -36,6 +39,10 @@ class WindowVoiceMixin:
                 self.voice_overview_label.setText(
                     "Danh sách speaker sẽ hiện sau khi phân tích video."
                 )
+        if hasattr(self, "voice_overview_label") and speakers:
+            self.voice_overview_label.setText(
+                f"Đã nhận diện {len(speakers)} speaker. Chọn một giọng preset rồi bấm Nghe thử để kiểm tra trước khi render."
+            )
         if not speakers:
             empty_label = QLabel("Danh sách speaker sẽ hiện sau khi phân tích video.")
             empty_label.setObjectName("SectionHint")
@@ -59,6 +66,9 @@ class WindowVoiceMixin:
             detail_label = QLabel(
                 f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s • {'Đã có mẫu để clone VieNeu-TTS' if speaker.get('voiceCloneReady') else 'Chưa có mẫu speaker để clone VieNeu-TTS'}"
             )
+            detail_label.setText(
+                f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s"
+            )
             detail_label.setObjectName("SectionHint")
             combo = SafeComboBox()
             for value, text in self._voice_options_for_speaker(speaker):
@@ -69,14 +79,14 @@ class WindowVoiceMixin:
                 or VOICE_OPTIONS[0][0]
             )
             original_selected_voice = str(selected_voice)
-            if str(selected_voice) == "vieneu:clone":
+            if str(selected_voice) in {"vieneu:clone", "valtec:clone"}:
                 fallback_voice = speaker.get("voicePreset") or VOICE_OPTIONS[0][0]
                 selected_voice = (
                     fallback_voice
-                    if str(fallback_voice) != "vieneu:clone"
+                    if str(fallback_voice) not in {"vieneu:clone", "valtec:clone"}
                     else VOICE_OPTIONS[0][0]
                 )
-            if original_selected_voice == "vieneu:clone":
+            if original_selected_voice in {"vieneu:clone", "valtec:clone"}:
                 self.settings["voiceMapping"][speaker["speakerId"]] = str(selected_voice)
             combo.setEditable(True)
             if combo.findData(selected_voice) >= 0:
@@ -133,11 +143,19 @@ class WindowVoiceMixin:
         options: list[tuple[str, str]] = []
         clone_ready = bool(speaker.get("voiceCloneReady"))
         recommended = str(speaker.get("voicePreset") or "")
+        if recommended in {"vieneu:clone", "valtec:clone"}:
+            recommended = ""
+        if recommended:
+            options.append(
+                (recommended, f"{self._format_voice_label(recommended)} (đề xuất)")
+            )
         for value, text in VOICE_OPTIONS:
-            if value == "vieneu:clone" and not clone_ready:
+            if value in {"vieneu:clone", "valtec:clone"} and not clone_ready:
                 continue
             if value == "vieneu:clone":
                 label = "VieNeu-TTS • Clone từ speaker này"
+            elif value == "valtec:clone":
+                label = "Valtec-TTS • Clone từ speaker này"
             else:
                 label = repair_mojibake_text(text)
             if value == recommended:
@@ -145,27 +163,49 @@ class WindowVoiceMixin:
             options.append((value, label))
         if recommended and recommended != "vieneu:clone" and all(recommended != value for value, _ in options):
             options.append((recommended, self._format_voice_label(recommended)))
+        if clone_ready:
+            clone_options = [
+                ("vieneu:clone", "VieNeu-TTS • Clone từ speaker này"),
+                ("valtec:clone", "Valtec-TTS • Clone từ speaker này"),
+            ]
+            for value, label in clone_options:
+                if all(value != existing_value for existing_value, _ in options):
+                    options.append((value, label))
         return options
 
     def _speaker_preview_text(self, speaker_id: str, display_name: str) -> str:
-        analysis = self.effective_analysis or self.analysis or {}
-        for segment in analysis.get("segments") or []:
-            if segment.get("speakerId") != speaker_id:
-                continue
-            candidate = normalize_preview_text(
-                segment.get("spokenText") or segment.get("translatedText") or ""
-            )
-            if len(candidate) >= 8:
-                shortened = " ".join(candidate.split()[:8]).strip()
-                return repair_mojibake_text(shortened or candidate[:48])
-        safe_name = repair_mojibake_text(display_name or speaker_id)
-        return f"Xin chào, đây là giọng lồng tiếng của {safe_name}. Bạn thấy có tự nhiên không?"
+        return VOICE_PREVIEW_TEXT
+
+    def on_test_default_voice_clicked(self) -> None:
+        combo = getattr(self, "default_voice_combo", None)
+        if combo is None:
+            return
+        selected_voice = str(self._resolve_voice_combo_value(combo) or "").strip()
+        if not selected_voice:
+            return
+        self.settings["defaultVoice"] = selected_voice
+        self.voice_status_label_map["__default__"] = getattr(
+            self, "default_voice_status_label", None
+        )
+        self.on_test_voice_clicked("__default__", voice_override=selected_voice)
+
+    def on_test_intro_voice_clicked(self) -> None:
+        combo = getattr(self, "intro_voice_combo", None)
+        if combo is None:
+            return
+        selected_voice = str(self._resolve_voice_combo_value(combo) or "").strip()
+        if not selected_voice:
+            return
+        self.voice_status_label_map["__intro__"] = getattr(
+            self, "intro_voice_status_label", None
+        )
+        self.on_test_voice_clicked("__intro__", voice_override=selected_voice)
 
     def on_test_voice_clicked(
         self, speaker_id: str, *, voice_override: str | None = None
     ) -> None:
         combo = self.voice_combo_map.get(speaker_id)
-        if combo is None:
+        if combo is None and voice_override is None:
             return
         analysis = self.effective_analysis or self.analysis or {}
         speakers = analysis.get("speakers") or []
@@ -173,21 +213,28 @@ class WindowVoiceMixin:
             (item for item in speakers if item.get("speakerId") == speaker_id),
             {},
         )
-        selected_voice = str(voice_override or self._resolve_voice_combo_value(combo)).strip()
-        if selected_voice.startswith("vieneu:"):
-            if selected_voice == "vieneu:clone" and speaker.get("voiceCloneReady"):
+        selected_voice = str(
+            voice_override or (self._resolve_voice_combo_value(combo) if combo is not None else "")
+        ).strip()
+        if not selected_voice:
+            return
+        if selected_voice.startswith(("vieneu:", "valtec:")):
+            provider_label = "Valtec-TTS" if selected_voice.startswith("valtec:") else "VieNeu-TTS"
+            if selected_voice in {"vieneu:clone", "valtec:clone"} and speaker.get("voiceCloneReady"):
                 status_message = (
                     f"Đang nghe thử {self._format_voice_label(selected_voice)}. "
-                    "Lần đầu VieNeu-TTS có thể mất 10-20 giây để nạp model local."
+                    f"Lần đầu {provider_label} có thể mất 10-20 giây để nạp model local."
                 )
-            elif selected_voice == "vieneu:clone":
-                status_message = "Speaker này chưa có mẫu clone VieNeu-TTS, app sẽ nghe thử bằng EdgeTTS thay thế."
+            elif selected_voice in {"vieneu:clone", "valtec:clone"}:
+                status_message = f"Speaker này chưa có mẫu clone {provider_label}, app sẽ nghe thử bằng EdgeTTS thay thế."
             else:
                 status_message = (
                     f"Đang nghe thử {self._format_voice_label(selected_voice)}. "
-                    "VieNeu-TTS local sẽ phát bằng preset đã chọn."
+                    f"{provider_label} local sẽ phát bằng preset đã chọn."
                 )
             status_label = self.voice_status_label_map.get(speaker_id)
+            if getattr(self, "_voice_preview_timed_out", False):
+                message = "Nghe thử bị quá thời gian 120 giây. Kiểm tra lại runtime/model TTS rồi thử lại."
             if status_label is not None:
                 status_label.setText(repair_mojibake_text(status_message))
         preview_text = self._speaker_preview_text(
@@ -251,25 +298,44 @@ class WindowVoiceMixin:
         self._voice_preview_result_path = result_path
         self._voice_preview_active_speaker_id = speaker_id
         self._voice_preview_audio_path = ""
+        self._voice_preview_timed_out = False
         self._set_voice_test_buttons_enabled(False)
         status_label = self.voice_status_label_map.get(speaker_id)
-        if status_label is not None and not selected_voice.startswith("vieneu:"):
+        if status_label is not None and not selected_voice.startswith(("vieneu:", "valtec:")):
             status_label.setText("Đang tạo mẫu nghe thử...")
         process.start()
+        QTimer.singleShot(120000, lambda p=process: self._timeout_voice_preview_process(p))
+
+    def _timeout_voice_preview_process(self, process: QProcess) -> None:
+        if self.voice_preview_process is not process:
+            return
+        if process.state() == QProcess.ProcessState.NotRunning:
+            return
+        self._voice_preview_timed_out = True
+        try:
+            process.kill()
+        except Exception:
+            pass
 
     def _set_voice_test_buttons_enabled(self, enabled: bool) -> None:
         for button in self.voice_test_button_map.values():
             button.setEnabled(enabled)
+        intro_button = getattr(self, "intro_voice_test_btn", None)
+        if intro_button is not None:
+            intro_button.setEnabled(enabled)
+        default_button = getattr(self, "default_voice_test_btn", None)
+        if default_button is not None:
+            default_button.setEnabled(enabled)
 
     def _drain_voice_preview_output(self) -> None:
         process = self.voice_preview_process
         if process is None:
             return
-        self._voice_preview_stdout += bytes(process.readAllStandardOutput()).decode(
-            "utf-8", errors="ignore"
+        self._voice_preview_stdout += decode_process_bytes(
+            bytes(process.readAllStandardOutput())
         )
-        self._voice_preview_stderr += bytes(process.readAllStandardError()).decode(
-            "utf-8", errors="ignore"
+        self._voice_preview_stderr += decode_process_bytes(
+            bytes(process.readAllStandardError())
         )
 
     def _handle_voice_preview_finished(self, code: int, _status) -> None:

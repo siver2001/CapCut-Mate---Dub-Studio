@@ -33,6 +33,50 @@ _UNTRANSLATED_SOURCE_PATTERN = re.compile(
 )
 
 
+_CP1252_BYTE_BY_CHAR = {
+    "\u20ac": 0x80,
+    "\u201a": 0x82,
+    "\u0192": 0x83,
+    "\u201e": 0x84,
+    "\u2026": 0x85,
+    "\u2020": 0x86,
+    "\u2021": 0x87,
+    "\u02c6": 0x88,
+    "\u2030": 0x89,
+    "\u0160": 0x8A,
+    "\u2039": 0x8B,
+    "\u0152": 0x8C,
+    "\u017d": 0x8E,
+    "\u2018": 0x91,
+    "\u2019": 0x92,
+    "\u201c": 0x93,
+    "\u201d": 0x94,
+    "\u2022": 0x95,
+    "\u2013": 0x96,
+    "\u2014": 0x97,
+    "\u02dc": 0x98,
+    "\u2122": 0x99,
+    "\u0161": 0x9A,
+    "\u203a": 0x9B,
+    "\u0153": 0x9C,
+    "\u017e": 0x9E,
+    "\u0178": 0x9F,
+}
+
+
+def _encode_mojibake_bytes(text: str) -> bytes:
+    data = bytearray()
+    for char in text:
+        codepoint = ord(char)
+        if codepoint <= 0xFF:
+            data.append(codepoint)
+        elif char in _CP1252_BYTE_BY_CHAR:
+            data.append(_CP1252_BYTE_BY_CHAR[char])
+        else:
+            raise UnicodeEncodeError("mojibake", char, 0, 1, "not a mojibake byte")
+    return bytes(data)
+
+
 def _text_quality_score(text: str) -> int:
     compact = text.replace(" ", "")
     cjk_chars = len(_CJK_REPAIR_PATTERN.findall(compact))
@@ -50,9 +94,13 @@ def _repair_mojibake_text(text: str) -> str:
     best_score = _text_quality_score(best)
     for _ in range(3):
         improved = False
-        for encoding in ("latin1", "cp1252"):
+        for repairer in (
+            lambda value: _encode_mojibake_bytes(value).decode("utf-8"),
+            lambda value: value.encode("latin1").decode("utf-8"),
+            lambda value: value.encode("cp1252").decode("utf-8"),
+        ):
             try:
-                repaired = best.encode(encoding).decode("utf-8")
+                repaired = repairer(best)
             except Exception:
                 continue
             repaired_score = _text_quality_score(repaired)
@@ -89,10 +137,10 @@ def looks_like_untranslated_source(text: str, source_text: str = "") -> bool:
 
 def pick_best_localized_text(
     translated_text: str = "",
-    spoken_text: str = "",
+    alternate_text: str = "",
     source_text: str = "",
 ) -> str:
-    for candidate in (translated_text, spoken_text):
+    for candidate in (translated_text, alternate_text):
         clean = normalize_text(candidate)
         if clean and not looks_like_untranslated_source(clean, source_text):
             return clean
@@ -174,8 +222,7 @@ def collapse_repeated_pronouns(text: str) -> str:
 def collapse_repeated_words(text: str) -> str:
     """Remove consecutive duplicate words or short phrases from text.
 
-    This catches common LLM stuttering patterns and artifacts caused by
-    running build_spoken_text multiple times on the same text.  It handles:
+    This catches common LLM stuttering patterns and artifacts. It handles:
     - Single word repeats: "mọi mọi chuyện" → "mọi chuyện"
     - Two-word phrase repeats: "mọi chuyện mọi chuyện" → "mọi chuyện"
     - Three-word phrase repeats for longer text
@@ -300,16 +347,6 @@ def add_light_spoken_filler(text: str, delivery: str) -> str:
     clean = normalize_text(text)
     if not clean:
         return ""
-    filler_base = clean.rstrip(" .,!?:;…").lower()
-    if any(filler_base.endswith(suffix) for suffix in VIETNAMESE_FILLER_SUFFIXES):
-        return clean
-    normalized_delivery = str(delivery or "neutral").strip().lower()
-    if len(clean.split()) < 4:
-        return clean
-    if normalized_delivery == "excited" and clean.endswith("!"):
-        return clean[:-1].rstrip() + " đấy!"
-    if normalized_delivery == "suspense" and clean.endswith("..."):
-        return clean[:-3].rstrip() + " nhỉ..."
     return clean
 
 
@@ -404,40 +441,6 @@ def inject_mid_sentence_pause(text: str) -> str:
     if not leading or not trailing:
         return clean
     return f"{leading}, {trailing}"
-
-
-def build_spoken_text(translated_text: str, source_text: str = "", delivery: str = "neutral") -> str:
-    spoken = strip_stage_direction_tokens(translated_text)
-    if not spoken:
-        return ""
-
-    spoken = normalize_first_person_pronouns(spoken)
-    spoken = prefer_minh_cau_pair(spoken, source_text)
-    spoken = collapse_repeated_pronouns(spoken)
-    spoken = collapse_repeated_words(spoken)
-    spoken = soften_literal_leading_pronoun(spoken, source_text)
-
-    if len(spoken) >= 28:
-        spoken = inject_mid_sentence_pause(spoken)
-
-    normalized_delivery = str(delivery or "neutral").strip().lower()
-    if normalized_delivery == "excited" and spoken[-1] not in "!?":
-        spoken = spoken.rstrip(" .") + "!"
-    elif normalized_delivery == "suspense" and spoken[-1] not in ".!?\u2026":
-        spoken = spoken.rstrip(" .") + "..."
-    elif normalized_delivery == "curious" and spoken[-1] not in "?":
-        spoken = spoken.rstrip(" .") + "?"
-    else:
-        spoken = ensure_terminal_punctuation(
-            spoken,
-            source_text,
-            prefer_soft=normalized_delivery in {"calm", "suspense"},
-        )
-    spoken = add_light_spoken_filler(spoken, normalized_delivery)
-    spoken = smooth_spoken_delivery(spoken, normalized_delivery)
-    # Final dedup pass: catch any repeated words introduced by
-    # delivery/filler/pause injection above.
-    return collapse_repeated_words(spoken)
 
 
 def parse_srt_timestamp(value: str) -> int:
@@ -595,6 +598,54 @@ def create_display_subtitles(
     return display_items
 
 
+def split_subtitle_lines_for_display(
+    subtitles: list[SubtitleLine],
+    *,
+    max_words: int,
+    max_chars: int,
+    punctuation_aware: bool,
+) -> list[SubtitleLine]:
+    display_items: list[SubtitleLine] = []
+    counter = 1
+    for subtitle in subtitles:
+        clean = normalize_text(subtitle.content)
+        if not clean:
+            continue
+        chunks = split_display_text(
+            clean,
+            max_words=max_words,
+            max_chars=max_chars,
+            punctuation_aware=punctuation_aware,
+        )
+        if not chunks:
+            continue
+        start_ms = max(int(subtitle.start_ms), 0)
+        end_ms = max(int(subtitle.end_ms), start_ms + 120)
+        total_ms = max(end_ms - start_ms, 240)
+        weights = [max(len(chunk.replace(" ", "")), 1) for chunk in chunks]
+        total_weight = max(sum(weights), 1)
+        cursor = start_ms
+        for idx, chunk in enumerate(chunks):
+            if idx == len(chunks) - 1:
+                chunk_end = end_ms
+            else:
+                duration = max(int(total_ms * weights[idx] / total_weight), 220)
+                chunk_end = min(end_ms, cursor + duration)
+            display_items.append(
+                SubtitleLine(
+                    index=counter,
+                    start_ms=cursor,
+                    end_ms=max(chunk_end, cursor + 140),
+                    content=chunk,
+                )
+            )
+            counter += 1
+            cursor = chunk_end
+        if display_items:
+            display_items[-1].end_ms = end_ms
+    return display_items
+
+
 def subtitle_timeline_to_lines(
     timeline: list[dict[str, Any]],
 ) -> list[SubtitleLine]:
@@ -644,18 +695,25 @@ def renumber_subtitle_timeline(
             continue
         start_ms = max(int(source.get("startMs") or 0), 0)
         end_ms = max(int(source.get("endMs") or 0), start_ms + 120)
-        normalized.append(
-            {
-                "id": str(source.get("id") or source.get("segmentId") or f"sub_{index:04d}"),
-                "index": index,
-                "startMs": start_ms,
-                "endMs": end_ms,
-                "text": text,
-                "segmentId": str(source.get("segmentId") or ""),
-                "speakerId": str(source.get("speakerId") or ""),
-                "sourceText": normalize_text(source.get("sourceText") or ""),
-            }
+        entry = {
+            "id": str(source.get("id") or source.get("segmentId") or f"sub_{index:04d}"),
+            "index": index,
+            "startMs": start_ms,
+            "endMs": end_ms,
+            "text": text,
+            "segmentId": str(source.get("segmentId") or ""),
+            "speakerId": str(source.get("speakerId") or ""),
+            "sourceText": normalize_text(source.get("sourceText") or ""),
+        }
+        voice = normalize_text(
+            source.get("voice")
+            or source.get("voicePreset")
+            or source.get("voiceOverride")
+            or ""
         )
+        if voice:
+            entry["voice"] = voice
+        normalized.append(entry)
     return normalized
 
 
@@ -671,25 +729,32 @@ def build_subtitle_timeline(
         source_text = normalize_text(segment.get("sourceText") or "")
         text = pick_best_localized_text(
             segment.get("translatedText") or "",
-            segment.get("spokenText") or "",
+            "",
             source_text,
         )
         if not text:
             continue
         start_ms = max(int(segment.get("startMs") or 0), 0)
         end_ms = max(int(segment.get("endMs") or 0), start_ms + 120)
-        timeline.append(
-            {
-                "id": str(segment.get("id") or f"seg_sub_{index:04d}"),
-                "index": index,
-                "startMs": start_ms,
-                "endMs": end_ms,
-                "text": text,
-                "segmentId": str(segment.get("id") or ""),
-                "speakerId": str(segment.get("speakerId") or ""),
-                "sourceText": source_text,
-            }
+        entry = {
+            "id": str(segment.get("id") or f"seg_sub_{index:04d}"),
+            "index": index,
+            "startMs": start_ms,
+            "endMs": end_ms,
+            "text": text,
+            "segmentId": str(segment.get("id") or ""),
+            "speakerId": str(segment.get("speakerId") or ""),
+            "sourceText": source_text,
+        }
+        voice = normalize_text(
+            segment.get("voice")
+            or segment.get("voicePreset")
+            or segment.get("voiceOverride")
+            or ""
         )
+        if voice:
+            entry["voice"] = voice
+        timeline.append(entry)
     return renumber_subtitle_timeline(timeline)
 
 
@@ -736,22 +801,29 @@ def parse_srt_to_timeline(
             matched_segment = _match_subtitle_segment(
                 subtitle, fallback_segments, position=index - 1
             )
-        timeline.append(
-            {
-                "id": str(
-                    (matched_segment or {}).get("id")
-                    or (matched_segment or {}).get("segmentId")
-                    or f"sub_{index:04d}"
-                ),
-                "index": index,
-                "startMs": int(subtitle.start_ms),
-                "endMs": int(subtitle.end_ms),
-                "text": normalize_text(subtitle.content),
-                "segmentId": str((matched_segment or {}).get("id") or ""),
-                "speakerId": str((matched_segment or {}).get("speakerId") or ""),
-                "sourceText": normalize_text((matched_segment or {}).get("sourceText") or ""),
-            }
+        entry = {
+            "id": str(
+                (matched_segment or {}).get("id")
+                or (matched_segment or {}).get("segmentId")
+                or f"sub_{index:04d}"
+            ),
+            "index": index,
+            "startMs": int(subtitle.start_ms),
+            "endMs": int(subtitle.end_ms),
+            "text": normalize_text(subtitle.content),
+            "segmentId": str((matched_segment or {}).get("id") or ""),
+            "speakerId": str((matched_segment or {}).get("speakerId") or ""),
+            "sourceText": normalize_text((matched_segment or {}).get("sourceText") or ""),
+        }
+        voice = normalize_text(
+            (matched_segment or {}).get("voice")
+            or (matched_segment or {}).get("voicePreset")
+            or (matched_segment or {}).get("voiceOverride")
+            or ""
         )
+        if voice:
+            entry["voice"] = voice
+        timeline.append(entry)
     return renumber_subtitle_timeline(timeline)
 
 
@@ -762,23 +834,34 @@ def apply_subtitle_timeline_to_segments(
     if not segments:
         return []
     updated_segments = [dict(segment) for segment in segments]
-    by_segment_id = {
-        str(item.get("segmentId") or ""): item for item in renumber_subtitle_timeline(timeline)
-    }
+    normalized_timeline = renumber_subtitle_timeline(timeline)
+    by_segment_id: dict[str, dict[str, Any]] = {}
+    for item in normalized_timeline:
+        key = str(item.get("segmentId") or item.get("id") or "")
+        if key:
+            by_segment_id[key] = item
     for index, segment in enumerate(updated_segments):
         matched = None
         segment_id = str(segment.get("id") or "")
         if segment_id and segment_id in by_segment_id:
             matched = by_segment_id[segment_id]
-        elif len(timeline) == len(updated_segments) and index < len(timeline):
-            matched = timeline[index]
+        elif len(normalized_timeline) == len(updated_segments) and index < len(normalized_timeline):
+            matched = normalized_timeline[index]
         if not matched:
             continue
         translated = normalize_text(matched.get("text") or "")
         if not translated:
             continue
         segment["translatedText"] = translated
-        segment["spokenText"] = build_spoken_text(
-            translated, segment.get("sourceText") or "", segment.get("delivery") or "neutral"
+        segment.pop("spoken" + "Text", None)
+        voice = normalize_text(
+            matched.get("voice")
+            or matched.get("voicePreset")
+            or matched.get("voiceOverride")
+            or ""
         )
+        if voice:
+            segment["voice"] = voice
+        else:
+            segment.pop("voice", None)
     return updated_segments

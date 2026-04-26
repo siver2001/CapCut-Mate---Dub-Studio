@@ -45,11 +45,18 @@ from ..process_utils import (
     run_output,
     safe_print,
 )
-from ..render_utils import compose_ass, default_subtitle_region, hex_to_ass_color, resolve_subtitle_region_for_position
+from ..render_utils import (
+    compose_ass,
+    default_subtitle_region,
+    effective_ass_font_size,
+    effective_ass_margin_v,
+    effective_ass_outline,
+    hex_to_ass_color,
+    resolve_subtitle_region_for_position,
+)
 from ..subtitle_utils import (
     apply_subtitle_timeline_to_segments,
     build_subtitle_timeline,
-    build_spoken_text,
     collapse_repeated_words,
     compose_srt,
     compose_srt_from_timeline,
@@ -64,6 +71,7 @@ from ..subtitle_utils import (
     pick_best_localized_text,
     prefer_minh_cau_pair,
     split_display_text,
+    split_subtitle_lines_for_display,
     subtitle_timeline_to_lines,
 )
 
@@ -77,8 +85,7 @@ def stable_audio_filter_chain(*, trim_boundaries: bool = False) -> str:
     if trim_boundaries:
         filters.append(
             "silenceremove="
-            "start_periods=1:start_duration=0.03:start_threshold=-48dB:start_silence=0.02:"
-            "stop_periods=1:stop_duration=0.06:stop_threshold=-48dB:stop_silence=0.04"
+            "start_periods=1:start_duration=0.03:start_threshold=-48dB:start_silence=0.02"
         )
     filters.append("aresample=async=1:min_hard_comp=0.100:first_pts=0")
     filters.append("asetpts=N/SR/TB")
