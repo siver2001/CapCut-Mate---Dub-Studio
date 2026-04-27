@@ -903,6 +903,7 @@ def recommend_voice_preset(
     normalized = normalize_text(value).lower().replace("-", "_")
     gender = normalize_text(estimated_gender).lower()
     female_reference_voices = (
+        "valtec:thanh_tam",
         "valtec:nf",
         "valtec:sf",
     )
@@ -1588,7 +1589,7 @@ def detect_subtitle_region_in_frame(
         fallback_distance = abs(region_center_y - fallback_center_y_full) / max(int(video_meta["height"]), 1)
         confidence = (band_score / max(sample_width * band_height * 0.16, 1.0)) * vertical_bias
         confidence += min(chosen_span_score / max(sample_height * max(right - left, 1) * 0.18, 1.0), 1.35) * 0.22
-        confidence *= 1.0 - min(fallback_distance * 0.18, 0.12)
+        confidence *= 1.0 - min(fallback_distance * 1.0, 0.88)
         candidate = {
             "detected": True,
             "cleanupMode": fallback_region.get("cleanupMode", "localized_blur"),

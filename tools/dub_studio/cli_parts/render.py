@@ -492,6 +492,7 @@ def render_intro_hook(
     dirs: dict[str, Path],
     background_music_path: Path | None = None,
     background_music_volume: float = 0.0,
+    dynamic_regions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     video_duration_ms = int(video_meta.get("durationMs", 0))
     clip_window = select_intro_hook_window(
@@ -521,6 +522,7 @@ def render_intro_hook(
     clip_path = dirs["render"] / "intro_hook_source.mp4"
     mixed_intro_audio = dirs["audio"] / "intro_hook_audio.wav"
     intro_srt_path = dirs["render"] / "intro_hook.srt"
+    intro_ass_path = dirs["render"] / "intro_hook.ass"
     teaser_output_path = dirs["render"] / "intro_hook_rendered.mp4"
 
     fitted_intro_voice, intro_clip_ms, intro_rate, _, _, _ = synthesize_timed_tts_clip(
@@ -570,59 +572,28 @@ def render_intro_hook(
             punctuation_aware=bool(subtitle_preset.get("punctuationAwareSplit", True)),
         )
         if normalize_source_subtitle_cleanup_mode(cleanup_mode) != "none":
-            intro_dynamic_regions, intro_positions = build_dynamic_subtitle_regions(
-                clip_path,
-                video_meta=video_meta,
-                subtitles=intro_subtitles,
-                fallback_region=subtitle_region,
-            )
-            if any(r.get("detected") for r in intro_dynamic_regions):
-                # Tự động tạo vùng che cho teaser sát theo độ dài của từng câu sub để kích thước linh hoạt
-                synthesized_intro_regions = []
-                font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
-                font_size = effective_ass_font_size(subtitle_preset, video_meta)
+            if dynamic_regions:
+                teaser_start = clip_window["startMs"]
+                teaser_end = teaser_start + actual_intro_duration_ms
                 
-                for item in intro_subtitles:
-                    w, h = get_text_pixel_size(item.content, font_name, font_size)
-                    pad_x = max(int(video_meta.get("width", 1080) * 0.06), 30)
-                    pad_y = max(int(video_meta.get("height", 1920) * 0.03), 15)
-                    
-                    mask_w = min(int(video_meta.get("width", 1080)), w + pad_x * 2)
-                    mask_h = min(int(video_meta.get("height", 1920)), h + pad_y * 2)
-                    
-                    # Tìm xem OpenCV có phát hiện sub cũ nào trong khoảng thời gian câu sub này xuất hiện không
-                    matching_regions = [
-                        r for r in intro_dynamic_regions 
-                        if not (r.get("endMs", 0) < item.start_ms or r.get("startMs", 0) > item.end_ms)
-                    ]
-                    
-                    if matching_regions:
-                        cx = int(matching_regions[0].get("centerX", video_meta.get("width", 1080) // 2))
-                        cy = int(matching_regions[0].get("centerY", video_meta.get("height", 1920) * 0.85))
-                    elif subtitle_region.get("detected"):
-                        cx = int(subtitle_region.get("x", 0)) + int(subtitle_region.get("w", 0)) // 2
-                        cy = int(subtitle_region.get("y", 0)) + int(subtitle_region.get("h", 0)) // 2
-                    else:
-                        cx = int(video_meta.get("width", 1080)) // 2
-                        margin_v = effective_ass_margin_v(subtitle_preset, video_meta)
-                        cy = int(video_meta.get("height", 1920)) - margin_v - mask_h // 2
-                    
-                    x = max(cx - mask_w // 2, 0)
-                    y = max(cy - mask_h // 2, 0)
-                    
-                    synthesized_intro_regions.append({
-                        "x": x,
-                        "y": y,
-                        "w": mask_w,
-                        "h": mask_h,
-                        "centerX": cx,
-                        "centerY": cy,
-                        "startMs": item.start_ms,
-                        "endMs": item.end_ms,
-                        "detected": True,
-                        "confidence": 1.0,
-                    })
-                intro_dynamic_regions = synthesized_intro_regions
+                intro_dynamic_regions = []
+                for r in dynamic_regions:
+                    if r.get("endMs", 0) <= teaser_start or r.get("startMs", 0) >= teaser_end:
+                        continue
+                    r_shifted = r.copy()
+                    r_shifted["startMs"] = max(0, int(r.get("startMs", 0)) - teaser_start)
+                    r_shifted["endMs"] = min(actual_intro_duration_ms, int(r.get("endMs", 0)) - teaser_start)
+                    intro_dynamic_regions.append(r_shifted)
+            else:
+                intro_dynamic_regions, _ = build_dynamic_subtitle_regions(
+                    clip_path,
+                    video_meta=video_meta,
+                    subtitles=intro_subtitles,
+                    fallback_region=subtitle_region,
+                )
+            
+            if any(r.get("detected") for r in intro_dynamic_regions):
+                intro_dynamic_regions = [r for r in intro_dynamic_regions if r.get("detected")]
             else:
                 # Không phát hiện thấy sub cũ nào trong toàn bộ video -> Không che
                 intro_dynamic_regions = []
@@ -1851,52 +1822,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 video_meta=analysis["videoMeta"],
             )
             if any(r.get("detected") for r in dynamic_regions):
-                # Tự động tạo vùng che sát theo độ dài của từng câu sub mới và khớp với vị trí phát hiện của OpenCV
-                synthesized_regions = []
-                font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
-                font_size = effective_ass_font_size(subtitle_preset, analysis["videoMeta"])
-                
-                for item in display_subtitles:
-                    w, h = get_text_pixel_size(item.content, font_name, font_size)
-                    pad_x = max(int(analysis["videoMeta"].get("width", 1080) * 0.06), 30)
-                    pad_y = max(int(analysis["videoMeta"].get("height", 1920) * 0.03), 15)
-                    
-                    mask_w = min(int(analysis["videoMeta"].get("width", 1080)), w + pad_x * 2)
-                    mask_h = min(int(analysis["videoMeta"].get("height", 1920)), h + pad_y * 2)
-                    
-                    # Tìm xem OpenCV có phát hiện sub cũ nào trong khoảng thời gian câu sub này xuất hiện không
-                    matching_regions = [
-                        r for r in dynamic_regions 
-                        if not (r.get("endMs", 0) < item.start_ms or r.get("startMs", 0) > item.end_ms)
-                    ]
-                    
-                    if matching_regions:
-                        cx = int(matching_regions[0].get("centerX", analysis["videoMeta"].get("width", 1080) // 2))
-                        cy = int(matching_regions[0].get("centerY", analysis["videoMeta"].get("height", 1920) * 0.85))
-                    elif effective_subtitle_region.get("detected"):
-                        cx = int(effective_subtitle_region.get("x", 0)) + int(effective_subtitle_region.get("w", 0)) // 2
-                        cy = int(effective_subtitle_region.get("y", 0)) + int(effective_subtitle_region.get("h", 0)) // 2
-                    else:
-                        cx = int(analysis["videoMeta"].get("width", 1080)) // 2
-                        margin_v = effective_ass_margin_v(subtitle_preset, analysis["videoMeta"])
-                        cy = int(analysis["videoMeta"].get("height", 1920)) - margin_v - mask_h // 2
-                    
-                    x = max(cx - mask_w // 2, 0)
-                    y = max(cy - mask_h // 2, 0)
-                    
-                    synthesized_regions.append({
-                        "x": x,
-                        "y": y,
-                        "w": mask_w,
-                        "h": mask_h,
-                        "centerX": cx,
-                        "centerY": cy,
-                        "startMs": item.start_ms,
-                        "endMs": item.end_ms,
-                        "detected": True,
-                        "confidence": 1.0,
-                    })
-                dynamic_regions = synthesized_regions
+                dynamic_regions = [r for r in dynamic_regions if r.get("detected")]
             else:
                 # Không phát hiện thấy sub cũ nào trong toàn bộ video -> Không che
                 dynamic_regions = []
@@ -2028,6 +1954,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 dirs=dirs,
                 background_music_path=background_music_path,
                 background_music_volume=background_music_volume,
+                dynamic_regions=dynamic_regions,
             )
             flattened_render_path = dirs["render"] / f"{Path(input_path).stem}_dubstudio.mp4"
             concat_rendered_videos(Path(intro_result["videoPath"]), main_render_path, flattened_render_path)
