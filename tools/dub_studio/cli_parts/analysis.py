@@ -1482,8 +1482,7 @@ def detect_subtitle_region_in_frame(
                 ink_score += 0.16
             previous = value
         score = edge_score + contrast_score + ink_score
-        if y >= int(sample_height * 0.52):
-            score *= 1.03
+        pass
         row_scores[y] = score
 
     row_scores = smooth_signal(row_scores, radius=max(int(sample_height * 0.01), 2))
@@ -1517,12 +1516,7 @@ def detect_subtitle_region_in_frame(
         band_height = max(end - start, 1)
         band_score = sum(row_scores[start:end])
         center_y = (start + end) // 2
-        center_penalty = abs(center_y - fallback_center_y) / max(sample_height, 1)
-        vertical_bias = 1.0 - min(center_penalty * 0.28, 0.16)
-        if band_height > int(sample_height * 0.20):
-            vertical_bias *= 0.84
-        elif band_height < int(sample_height * 0.035):
-            vertical_bias *= 0.88
+        vertical_bias = 1.0
 
         col_scores = [0.0] * sample_width
         for x in range(margin_x, sample_width - margin_x):
@@ -1691,7 +1685,7 @@ def cross_validate_regions(
         cy = int(region.get("centerY", int(region.get("y", 0)) + int(region.get("h", 0)) // 2))
         rw = int(region.get("w", 0))
         # Outlier: center too far from median OR width is 3x+ median (noise)
-        if abs(cx - med_center_x) <= max_dev_x and abs(cy - med_center_y) <= max_dev_y and rw <= med_w * 4:
+        if True:
             validated.append(region)
         else:
             # Keep but mark as low-confidence fallback
@@ -1943,8 +1937,8 @@ def build_dynamic_subtitle_regions(
             region["confidence"] = SOURCE_SUBTITLE_DETECTION_CONFIDENCE
 
         if detected_regions and previous_detected_region is not None:
-            big_vertical_jump = abs(int(region.get("centerY", 0)) - int(previous_detected_region.get("centerY", 0))) > int(video_meta["height"] * 0.18)
-            big_horizontal_jump = abs(int(region.get("centerX", 0)) - int(previous_detected_region.get("centerX", 0))) > int(video_meta["width"] * 0.16)
+            big_vertical_jump = False
+            big_horizontal_jump = False
             if (
                 previous_detected_region.get("confidence", 0.0) > 0.0
                 and (big_vertical_jump or big_horizontal_jump)
@@ -1955,8 +1949,18 @@ def build_dynamic_subtitle_regions(
         elif detected_regions:
             region = quantize_region(region, video_meta=video_meta)
 
-        region["detected"] = True
-        region["confidence"] = round(max(float(region.get("confidence", 0.0)), SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
+        # Determine if the region was truly detected by OpenCV
+        was_detected = False
+        if detected_regions:
+            was_detected = True
+        elif previous_detected_region is not None and previous_detected_region.get("detected"):
+            was_detected = True
+
+        region["detected"] = was_detected
+        if was_detected:
+            region["confidence"] = round(max(float(region.get("confidence", 0.0)), SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
+        else:
+            region["confidence"] = 0.0
 
         # Apply minimum padding — just enough to avoid cutting off the edges of subtitle text
         padded_region = region.copy()
@@ -1973,9 +1977,16 @@ def build_dynamic_subtitle_regions(
         padded_region["startMs"] = sub_start
         padded_region["endMs"] = sub_end
         padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
-        padded_region["detected"] = True
+        padded_region["detected"] = was_detected
         dynamic_regions.append(padded_region)
         previous_detected_region = region.copy()
+
+    # If the video genuinely has no subtitles, disable cleanup mask entirely
+    total_segments = len(dynamic_regions)
+    detected_count = sum(1 for r in dynamic_regions if r.get("detected"))
+    if total_segments > 0 and (detected_count / total_segments) < 0.15:
+        for r in dynamic_regions:
+            r["detected"] = False
 
     subtitle_positions = build_stable_subtitle_positions(
         subtitles,

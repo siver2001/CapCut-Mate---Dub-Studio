@@ -223,7 +223,14 @@ VALTEC_PRESET_SPEAKER_IDS = {
     "valtec:sm": "SM",
     "valtec:nm2": "NM2",
 }
-VALTEC_REFERENCE_VOICES = {}
+VALTEC_REFERENCE_VOICES = {
+    "valtec:thu_ha": {"filename": "thu_ha.wav", "label": "Valtec-TTS • Thu Hà"},
+    "valtec:minh_duc": {"filename": "minh_duc.wav", "label": "Valtec-TTS • Minh Đức"},
+    "valtec:thanh_tam": {"filename": "thanh_tam.wav", "label": "Valtec-TTS • Thanh Tâm"},
+    "valtec:quang_huy": {"filename": "quang_huy.wav", "label": "Valtec-TTS • Quang Huy"},
+    "valtec:ngoc_anh": {"filename": "ngoc_anh.wav", "label": "Valtec-TTS • Ngọc Ánh"},
+    "valtec:hoang_nam": {"filename": "hoang_nam.wav", "label": "Valtec-TTS • Hoàng Nam"},
+}
 VALTEC_REPO_URL = env_value("DUB_VALTEC_REPO_URL", default="https://github.com/tronghieuit/valtec-tts.git")
 VALTEC_ZEROSHOT_REPO = env_value("DUB_VALTEC_ZEROSHOT_REPO", default="valtecAI-team/valtec-zeroshot-voice-cloning")
 VIENEU_BACKBONE_REPO = env_value("DUB_VIENEU_BACKBONE_REPO", default="pnnbao-ump/VieNeu-TTS-v2-Turbo-GGUF")
@@ -249,6 +256,8 @@ VIENEU_REQUIRED_FILES = (
 )
 
 DEFAULT_VOICES = [
+    "valtec:thanh_tam",
+    "valtec:thu_ha",
     "valtec:nf",
     "valtec:nm1",
     "valtec:sf",
@@ -269,6 +278,12 @@ VOICE_LABELS = {
     "valtec:nm1": "Valtec-TTS • NM1 Nam Bac",
     "valtec:sm": "Valtec-TTS • SM Nam Nam",
     "valtec:nm2": "Valtec-TTS • NM2 Nam Bac 2",
+    "valtec:thu_ha": "Valtec-TTS • Thu Hà",
+    "valtec:minh_duc": "Valtec-TTS • Minh Đức",
+    "valtec:thanh_tam": "Valtec-TTS • Thanh Tâm",
+    "valtec:quang_huy": "Valtec-TTS • Quang Huy",
+    "valtec:ngoc_anh": "Valtec-TTS • Ngọc Ánh",
+    "valtec:hoang_nam": "Valtec-TTS • Hoàng Nam",
     "vi-VN-HoaiMyNeural": "EdgeTTS • Nữ Hoài My",
     "vi-VN-NamMinhNeural": "EdgeTTS • Nam Nam Minh",
 }

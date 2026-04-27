@@ -147,12 +147,10 @@ EDGE_VOICE_OPTIONS = [
     ("edge:female", "Hoài My"),
 ]
 
-
 VIENEU_PRESET_OPTIONS = [
     ("vieneu:ngoc", "Bích Ngọc"),
     ("vieneu:tuyen", "Phạm Tuyên"),
     ("vieneu:doan", "Thục Đoan"),
-    ("vieneu:vinh", "Xuân Vĩnh"),
 ]
 
 VALTEC_PRESET_OPTIONS = [
@@ -162,32 +160,208 @@ VALTEC_PRESET_OPTIONS = [
     ("valtec:sm", "Nam miền Nam"),
     ("valtec:nm2", "Nam miền Bắc 2"),
 ]
-VALTEC_REFERENCE_OPTIONS = []
 
-# Short labels for status display (nghe thử, đề xuất)
+VALTEC_REFERENCE_OPTIONS = [
+    ("valtec:thu_ha", "Thu Hà"),
+    ("valtec:minh_duc", "Minh Đức"),
+    ("valtec:thanh_tam", "Thanh Tâm"),
+    ("valtec:quang_huy", "Quang Huy"),
+    ("valtec:ngoc_anh", "Ngọc Ánh"),
+    ("valtec:hoang_nam", "Hoàng Nam"),
+]
+
+VOICE_OPTIONS = [
+    *VALTEC_PRESET_OPTIONS,
+    *VALTEC_REFERENCE_OPTIONS,
+    *VIENEU_PRESET_OPTIONS,
+    *EDGE_VOICE_OPTIONS,
+]
+
+INTRO_TTS_OPTIONS = [
+    *VALTEC_PRESET_OPTIONS,
+    *VALTEC_REFERENCE_OPTIONS,
+    *VIENEU_PRESET_OPTIONS,
+    *EDGE_VOICE_OPTIONS,
+]
+
 SHORT_VOICE_LABELS = {
     "valtec:nf": "Nữ miền Bắc",
     "valtec:sf": "Nữ miền Nam",
     "valtec:nm1": "Nam miền Bắc",
     "valtec:sm": "Nam miền Nam",
     "valtec:nm2": "Nam miền Bắc 2",
+    "valtec:thu_ha": "Thu Hà",
+    "valtec:minh_duc": "Minh Đức",
+    "valtec:thanh_tam": "Thanh Tâm",
+    "valtec:quang_huy": "Quang Huy",
+    "valtec:ngoc_anh": "Ngọc Ánh",
+    "valtec:hoang_nam": "Hoàng Nam",
     "vieneu:ngoc": "Bích Ngọc",
     "vieneu:tuyen": "Phạm Tuyên",
     "vieneu:doan": "Thục Đoan",
-    "vieneu:vinh": "Xuân Vĩnh",
     "edge:male": "Nam Minh",
     "edge:female": "Hoài My",
 }
-VOICE_OPTIONS = [
-    *VALTEC_PRESET_OPTIONS,
-    *VIENEU_PRESET_OPTIONS,
-    *EDGE_VOICE_OPTIONS,
+
+VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
+
+FONT_OPTIONS = [
+    {
+        "value": "arial-bold",
+        "label": "Arial Bold",
+        "cssFontFamily": "Arial",
+        "fontFamilyName": "Arial",
+        "assFontName": "Arial",
+        "draftFontKey": "Poppins_Bold",
+    },
+    {
+        "value": "verdana",
+        "label": "Verdana",
+        "cssFontFamily": "Verdana",
+        "fontFamilyName": "Verdana",
+        "assFontName": "Verdana",
+        "draftFontKey": "WorkSans_Regular",
+    },
+    {
+        "value": "trebuchet",
+        "label": "Trebuchet",
+        "cssFontFamily": "Trebuchet MS",
+        "fontFamilyName": "Trebuchet MS",
+        "assFontName": "Trebuchet MS",
+        "draftFontKey": "Poppins_Regular",
+    },
+    {
+        "value": "georgia",
+        "label": "Georgia",
+        "cssFontFamily": "Georgia",
+        "fontFamilyName": "Georgia",
+        "assFontName": "Georgia",
+        "draftFontKey": "SourceHanSerifCN_Regular",
+    },
+    {
+        "value": "impact",
+        "label": "Impact",
+        "cssFontFamily": "Impact",
+        "fontFamilyName": "Impact",
+        "assFontName": "Impact",
+        "draftFontKey": "Anton",
+    },
 ]
-INTRO_TTS_OPTIONS = [
-    *VALTEC_PRESET_OPTIONS,
-    *VIENEU_PRESET_OPTIONS,
-    *EDGE_VOICE_OPTIONS,
+
+def _font_option(
+    value: str,
+    label: str,
+    css_font_family: str,
+    font_family_name: str,
+    ass_font_name: str,
+    draft_font_key: str,
+    group: str,
+    preview_text: str,
+) -> dict[str, str]:
+    return {
+        "value": value,
+        "label": label,
+        "cssFontFamily": css_font_family,
+        "fontFamilyName": font_family_name,
+        "assFontName": ass_font_name,
+        "draftFontKey": draft_font_key,
+        "group": group,
+        "previewText": preview_text,
+    }
+
+
+FONT_GROUP_OPTIONS = [
+    ("all", "Tat ca phong cach"),
+    ("headline", "Headline / hook"),
+    ("clean", "Clean / modern"),
+    ("serif", "Serif / editorial"),
+    ("handwriting", "Handwriting / soft"),
+    ("fun", "Fun / cute / creator"),
+    ("cinematic", "Cinematic / luxury"),
 ]
+
+
+FONT_OPTIONS = [
+    _font_option("arial-bold", "Arial Bold", "Arial", "Arial", "Arial", "Poppins_Bold", "clean", "Ban tin cap nhat hom nay"),
+    _font_option("impact", "Impact", "Impact", "Impact", "Impact", "Anton", "headline", "Cuon qua roi!"),
+    _font_option("poppins-bold", "Poppins Bold", "Poppins", "Poppins", "Poppins", "Poppins_Bold", "clean", "Noi dung dang len xu huong"),
+    _font_option("poppins-regular", "Poppins Regular", "Poppins", "Poppins", "Poppins", "Poppins_Regular", "clean", "Vlog hom nay co gi vui"),
+    _font_option("montserrat-black", "Montserrat Black", "Montserrat", "Montserrat", "Montserrat", "Montserrat_Black", "headline", "Flash sale toi nay"),
+    _font_option("inter-semibold", "Inter SemiBold", "Inter", "Inter", "Inter", "Inter_SemiBold", "clean", "Ban tin nhanh 60 giay"),
+    _font_option("anton", "Anton", "Anton", "Anton", "Anton", "Anton", "headline", "Can xem ngay"),
+    _font_option("staatliches", "Staatliches", "Staatliches", "Staatliches", "Staatliches", "Staatliches_Regular", "headline", "Neon night edit"),
+    _font_option("bungee", "Bungee", "Bungee", "Bungee", "Bungee", "Bungee_Regular", "fun", "Karaoke bung no"),
+    _font_option("kanit-regular", "Kanit Regular", "Kanit", "Kanit", "Kanit", "Kanit_Regular", "clean", "Vlog di cafe cuoi tuan"),
+    _font_option("kanit-italic", "Kanit ExtraBold Italic", "Kanit", "Kanit", "Kanit", "Kanit_ExtraBoldItalic", "headline", "Drama dang toi"),
+    _font_option("nunito", "Nunito", "Nunito", "Nunito", "Nunito", "Nunito", "fun", "De thuong that su"),
+    _font_option("rubik", "Rubik", "Rubik", "Rubik", "Rubik", "Rubik", "clean", "Talk show moi len song"),
+    _font_option("work-sans", "Work Sans", "Work Sans", "Work Sans", "Work Sans", "WorkSans_Regular", "clean", "Mot ngay lam viec hieu qua"),
+    _font_option("source-sans-pro", "Source Sans Pro", "Source Sans Pro", "Source Sans Pro", "Source Sans Pro", "SourceSansPro_Regular", "clean", "Tong hop thong tin can biet"),
+    _font_option("source-han-sans-bold", "Source Han Sans Bold", "Source Han Sans CN", "Source Han Sans CN", "Source Han Sans CN", "SourceHanSansCN_Bold", "headline", "Subtitle dam net"),
+    _font_option("source-han-serif", "Source Han Serif SemiBold", "Source Han Serif CN", "Source Han Serif CN", "Source Han Serif CN", "SourceHanSerifCN_SemiBold", "serif", "Thuoc phim co dien"),
+    _font_option("playfair-sc", "Playfair Display SC", "Playfair Display", "Playfair Display", "Playfair Display", "Playfair_Display_SC_Re", "cinematic", "Luxury frame"),
+    _font_option("lora", "Lora", "Lora", "Lora", "Lora", "Lora_Regular", "serif", "Mot cau chuyen dep"),
+    _font_option("georgia", "Georgia", "Georgia", "Georgia", "Georgia", "SourceHanSerifCN_Regular", "serif", "Phong cach editorial"),
+    _font_option("caveat-bold", "Caveat Bold", "Caveat", "Caveat", "Caveat", "Caveat_Bold", "handwriting", "Ghi chu nhanh"),
+    _font_option("great-vibes", "Great Vibes", "Great Vibes", "Great Vibes", "Great Vibes", "Great_Vibes_Regular", "handwriting", "Soft story"),
+    _font_option("alex-brush", "Alex Brush", "Alex Brush", "Alex Brush", "Alex Brush", "AlexBrush", "handwriting", "Letter from the heart"),
+    _font_option("marker", "Marker", "Marker", "Marker", "Marker", "Marker", "fun", "Highlight nay"),
+    _font_option("jellee-bold", "Jellee Bold", "Jellee", "Jellee", "Jellee", "Jellee_Bold", "fun", "Cute creator style"),
+    _font_option("bevan", "Bevan", "Bevan", "Bevan", "Bevan", "Bevan_Regular", "cinematic", "Retro poster"),
+    _font_option("koulen", "Koulen", "Koulen", "Koulen", "Koulen", "Koulen_Regular", "headline", "Anime battle"),
+    _font_option("luxury", "Luxury", "Times New Roman", "Luxury", "Luxury", "Luxury", "cinematic", "Signature premium"),
+]
+
+
+CLEANUP_OPTIONS = [
+    ("localized_blur", "Làm mờ vùng phụ đề cũ"),
+    ("localized_mask", "Phủ mềm vùng phụ đề cũ"),
+    ("none", "Giữ nguyên phụ đề gốc"),
+]
+
+SUBTITLE_VISIBILITY_OPTIONS = [("on", "Có vietsub"), ("off", "Không vietsub")]
+
+SUBTITLE_POSITION_OPTIONS = [
+    ("bottom", "Phía dưới"),
+    ("middle", "Chính giữa"),
+    ("top", "Phía trên"),
+]
+
+WATERMARK_POSITION_OPTIONS = [
+    ("top-left", "Góc trên trái"),
+    ("top-right", "Góc trên phải"),
+    ("bottom-left", "Góc dưới trái"),
+    ("bottom-right", "Góc dưới phải"),
+]
+
+SPEAKER_DETECTION_OPTIONS = [
+    ("narrator", "Giọng chung 1 người (mặc định)"),
+    ("dialogue", "Hội thoại nhiều người (thủ công)"),
+]
+
+TIMING_MODE_OPTIONS = [
+    ("balanced_natural", "Tự nhiên cân bằng"),
+    ("ultra_tight", "Timing siêu khít"),
+]
+
+UI_THEME_OPTIONS = [
+    ("cinema", "Cinema"),
+    ("news", "News"),
+    ("drama", "Drama"),
+    ("meme", "Meme"),
+    ("pastel", "Pastel"),
+]
+VIDEO_CODEC_OPTIONS = [
+    ("gpu_preferred", "GPU tăng tốc (mặc định)"),
+    ("cpu_stable", "CPU ổn định"),
+]
+
+TRANSLATE_PROVIDER_OPTIONS = [
+    ("auto", "Tự động (ưu tiên Ollama → llama.cpp)"),
+    ("ollama", "Ollama (local API, Gemma 4 E2B)"),
+    ("llama.cpp", "llama.cpp (local CLI, Gemma 4 E2B)"),
+]
+
 VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
 
 FONT_OPTIONS = [
@@ -350,6 +524,7 @@ TRANSLATE_PROVIDER_OPTIONS = [
 
 VOICE_OPTIONS = [
     *VALTEC_PRESET_OPTIONS,
+    *VALTEC_REFERENCE_OPTIONS,
     *VIENEU_PRESET_OPTIONS,
     *EDGE_VOICE_OPTIONS,
 ]
@@ -357,6 +532,8 @@ INTRO_TTS_OPTIONS = list(VOICE_OPTIONS)
 VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
 
 DEFAULT_VOICES = [
+    "valtec:thanh_tam",
+    "valtec:thu_ha",
     "valtec:nf",
     "valtec:nm1",
     "valtec:sf",

@@ -131,9 +131,7 @@ def source_subtitles_detected(
         return any(subtitle_region_detected(region) for region in dynamic_regions)
     if subtitle_region_detected(subtitle_region):
         return True
-    if not subtitle_region:
-        return False
-    return int(subtitle_region.get("w", 0)) > 0 and int(subtitle_region.get("h", 0)) > 0
+    return False
 
 
 def filter_dynamic_cleanup_regions(
@@ -578,19 +576,70 @@ def render_intro_hook(
                 subtitles=intro_subtitles,
                 fallback_region=subtitle_region,
             )
-            intro_dynamic_regions = filter_dynamic_cleanup_regions(
-                intro_dynamic_regions,
-                anchor_region=subtitle_region,
-                video_meta=video_meta,
-            )
+            if any(r.get("detected") for r in intro_dynamic_regions):
+                # Tự động tạo vùng che cho teaser sát theo độ dài của từng câu sub để kích thước linh hoạt
+                synthesized_intro_regions = []
+                font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
+                font_size = effective_ass_font_size(subtitle_preset, video_meta)
+                
+                for item in intro_subtitles:
+                    w, h = get_text_pixel_size(item.content, font_name, font_size)
+                    pad_x = max(int(video_meta.get("width", 1080) * 0.06), 30)
+                    pad_y = max(int(video_meta.get("height", 1920) * 0.03), 15)
+                    
+                    mask_w = min(int(video_meta.get("width", 1080)), w + pad_x * 2)
+                    mask_h = min(int(video_meta.get("height", 1920)), h + pad_y * 2)
+                    
+                    # Tìm xem OpenCV có phát hiện sub cũ nào trong khoảng thời gian câu sub này xuất hiện không
+                    matching_regions = [
+                        r for r in intro_dynamic_regions 
+                        if not (r.get("endMs", 0) < item.start_ms or r.get("startMs", 0) > item.end_ms)
+                    ]
+                    
+                    if matching_regions:
+                        cx = int(matching_regions[0].get("centerX", video_meta.get("width", 1080) // 2))
+                        cy = int(matching_regions[0].get("centerY", video_meta.get("height", 1920) * 0.85))
+                    elif subtitle_region.get("detected"):
+                        cx = int(subtitle_region.get("x", 0)) + int(subtitle_region.get("w", 0)) // 2
+                        cy = int(subtitle_region.get("y", 0)) + int(subtitle_region.get("h", 0)) // 2
+                    else:
+                        cx = int(video_meta.get("width", 1080)) // 2
+                        margin_v = effective_ass_margin_v(subtitle_preset, video_meta)
+                        cy = int(video_meta.get("height", 1920)) - margin_v - mask_h // 2
+                    
+                    x = max(cx - mask_w // 2, 0)
+                    y = max(cy - mask_h // 2, 0)
+                    
+                    synthesized_intro_regions.append({
+                        "x": x,
+                        "y": y,
+                        "w": mask_w,
+                        "h": mask_h,
+                        "centerX": cx,
+                        "centerY": cy,
+                        "startMs": item.start_ms,
+                        "endMs": item.end_ms,
+                        "detected": True,
+                        "confidence": 1.0,
+                    })
+                intro_dynamic_regions = synthesized_intro_regions
+            else:
+                # Không phát hiện thấy sub cũ nào trong toàn bộ video -> Không che
+                intro_dynamic_regions = []
         else:
             intro_dynamic_regions = []
-        intro_ass_path = dirs["render"] / "intro_hook.ass"
+        intro_positions = build_stable_subtitle_positions(
+            intro_subtitles,
+            dynamic_regions=intro_dynamic_regions,
+            fallback_region=subtitle_region,
+            video_meta=video_meta,
+        )
         intro_ass_path.write_text(
             compose_ass(
                 intro_subtitles,
                 video_meta=video_meta,
                 subtitle_preset=subtitle_preset,
+                subtitle_positions=intro_positions,
             ),
             encoding="utf-8",
         )
@@ -1801,21 +1850,76 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 fallback_region=effective_subtitle_region,
                 video_meta=analysis["videoMeta"],
             )
-            dynamic_regions = filter_dynamic_cleanup_regions(
-                dynamic_regions,
-                anchor_region=effective_subtitle_region,
-                video_meta=analysis["videoMeta"],
-            )
+            if any(r.get("detected") for r in dynamic_regions):
+                # Tự động tạo vùng che sát theo độ dài của từng câu sub mới và khớp với vị trí phát hiện của OpenCV
+                synthesized_regions = []
+                font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
+                font_size = effective_ass_font_size(subtitle_preset, analysis["videoMeta"])
+                
+                for item in display_subtitles:
+                    w, h = get_text_pixel_size(item.content, font_name, font_size)
+                    pad_x = max(int(analysis["videoMeta"].get("width", 1080) * 0.06), 30)
+                    pad_y = max(int(analysis["videoMeta"].get("height", 1920) * 0.03), 15)
+                    
+                    mask_w = min(int(analysis["videoMeta"].get("width", 1080)), w + pad_x * 2)
+                    mask_h = min(int(analysis["videoMeta"].get("height", 1920)), h + pad_y * 2)
+                    
+                    # Tìm xem OpenCV có phát hiện sub cũ nào trong khoảng thời gian câu sub này xuất hiện không
+                    matching_regions = [
+                        r for r in dynamic_regions 
+                        if not (r.get("endMs", 0) < item.start_ms or r.get("startMs", 0) > item.end_ms)
+                    ]
+                    
+                    if matching_regions:
+                        cx = int(matching_regions[0].get("centerX", analysis["videoMeta"].get("width", 1080) // 2))
+                        cy = int(matching_regions[0].get("centerY", analysis["videoMeta"].get("height", 1920) * 0.85))
+                    elif effective_subtitle_region.get("detected"):
+                        cx = int(effective_subtitle_region.get("x", 0)) + int(effective_subtitle_region.get("w", 0)) // 2
+                        cy = int(effective_subtitle_region.get("y", 0)) + int(effective_subtitle_region.get("h", 0)) // 2
+                    else:
+                        cx = int(analysis["videoMeta"].get("width", 1080)) // 2
+                        margin_v = effective_ass_margin_v(subtitle_preset, analysis["videoMeta"])
+                        cy = int(analysis["videoMeta"].get("height", 1920)) - margin_v - mask_h // 2
+                    
+                    x = max(cx - mask_w // 2, 0)
+                    y = max(cy - mask_h // 2, 0)
+                    
+                    synthesized_regions.append({
+                        "x": x,
+                        "y": y,
+                        "w": mask_w,
+                        "h": mask_h,
+                        "centerX": cx,
+                        "centerY": cy,
+                        "startMs": item.start_ms,
+                        "endMs": item.end_ms,
+                        "detected": True,
+                        "confidence": 1.0,
+                    })
+                dynamic_regions = synthesized_regions
+            else:
+                # Không phát hiện thấy sub cũ nào trong toàn bộ video -> Không che
+                dynamic_regions = []
+        
         cleanup_mode = resolve_source_subtitle_cleanup_mode(
             requested_cleanup_mode,
             subtitle_region=effective_subtitle_region,
             dynamic_regions=dynamic_regions,
         )
+        
+        subtitle_positions = build_stable_subtitle_positions(
+            display_subtitles,
+            dynamic_regions=dynamic_regions,
+            fallback_region=effective_subtitle_region,
+            video_meta=analysis["videoMeta"],
+        )
+        
         subtitle_ass_path.write_text(
             compose_ass(
                 display_subtitles,
                 video_meta=analysis["videoMeta"],
                 subtitle_preset=subtitle_preset,
+                subtitle_positions=subtitle_positions,
             ),
             encoding="utf-8",
         )

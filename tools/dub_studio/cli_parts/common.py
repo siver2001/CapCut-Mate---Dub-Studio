@@ -51,6 +51,7 @@ from ..render_utils import (
     effective_ass_font_size,
     effective_ass_margin_v,
     effective_ass_outline,
+    get_text_pixel_size,
     hex_to_ass_color,
     resolve_subtitle_region_for_position,
 )

@@ -86,18 +86,10 @@ def resolve_subtitle_region_for_position(
     region_w = max(min(int(resolved.get("w", fallback["w"])), width), 1)
     region_h = max(min(int(resolved.get("h", fallback["h"])), height), 1)
     x = max(min(int(resolved.get("x", fallback["x"])), max(width - region_w, 0)), 0)
-    if resolved.get("detected"):
+    if resolved.get("detected") or "y" in resolved:
         y = max(min(int(resolved.get("y", fallback["y"])), max(height - region_h, 0)), 0)
     else:
-        position_preset = str(subtitle_preset.get("positionPreset") or "bottom").strip().lower()
-        bottom_offset = max(int(subtitle_preset.get("bottomOffset", 54)), 12)
-        if position_preset == "top":
-            y = int(height * 0.08)
-        elif position_preset == "middle":
-            y = max((height - region_h) // 2, 0)
-        else:
-            y = max(height - region_h - bottom_offset, 0)
-        y = max(min(y, max(height - region_h, 0)), 0)
+        y = max(min(int(fallback["y"]), max(height - region_h, 0)), 0)
     margin_v = max(height - y - region_h, 0)
     return {
         **resolved,
@@ -149,6 +141,54 @@ def hex_to_ass_color(hex_color: str, alpha: float | None = None) -> str:
     return f"&H{alpha_hex}{blue}{green}{red}".upper()
 
 
+def get_text_pixel_size(text: str, font_name: str, font_size: int) -> tuple[int, int]:
+    try:
+        from PIL import ImageFont
+        font_paths = [
+            f"{font_name}.ttf",
+            f"C:/Windows/Fonts/{font_name}.ttf",
+            f"C:/Windows/Fonts/{font_name}bd.ttf",
+            f"C:/Windows/Fonts/Arial.ttf",
+        ]
+        font = None
+        for path in font_paths:
+            try:
+                font = ImageFont.truetype(path, font_size)
+                break
+            except Exception:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+            
+        lines = text.split(r"\N") if r"\N" in text else text.split("\n")
+        max_w = 0
+        total_h = 0
+        line_h = font_size
+        
+        for line in lines:
+            if hasattr(font, "getmask"):
+                bbox = font.getmask(line).getbbox()
+                if bbox:
+                    w = bbox[2] - bbox[0]
+                    h = bbox[3] - bbox[1]
+                    max_w = max(max_w, w)
+                    total_h += h
+                    line_h = max(line_h, h)
+                else:
+                    max_w = max(max_w, font_size * len(line) // 2)
+                    total_h += font_size
+            else:
+                max_w = max(max_w, font_size * len(line) // 2)
+                total_h += font_size
+                
+        if len(lines) > 1:
+            total_h += (len(lines) - 1) * int(line_h * 0.3)
+            
+        return max_w, total_h
+    except Exception:
+        return font_size * len(text) // 2, font_size
+
+
 def compose_ass(
     lines: list[SubtitleLine],
     *,
@@ -172,8 +212,6 @@ def compose_ass(
     outline_color = subtitle_preset.get("assOutlineColor") or hex_to_ass_color(subtitle_preset.get("strokeColor", "#000000"))
     outline = effective_ass_outline(int(subtitle_preset.get("strokeWidth", 2)), video_meta)
     box_enabled = bool(subtitle_preset.get("boxEnabled", False))
-    box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()
-    use_unified_box = box_enabled and box_layout_mode == "unified"
     box_fill_color = subtitle_preset.get("assBoxFillColor") or hex_to_ass_color(
         subtitle_preset.get("boxFillColor", "#77b8ee"),
         float(subtitle_preset.get("boxFillOpacity", 0.86)),
@@ -188,14 +226,12 @@ def compose_ass(
     )
     box_padding_x = max(int(subtitle_preset.get("boxPaddingX", 24)), 0)
     box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12)), 0)
-    box_shadow = (
-        effective_ass_outline(max(int(round((box_padding_x + box_padding_y) / 10)), 2), video_meta)
-        if use_unified_box
-        else 0
-    )
+    box_radius = max(int(subtitle_preset.get("boxRadius", 16)), 0)
+
     position_preset = str(subtitle_preset.get("positionPreset") or "bottom").strip().lower()
     alignment = 8 if position_preset == "top" else 5 if position_preset == "middle" else 2
     margin_v = effective_ass_margin_v(subtitle_preset, video_meta)
+    
     lines_out = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -208,25 +244,88 @@ def compose_ass(
         "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
         (
             f"Style: DubDefault,{ass_font_name},{font_size},{primary_color},{primary_color},"
-            f"{outline_color if use_unified_box else box_border_color if box_enabled else outline_color},"
-            f"{box_fill_color if box_enabled else '&H00000000'},"
-            f"{bold_flag},0,0,0,100,100,0,0,{3 if box_enabled else 1},"
-            f"{effective_ass_outline(box_padding_x, video_meta) if box_enabled else outline},{box_shadow},{alignment},0,0,{margin_v},1"
+            f"{outline_color},{outline_color},"
+            f"{bold_flag},0,0,0,100,100,0,0,1,"
+            f"{outline},0,{alignment},0,0,{margin_v},1"
         ),
+    ]
+
+    if box_enabled:
+        lines_out.append(
+            f"Style: DubBox,Arial,{font_size},{box_fill_color},{box_fill_color},"
+            f"{box_border_color},{box_border_color},"
+            f"0,0,0,0,100,100,0,0,1,"
+            f"{box_border_width},0,{alignment},0,0,{margin_v},1"
+        )
+
+    lines_out.extend([
         "",
         "[Events]",
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
-    ]
+    ])
+    
     subtitle_positions = subtitle_positions or []
+    res_x = int(video_meta.get('width', 1080))
+    res_y = int(video_meta.get('height', 1920))
+
     for idx, item in enumerate(lines):
+        content = escape_ass_text(item.content)
         position = subtitle_positions[idx] if idx < len(subtitle_positions) else None
-        pos_tag = ""
+        
+        w, h = get_text_pixel_size(content, ass_font_name, font_size)
+        
         if position:
-            pos_tag = rf"{{\an5\pos({int(position['centerX'])},{int(position['centerY'])})}}"
-        lines_out.append(
-            "Dialogue: 0,"
-            f"{format_ass_timestamp(item.start_ms)},"
-            f"{format_ass_timestamp(item.end_ms)},"
-            f"DubDefault,,0,0,0,,{pos_tag}{escape_ass_text(item.content)}"
-        )
+            cx = int(position['centerX'])
+            cy = int(position['centerY'])
+        else:
+            cx = res_x // 2
+            if alignment == 8:
+                cy = margin_v + h // 2
+            elif alignment == 5:
+                cy = res_y // 2
+            else:
+                cy = res_y - margin_v - h // 2
+
+        if box_enabled:
+            # Draw dynamic rounded rectangle vector at absolute coordinates
+            W = w + 2 * box_padding_x
+            H = h + 2 * box_padding_y
+            x1 = cx - w / 2 - box_padding_x
+            y1 = cy - h / 2 - box_padding_y
+            r = min(box_radius, int(min(W, H) / 2))
+            
+            # Bézier rounded rectangle path starting from (0, 0) up to (W, H)
+            box_commands = (
+                f"m {int(r)} 0 "
+                f"l {int(W - r)} 0 "
+                f"b {int(W - r/2)} 0 {int(W)} {int(r/2)} {int(W)} {int(r)} "
+                f"l {int(W)} {int(H - r)} "
+                f"b {int(W)} {int(H - r/2)} {int(W - r/2)} {int(H)} {int(W - r)} {int(H)} "
+                f"l {int(r)} {int(H)} "
+                f"b {int(r/2)} {int(H)} 0 {int(H - r/2)} 0 {int(H - r)} "
+                f"l 0 {int(r)} "
+                f"b 0 {int(r/2)} {int(r/2)} 0 {int(r)} 0"
+            )
+            
+            lines_out.append(
+                "Dialogue: 0,"
+                f"{format_ass_timestamp(item.start_ms)},"
+                f"{format_ass_timestamp(item.end_ms)},"
+                f"DubBox,,0,0,0,,{{\\an7\\pos({int(x1)},{int(y1)})\\p1}}{box_commands}{{\\p0}}"
+            )
+            
+            lines_out.append(
+                "Dialogue: 1,"
+                f"{format_ass_timestamp(item.start_ms)},"
+                f"{format_ass_timestamp(item.end_ms)},"
+                f"DubDefault,,0,0,0,,{{\\an5\\pos({cx},{cy})}}{content}"
+            )
+        else:
+            pos_tag = rf"{{\an5\pos({cx},{cy})}}"
+            lines_out.append(
+                "Dialogue: 0,"
+                f"{format_ass_timestamp(item.start_ms)},"
+                f"{format_ass_timestamp(item.end_ms)},"
+                f"DubDefault,,0,0,0,,{pos_tag}{content}"
+            )
     return "\n".join(lines_out) + "\n"

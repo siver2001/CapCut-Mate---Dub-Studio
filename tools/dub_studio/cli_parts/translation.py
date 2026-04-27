@@ -415,8 +415,10 @@ def _build_localization_prompt(
         "- If the source transcript is noisy, infer conservatively from nearby context and visible subject matter; do not invent new plot details.\n"
         "- Never output generic filler like 'đoạn này tiếp tục mô tả...' or vague placeholders.\n"
         "- Translate only sourceText. Use previousText/nextText/previousContext/nextContext to understand the ongoing conversation.\n"
-        "- Keep translatedText within maxSubtitleChars when possible.\n"
+        "- Keep translatedText within maxSubtitleChars when possible. However, NEVER cut sentences short or omit the final word(s). A grammatically complete and meaningful sentence is more important than length limits.\n"
+        "- Maintain strict pronoun and naming consistency for the same subject throughout the video (e.g., don't switch between 'anh', 'chú mèo' and 'nó' for the same subject).\n"
         "- Use appropriate Vietnamese pronouns (mình/cậu, anh/em, mọi người) based on the context and tone of the video.\n"
+        "- For cute, storytelling animal videos, use anthropomorphic pronouns (chú mèo đực, cô mèo cái, bác gấu). For factual/scientific nature documentaries, use neutral terms (con mèo đực, con đực, cá thể cái).\n"
         "- Do NOT add notes, markdown fences, or any text outside the JSON array.\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
@@ -424,22 +426,11 @@ def _build_localization_prompt(
 
 
 def should_review_machine_translation(item: dict[str, Any], translated_text: str) -> bool:
-    text = normalize_text(translated_text)
-    if not text:
+    # Luôn review toàn bộ bản dịch máy để đạt chất lượng văn phong thuyết minh cao nhất,
+    # đặc biệt với các video tài liệu động vật/khoa học hoặc ngôn ngữ phi Trung Quốc.
+    if not normalize_text(translated_text):
         return False
-    source = normalize_text(item.get("sourceText") or "")
-    word_count = len([part for part in text.split() if part])
-    if word_count <= 3 and len(text) <= 18 and text.count(",") == 0:
-        return False
-    if re.search(r"[?!…]|\.{3}", source):
-        return True
-    if word_count >= 6 or len(text) >= 28:
-        return True
-    if text.count(",") >= 1 or text.count(".") >= 1:
-        return True
-    if normalize_text(item.get("previousContext") or "") or normalize_text(item.get("nextContext") or ""):
-        return word_count >= 4
-    return False
+    return True
 
 
 def _compact_machine_review_item(
@@ -507,17 +498,17 @@ def _build_machine_review_prompt(
     source_language: str,
 ) -> str:
     return (
-        "You are a Vietnamese dialogue polisher for dubbed video.\n"
+        "You are an expert Vietnamese localization reviewer for short videos and documentaries.\n"
         f"Source language: {source_language or 'auto-detected language'}.\n"
-          "You will receive Microsoft-translated Vietnamese drafts plus nearby source context.\n"
-          "Your job is to produce the final Vietnamese translatedText. Keep the intended meaning, but if machineTranslatedText is literal, garbled, or nonsensical, correct it using sourceText and nearby context.\n"
+        "You will receive Microsoft-translated Vietnamese drafts plus nearby context.\n"
+        "Your job is to produce the final Vietnamese translatedText. If machineTranslatedText is stiff, literal, garbled, or nonsensical, rewrite it using sourceText and nearby context.\n"
         "\n"
         "CRITICAL RULES:\n"
         f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
-          "2. Every translatedText MUST be Vietnamese and must preserve the intended meaning of sourceText.\n"
-        "3. Keep wording simple, direct, and easy for Vietnamese listeners to follow immediately.\n"
-          "4. If machineTranslatedText is already natural, keep it close instead of rewriting aggressively.\n"
-          "5. Do NOT add new facts, explanations, or narration that are not in sourceText / machineTranslatedText.\n"
+        "2. Every translatedText MUST be Vietnamese and must preserve the exact intended meaning of sourceText.\n"
+        "3. For animal, nature, or science videos, use a professional, captivating, and natural Vietnamese documentary style.\n"
+        "4. For general videos, keep wording simple, engaging, and very easy for viewers to understand instantly.\n"
+        "5. Do NOT leave any untranslated words. Do NOT add explanations not present in the source material.\n"
         "6. delivery must be exactly one of: calm, neutral, curious, excited, urgent, suspense.\n"
         "7. Never output generic filler like 'đoạn này tiếp tục mô tả...' or any placeholder for unclear text.\n"
         "\n"
@@ -530,8 +521,9 @@ def _build_machine_review_prompt(
         "- Make the line flow naturally when read aloud.\n"
         "- Smooth broken phrases into a coherent spoken sentence when needed.\n"
         "- Fix obvious machine-translation artifacts, wrong idioms, and impossible phrases.\n"
-        "- Use context to keep pronouns and tone consistent across nearby lines.\n"
-        "- Stay within maxSpokenChars when reasonably possible.\n"
+        "- Use context to keep pronouns and tone consistent across nearby lines. Maintain strict pronoun and naming consistency for the same subject throughout the video.\n"
+        "- For cute, storytelling animal videos, use anthropomorphic pronouns (chú mèo đực, cô mèo cái, bác gấu). For factual/scientific nature documentaries, use neutral terms (con mèo đực, con đực, cá thể cái).\n"
+        "- Stay within maxSpokenChars when reasonably possible. However, NEVER leave a phrase incomplete or drop the last word(s). A fully coherent and grammatical sentence is strictly required.\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
