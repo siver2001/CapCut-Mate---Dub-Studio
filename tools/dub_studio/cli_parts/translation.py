@@ -38,7 +38,7 @@ def translate_via_microsoft(text: str, source_lang: str = "auto", target_lang: s
     if MICROSOFT_TRANSLATOR_REGION:
         headers["Ocp-Apim-Subscription-Region"] = MICROSOFT_TRANSLATOR_REGION
 
-    max_retries = 2
+    max_retries = 5
     for attempt in range(max_retries + 1):
         try:
             request = urllib.request.Request(url, data=request_body, headers=headers, method="POST")
@@ -46,12 +46,75 @@ def translate_via_microsoft(text: str, source_lang: str = "auto", target_lang: s
                 payload = json.loads(response.read().decode("utf-8"))
             translations = payload[0].get("translations", []) if isinstance(payload, list) and payload else []
             translated = normalize_text(translations[0].get("text") or "") if translations else ""
-            return translated
+            if translated:
+                return translated
+            if attempt < max_retries:
+                time.sleep(2.0)
+                continue
+            return ""
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                if attempt < max_retries:
+                    time.sleep(4.0 * (attempt + 1))
+                    continue
+            elif attempt < max_retries:
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            return ""
+        except Exception:
+            if attempt < max_retries:
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            return ""
+    return ""
+
+
+def translate_via_google_free(text: str, source_lang: str = "auto", target_lang: str = "vi") -> str:
+    clean_text = normalize_text(text)
+    if not clean_text:
+        return ""
+    
+    sl = source_lang if source_lang and source_lang.lower() != "auto" else "auto"
+    tl = target_lang or "vi"
+    
+    query_params = {
+        "client": "gtx",
+        "sl": sl,
+        "tl": tl,
+        "dt": "t",
+        "q": clean_text
+    }
+    url = f"https://translate.googleapis.com/translate_a/single?{urllib.parse.urlencode(query_params)}"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+    
+    max_retries = 5
+    for attempt in range(max_retries + 1):
+        try:
+            request = urllib.request.Request(url, headers=headers, method="GET")
+            with urllib.request.urlopen(request, timeout=10.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            
+            if isinstance(payload, list) and len(payload) > 0 and isinstance(payload[0], list):
+                translated_parts = []
+                for chunk in payload[0]:
+                    if isinstance(chunk, list) and len(chunk) > 0 and chunk[0]:
+                        translated_parts.append(str(chunk[0]))
+                if translated_parts:
+                    return normalize_text("".join(translated_parts))
+            
+            return ""
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            time.sleep(1.0 * (attempt + 1))
         except Exception:
             if attempt < max_retries:
                 time.sleep(1.0 * (attempt + 1))
                 continue
-            return ""
     return ""
 
 
@@ -394,32 +457,27 @@ def _build_localization_prompt(
     target_language: str,
 ) -> str:
     return (
-        "You are a professional Vietnamese subtitle translator.\n"
+        "You are an elite Vietnamese subtitle translator and expert localization editor.\n"
         f"Source language: {source_language or 'auto-detected language'}. Target language: Vietnamese ({target_language}).\n"
         "\n"
-        "CRITICAL RULES (violation = failure):\n"
+        "CRITICAL OUTPUT RULES:\n"
         f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
-        "2. EVERY translatedText MUST be in Vietnamese. NEVER echo back the source language.\n"
-        "3. If the sourceText is a single word, interjection, or very short phrase, still translate it into Vietnamese.\n"
-        "4. Do NOT leave any field in the source language (Chinese, Japanese, Korean, English, etc.).\n"
+        "2. Do NOT include markdown, notes, explanations, comments, or any text outside the JSON array.\n"
+        "3. Every translatedText MUST be in Vietnamese. Never echo the source language, except proper names, brands, or places.\n"
+        "4. Translate every sourceText, including single words, short phrases, reactions, interjections, slang, jokes, and idioms.\n"
+        "5. Do NOT leave meaningful source-language words untranslated.\n"
         "\n"
         "Each item must be a JSON object with exactly these keys:\n"
-        '- "translatedText": the Vietnamese subtitle text — concise, natural, instantly understandable.\n'
+        '- "translatedText": natural, concise, captivating Vietnamese subtitle text.\n'
         '- "delivery": exactly one of: calm, neutral, curious, excited, urgent, suspense.\n'
         "\n"
-        "Translation quality rules:\n"
-        "- Semantic fidelity first, but adapt the sentence structure to flow naturally in spoken Vietnamese.\n"
-        "- Do NOT translate literally word-for-word. Rephrase idioms, slang, and jokes into natural Vietnamese equivalents.\n"
-        "- Make translatedText readable as both subtitle and voiceover; this one field is the single source for both.\n"
-        "- If the source is a fragmented sentence, smooth it out so it makes sense to the listener.\n"
-        "- If the source transcript is noisy, infer conservatively from nearby context and visible subject matter; do not invent new plot details.\n"
-        "- Never output generic filler like 'đoạn này tiếp tục mô tả...' or vague placeholders.\n"
-        "- Translate only sourceText. Use previousText/nextText/previousContext/nextContext to understand the ongoing conversation.\n"
-        "- Keep translatedText within maxSubtitleChars when possible. However, NEVER cut sentences short or omit the final word(s). A grammatically complete and meaningful sentence is more important than length limits.\n"
-        "- Maintain strict pronoun and naming consistency for the same subject throughout the video (e.g., don't switch between 'anh', 'chú mèo' and 'nó' for the same subject).\n"
-        "- Use appropriate Vietnamese pronouns (mình/cậu, anh/em, mọi người) based on the context and tone of the video.\n"
-        "- For cute, storytelling animal videos, use anthropomorphic pronouns (chú mèo đực, cô mèo cái, bác gấu). For factual/scientific nature documentaries, use neutral terms (con mèo đực, con đực, cá thể cái).\n"
-        "- Do NOT add notes, markdown fences, or any text outside the JSON array.\n"
+        "LOCALIZATION & WRITING EXCELLENCE RULES:\n"
+        "- AVOID ROBOTIC TRANSLATIONS: Translate by meaning and emotion, not word-for-word. Rewrite naturally in spoken Vietnamese.\n"
+        "- STORYTELLING STYLE: Write with the smooth, captivating tone of professional voice actors and content creators.\n"
+        "- COLLOQUIAL & TRENDY: Rephrase idioms, slang, jokes, sarcasm, and memes into natural, modern Vietnamese equivalents organically.\n"
+        "- EMOTIONAL RESONANCE: Choose Vietnamese pronouns naturally based on relationship, age, and tone: mình/cậu, anh/em, tao/mày, chú mèo, cô mèo, anh bạn nhỏ...\n"
+        "- PRONOUN CONSISTENCY: Keep pronouns and names strictly consistent across all items for the same subject.\n"
+        "- CONTEXT AWARE: Smooth out fragmented or noisy transcripts using nearby context conservatively without cutting off essential words.\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
@@ -498,32 +556,26 @@ def _build_machine_review_prompt(
     source_language: str,
 ) -> str:
     return (
-        "You are an expert Vietnamese localization reviewer for short videos and documentaries.\n"
+        "You are an expert Vietnamese localization reviewer for short videos and storytelling content.\n"
         f"Source language: {source_language or 'auto-detected language'}.\n"
-        "You will receive Microsoft-translated Vietnamese drafts plus nearby context.\n"
-        "Your job is to produce the final Vietnamese translatedText. If machineTranslatedText is stiff, literal, garbled, or nonsensical, rewrite it using sourceText and nearby context.\n"
+        "Your job is to take Microsoft-translated drafts and rewrite them into exceptional, highly natural, and smooth spoken Vietnamese.\n"
         "\n"
-        "CRITICAL RULES:\n"
+        "CRITICAL OUTPUT RULES:\n"
         f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
-        "2. Every translatedText MUST be Vietnamese and must preserve the exact intended meaning of sourceText.\n"
-        "3. For animal, nature, or science videos, use a professional, captivating, and natural Vietnamese documentary style.\n"
-        "4. For general videos, keep wording simple, engaging, and very easy for viewers to understand instantly.\n"
-        "5. Do NOT leave any untranslated words. Do NOT add explanations not present in the source material.\n"
-        "6. delivery must be exactly one of: calm, neutral, curious, excited, urgent, suspense.\n"
-        "7. Never output generic filler like 'đoạn này tiếp tục mô tả...' or any placeholder for unclear text.\n"
+        "2. Do NOT include markdown, notes, explanations, comments, or any text outside the JSON array.\n"
+        "3. Every translatedText MUST be in Vietnamese. Fix weird machine artifacts. Never echo the source language untranslated.\n"
         "\n"
         "Each output item must be a JSON object with exactly these keys:\n"
-        '- "translatedText": rewritten Vietnamese used for both subtitles and TTS.\n'
-        '- "delivery": one of calm, neutral, curious, excited, urgent, suspense.\n'
+        '- "translatedText": natural, smooth, highly engaging Vietnamese text.\n'
+        '- "delivery": exactly one of: calm, neutral, curious, excited, urgent, suspense.\n'
         "\n"
-        "Style rules:\n"
-        "- Prefer everyday Vietnamese over literal or stiff wording.\n"
-        "- Make the line flow naturally when read aloud.\n"
-        "- Smooth broken phrases into a coherent spoken sentence when needed.\n"
-        "- Fix obvious machine-translation artifacts, wrong idioms, and impossible phrases.\n"
-        "- Use context to keep pronouns and tone consistent across nearby lines. Maintain strict pronoun and naming consistency for the same subject throughout the video.\n"
-        "- For cute, storytelling animal videos, use anthropomorphic pronouns (chú mèo đực, cô mèo cái, bác gấu). For factual/scientific nature documentaries, use neutral terms (con mèo đực, con đực, cá thể cái).\n"
-        "- Stay within maxSpokenChars when reasonably possible. However, NEVER leave a phrase incomplete or drop the last word(s). A fully coherent and grammatical sentence is strictly required.\n"
+        "LOCALIZATION & WRITING EXCELLENCE RULES:\n"
+        "- AVOID ROBOTIC TRANSLATIONS: Fix stiff machine translation artifacts. Rephrase word-for-word equivalents into natural Vietnamese expressions.\n"
+        "- STORYTELLING STYLE: Write with the smooth, emotional cadence of content creators and professional voice actors.\n"
+        "- COLLOQUIAL & TRENDY: Rephrase machine idioms, slang, jokes, and sarcasm into organic Vietnamese equivalents.\n"
+        "- EMOTIONAL RESONANCE: Choose relational pronouns naturally (tớ, cậu, anh, em, chú mèo, anh bạn nhỏ...) to engage viewers.\n"
+        "- PRONOUN CONSISTENCY: Keep pronouns perfectly matching and consistent for the same character across nearby lines.\n"
+        "- CONTEXT AWARE: Smooth broken transcript gaps into coherent spoken sentences without dropping final words.\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
@@ -994,10 +1046,19 @@ def fallback_translate_items(
             pass
     localized_items: list[dict[str, str]] = []
     for text, source_item in zip(texts, batch):
+        translated = ""
         try:
-            translated = translate_via_microsoft(text, source_hint, "vi") if text else ""
+            if MICROSOFT_TRANSLATOR_KEY:
+                translated = translate_via_microsoft(text, source_hint, "vi") if text else ""
         except Exception:
             translated = ""
+            
+        if not translated:
+            try:
+                translated = translate_via_google_free(text, source_hint, "vi") if text else ""
+            except Exception:
+                translated = ""
+
         source_text = source_item.get("sourceText") or ""
         translated_seed = pick_best_localized_text(
             translated,
@@ -1125,7 +1186,7 @@ def review_machine_batch_via_ollama_resilient(
                 phase=phase,
                 step="translate",
                 progress=progress_hint,
-                message=f"Gemma chậm ở cụm {label}, đang tách nhỏ để tránh đứng tiến trình",
+                message=f"Ollama chậm ở cụm {label}, đang tách nhỏ để tránh đứng tiến trình",
             )
             midpoint = max(len(batch) // 2, 1)
             left = review_machine_batch_via_ollama_resilient(
@@ -1149,7 +1210,7 @@ def review_machine_batch_via_ollama_resilient(
             phase=phase,
             step="translate",
             progress=progress_hint,
-            message=f"Gemma lỗi ở cụm {label}, đang fallback cục bộ cho cụm này",
+            message=f"Ollama lỗi ở cụm {label}, đang fallback cục bộ cho cụm này",
             extra={"warning": normalize_text(str(exc))[:180]},
         )
         if llama_cpp_available:
@@ -1644,10 +1705,15 @@ def translate_segments(
                 or _looks_like_source_language(forced_text, source_text)
                 or _looks_like_placeholder_translation(forced_text)
             ):
-                raise RuntimeError(
-                    f"Không dịch được câu {position}/{len(segments)} đủ an toàn để lồng tiếng. "
-                    "Dừng render thay vì tạo câu thoại vô nghĩa."
+                emit_progress(
+                    phase=phase,
+                    step="translate",
+                    progress=0.45,
+                    message=f"Bỏ qua câu {position}/{len(segments)} do không dịch được an toàn",
+                    extra={"warning": f"Translation failed for segment {position}"}
                 )
+                forced_text = "[...]"
+                
             delivery = normalize_delivery_choice(
                 item.get("delivery"),
                 default=infer_delivery_from_source(source_text, forced_text),

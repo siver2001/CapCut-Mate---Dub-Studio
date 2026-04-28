@@ -286,7 +286,9 @@ class WindowWorkflowMixin:
 
     def _resolve_output_directory(self, raw_path: str | None = None) -> Path:
         raw_value = str(raw_path or "").strip()
-        output_dir = Path(raw_value).expanduser() if raw_value else DEFAULT_OUTPUT_DIR
+        if not raw_value:
+            raise RuntimeError("Vui lòng chọn 'Thư mục output' trước khi render.")
+        output_dir = Path(raw_value).expanduser()
         if output_dir.exists() and not output_dir.is_dir():
             raise RuntimeError(
                 f"Đường dẫn output đang trỏ tới một file, không phải thư mục:\n{output_dir}"
@@ -775,7 +777,7 @@ class WindowWorkflowMixin:
         ollama_url = env_data.get("DUB_OLLAMA_BASE_URL") or os.getenv("DUB_OLLAMA_BASE_URL", "http://localhost:11434")
         self.conf_ollama_url_edit.setText(ollama_url)
 
-        ollama_model = env_data.get("DUB_OLLAMA_MODEL") or os.getenv("DUB_OLLAMA_MODEL", "qwen3:4b")
+        ollama_model = env_data.get("DUB_OLLAMA_MODEL") or os.getenv("DUB_OLLAMA_MODEL", "qwen3.5:4b")
         self.conf_ollama_model_edit.setText(ollama_model)
 
         hf_token = env_data.get("HF_TOKEN") or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN", "")
@@ -783,6 +785,19 @@ class WindowWorkflowMixin:
 
         hf_cache = env_data.get("DUB_HF_CACHE_DIR") or os.getenv("DUB_HF_CACHE_DIR") or str(ROOT / "temp" / ".cache" / "huggingface" / "hub")
         self.conf_hf_cache_edit.setText(hf_cache)
+
+        # Read-only encoding parameters
+        x264_crf = env_data.get("DUB_VIDEO_X264_CRF") or os.getenv("DUB_VIDEO_X264_CRF", "18")
+        self.conf_x264_crf_edit.setText(x264_crf)
+        
+        x264_preset = env_data.get("DUB_VIDEO_X264_PRESET") or os.getenv("DUB_VIDEO_X264_PRESET", "slow")
+        self.conf_x264_preset_edit.setText(x264_preset)
+        
+        nvenc_cq = env_data.get("DUB_VIDEO_NVENC_CQ") or os.getenv("DUB_VIDEO_NVENC_CQ", "18")
+        self.conf_nvenc_cq_edit.setText(nvenc_cq)
+        
+        nvenc_preset = env_data.get("DUB_VIDEO_NVENC_PRESET") or os.getenv("DUB_VIDEO_NVENC_PRESET", "p7")
+        self.conf_nvenc_preset_edit.setText(nvenc_preset)
 
     def save_system_config(self) -> None:
         import os
@@ -1440,9 +1455,14 @@ class WindowWorkflowMixin:
         self.settings["introHook"]["useBackgroundAudio"] = (
             self.intro_background_check.isChecked()
         )
-        self.settings["introHook"]["backgroundVolume"] = float(
-            self.intro_background_volume_spin.value()
-        )
+        intro_bg_vol_slider = getattr(self, "main_intro_background_volume_spin" if is_page_0 else "intro_background_volume_spin", None)
+        if intro_bg_vol_slider is not None:
+            slider_val = intro_bg_vol_slider.value()
+            self.settings["introHook"]["backgroundVolume"] = slider_val / 100.0
+            if hasattr(self, "intro_background_volume_label"):
+                self.intro_background_volume_label.setText(f"{slider_val}%")
+            if hasattr(self, "main_intro_background_volume_label"):
+                self.main_intro_background_volume_label.setText(f"{slider_val}%")
         self.settings["keepOriginalAudio"] = get_check_val(getattr(self, "main_keep_original_audio_check", None), self.keep_original_audio_check)
         
         bg_music = self.settings.setdefault("backgroundMusic", {})
@@ -1471,6 +1491,7 @@ class WindowWorkflowMixin:
 
         self.settings["outputTargets"]["mp4"] = self.output_mp4_check.isChecked()
         self.settings["outputTargets"]["draft"] = self.output_draft_check.isChecked()
+        self.settings["outputRatio"] = get_combo_val(getattr(self, "main_output_ratio_combo", None), getattr(self, "output_ratio_combo", None)) or "9:16"
         output_directory = self.output_dir_edit.text().strip()
         if not output_directory and hasattr(self, "output_folder_quick_edit"):
             output_directory = self.output_folder_quick_edit.text().strip()
@@ -1520,6 +1541,7 @@ class WindowWorkflowMixin:
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
             "sourceSubtitleCleanupMode": self.settings["sourceSubtitleCleanupMode"],
             "outputTargets": copy.deepcopy(self.settings["outputTargets"]),
+            "outputRatio": self.settings.get("outputRatio", "9:16"),
             "timingMode": self.settings["timingMode"],
             "videoCodecMode": self.settings.get("videoCodecMode", "gpu_preferred"),
             "keepOriginalAudio": self.settings["keepOriginalAudio"],
@@ -1662,6 +1684,7 @@ class WindowWorkflowMixin:
             self.keep_original_audio_check,
             self.output_mp4_check,
             self.output_draft_check,
+            getattr(self, "output_ratio_combo", None),
             self.output_dir_edit,
             self.draft_dir_edit,
             self.region_x_spin,
@@ -1685,13 +1708,15 @@ class WindowWorkflowMixin:
             "main_intro_voice_combo", "main_intro_background_check",
             "main_intro_background_volume_spin", "main_keep_original_audio_check",
             "background_music_enabled_check", "main_background_music_enabled_check",
-            "background_music_volume_spin", "main_background_music_volume_spin"
+            "background_music_volume_spin", "main_background_music_volume_spin",
+            "main_output_ratio_combo"
         ):
             widget = getattr(self, optional_name, None)
             if widget is not None:
                 widgets.append(widget)
         for widget in widgets:
-            widget.blockSignals(True)
+            if widget is not None:
+                widget.blockSignals(True)
         self._set_combo_value(
             self.source_language_combo, self.settings["sourceLanguage"]
         )
@@ -1793,9 +1818,18 @@ class WindowWorkflowMixin:
         self.intro_background_check.setChecked(
             bool(self.settings["introHook"]["useBackgroundAudio"])
         )
-        self.intro_background_volume_spin.setValue(
-            float(self.settings["introHook"]["backgroundVolume"])
-        )
+        intro_bg_vol = float(self.settings.get("introHook", {}).get("backgroundVolume", 0.30))
+        intro_bg_slider_val = int(intro_bg_vol * 100.0)
+        
+        for attr in ("intro_background_volume_spin", "main_intro_background_volume_spin"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setValue(intro_bg_slider_val)
+                
+        if hasattr(self, "intro_background_volume_label"):
+            self.intro_background_volume_label.setText(f"{intro_bg_slider_val}%")
+        if hasattr(self, "main_intro_background_volume_label"):
+            self.main_intro_background_volume_label.setText(f"{intro_bg_slider_val}%")
         self.keep_original_audio_check.setChecked(
             bool(self.settings["keepOriginalAudio"])
         )
@@ -1803,6 +1837,10 @@ class WindowWorkflowMixin:
         self.output_draft_check.setChecked(
             bool(self.settings["outputTargets"]["draft"])
         )
+        if hasattr(self, "output_ratio_combo"):
+            self._set_combo_value(self.output_ratio_combo, self.settings.get("outputRatio", "9:16"))
+        if hasattr(self, "main_output_ratio_combo"):
+            self._set_combo_value(self.main_output_ratio_combo, self.settings.get("outputRatio", "9:16"))
         
         bg_music = self.settings.get("backgroundMusic", {})
         bg_enabled = bool(bg_music.get("enabled", False))
@@ -1858,7 +1896,8 @@ class WindowWorkflowMixin:
         self._set_combo_value(self.watermark_position_combo, watermark.get("position", "top-right"))
         self.watermark_scale_slider.setValue(int(watermark.get("scale", 0.15) * 100))
         for widget in widgets:
-            widget.blockSignals(False)
+            if widget is not None:
+                widget.blockSignals(False)
         self.font_size_value.setText(f"{self.settings['subtitlePreset']['fontSize']}px")
         self.blur_value.setText(
             f"{self.settings['subtitlePreset']['cleanupBlurStrength']}px"

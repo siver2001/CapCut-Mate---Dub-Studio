@@ -200,7 +200,6 @@ def expand_cleanup_region_for_render(
 ) -> dict[str, int]:
     width = int(video_meta.get("width") or 1080)
     height = int(video_meta.get("height") or 1920)
-    font_size = effective_ass_font_size(subtitle_preset, video_meta)
     region_w = max(int(region.get("w", 0)), 1)
     region_h = max(int(region.get("h", 0)), 1)
     center_x = int(region.get("centerX", int(region.get("x", 0)) + region_w // 2))
@@ -231,6 +230,7 @@ def burn_subtitles(
     subtitle_preset: dict[str, Any],
     dynamic_regions: list[dict[str, Any]] | None = None,
     use_ass: bool = False,
+    output_ratio: str = "original",
 ) -> None:
     codec, codec_args = choose_video_codec()
     source_video_meta = get_video_meta(video_path)
@@ -267,10 +267,6 @@ def burn_subtitles(
     box_border_color = subtitle_preset.get("assBoxBorderColor") or hex_to_ass_color(
         subtitle_preset.get("boxBorderColor", "#3b82f6"),
         float(subtitle_preset.get("boxBorderOpacity", 1.0)),
-    )
-    box_border_width = effective_ass_outline(
-        int(subtitle_preset.get("boxBorderWidth", 2)),
-        source_video_meta,
     )
     box_shadow = (
         effective_ass_outline(
@@ -411,6 +407,12 @@ def burn_subtitles(
             command, filter_arg, video_filter, video_map, watermark_opts, get_video_meta(video_path)
         )
         command[command.index("-map") + 1] = video_map
+
+    if output_ratio and output_ratio != "original":
+        filter_arg, video_filter, video_map = apply_aspect_ratio_to_ffmpeg_command(
+            filter_arg, video_filter, video_map, output_ratio
+        )
+        command[command.index("-map") + 1] = video_map
         
     temp_script_path: Path | None = None
     if filter_arg == "-filter_complex" and len(video_filter) > 3500:
@@ -497,6 +499,7 @@ def render_intro_hook(
     background_music_path: Path | None = None,
     background_music_volume: float = 0.0,
     dynamic_regions: list[dict[str, Any]] | None = None,
+    output_ratio: str = "original",
 ) -> dict[str, Any]:
     video_duration_ms = int(video_meta.get("durationMs", 0))
     clip_window = select_intro_hook_window(
@@ -629,9 +632,10 @@ def render_intro_hook(
             subtitle_preset=subtitle_preset,
             dynamic_regions=intro_dynamic_regions,
             use_ass=True,
+            output_ratio=output_ratio,
         )
     else:
-        mux_video_with_audio(video_path=clip_path, audio_path=mixed_intro_audio, output_path=teaser_output_path)
+        mux_video_with_audio(video_path=clip_path, audio_path=mixed_intro_audio, output_path=teaser_output_path, output_ratio=output_ratio)
     return {
         "enabled": True,
         "text": intro_text,
@@ -730,8 +734,6 @@ def apply_watermark_to_ffmpeg_command(
     watermark_path = Path(watermark_options["path"])
     if not watermark_path.exists():
         return filter_arg, video_filter, video_map
-        
-    watermark_input_index = command.index("-i") + 2  # Find next available index. We know command has at least 2 inputs.
     # Actually, command input index calculation is safer if we just count '-i'
     input_count = command.count("-i")
     watermark_idx = input_count
@@ -753,7 +755,7 @@ def apply_watermark_to_ffmpeg_command(
     else: # bottom-right
         overlay_pos = f"W-w-{margin}:H-h-{margin}"
 
-    wm_filter = f"[{watermark_idx}:v]scale={wm_w}:-1[wm];"
+    wm_filter = f"[{watermark_idx}:v]scale={wm_w}:-1,format=rgba[wm];"
     
     if filter_arg == "-vf":
         # Convert -vf to -filter_complex
@@ -774,13 +776,56 @@ def apply_watermark_to_ffmpeg_command(
         
     return filter_arg, video_filter, video_map
 
+def apply_aspect_ratio_to_ffmpeg_command(
+    filter_arg: str,
+    video_filter: str,
+    video_map: str,
+    output_ratio: str
+) -> tuple[str, str, str]:
+    if output_ratio == "original" or not output_ratio:
+        return filter_arg, video_filter, video_map
+    
+    is_dynamic = output_ratio.endswith("_dynamic")
+    base_ratio = output_ratio.replace("_dynamic", "")
+    
+    ratio_map = {
+        "9:16": (9, 16),
+        "16:9": (16, 9),
+        "1:1": (1, 1),
+    }
+    
+    if is_dynamic:
+        num, den = ratio_map.get(base_ratio, (9, 16))
+        A = num / den
+        # We calculate the padded width/height dynamically based on iw/ih
+        pad_filter = f"pad='ceil(max(iw, ih*({A}))/2)*2':'ceil(max(ih, iw/({A}))/2)*2':(ow-iw)/2:(oh-ih)/2:black"
+        scale_pad_filter = pad_filter
+    else:
+        fixed_ratio_map = {
+            "9:16": ("1080", "1920"),
+            "16:9": ("1920", "1080"),
+            "1:1": ("1080", "1080"),
+        }
+        target_w, target_h = fixed_ratio_map.get(base_ratio, ("1080", "1920"))
+        scale_pad_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black"
+    
+    if filter_arg == "-vf":
+        video_filter = f"{video_filter},{scale_pad_filter}"
+    else:
+        old_out = video_map.strip("[]")
+        video_filter = f"{video_filter};[{old_out}]{scale_pad_filter}[vout_ratio]"
+        video_map = "[vout_ratio]"
+        
+    return filter_arg, video_filter, video_map
+
 def mux_video_with_audio(
     *, 
     video_path: Path, 
     audio_path: Path, 
     output_path: Path,
     watermark_options: dict[str, Any] | None = None,
-    video_meta: dict[str, Any] | None = None
+    video_meta: dict[str, Any] | None = None,
+    output_ratio: str = "original",
 ) -> None:
     codec, codec_args = choose_video_codec()
     target_duration_seconds = max(ffprobe_duration_ms(video_path) / 1000, 0.1)
@@ -799,10 +844,16 @@ def mux_video_with_audio(
     
     if watermark_options and watermark_options.get("enabled"):
         filter_arg, video_filter, video_map = apply_watermark_to_ffmpeg_command(
-            command, "-vf", "null", "0:v:0", watermark_options, video_meta
+            command, filter_arg, video_filter, video_map, watermark_options, video_meta
         )
+
+    if output_ratio and output_ratio != "original":
+        filter_arg, video_filter, video_map = apply_aspect_ratio_to_ffmpeg_command(
+            filter_arg, video_filter, video_map, output_ratio
+        )
+        
+    if video_filter != "null":
         map_idx = command.index("-map")
-        # Replace the first map (video)
         command[map_idx+1] = video_map
         command.insert(map_idx, video_filter)
         command.insert(map_idx, filter_arg)
@@ -884,7 +935,6 @@ def apply_sticker_overlay(
     video_meta = get_video_meta(input_video_path)
     width = int(video_meta.get("width", 1920))
     height = int(video_meta.get("height", 1080))
-    duration_ms = int(video_meta.get("durationMs", 0) or 0)
 
     # Get sticker dimensions
     sticker_meta = get_video_meta(cached_path) if ext == "gif" else {}
@@ -1348,7 +1398,6 @@ def do_analyze(
         language=None,
     )
     
-    merged_segments = whisperx_analysis.get("mergedSegments")
     sample_paths: dict[str, Path] = {}
 
     raw_subtitles = whisperx_analysis["rawSubtitles"]
@@ -1731,6 +1780,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     source_language = render_options.get("sourceLanguage") or analysis.get("sourceLanguage") or "zh"
     target_language = render_options.get("targetLanguage") or analysis.get("targetLanguage") or "vi"
     output_targets = render_options.get("outputTargets") or {"mp4": True, "draft": False}
+    output_ratio = render_options.get("outputRatio") or "9:16"
     subtitle_enabled = bool(subtitle_preset.get("enabled", True))
     effective_subtitle_region = resolve_subtitle_region_for_position(
         analysis["videoMeta"],
@@ -1969,9 +2019,10 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 subtitle_preset=subtitle_preset,
                 dynamic_regions=dynamic_regions,
                 use_ass=True,
+                output_ratio=output_ratio,
             )
         else:
-            mux_video_with_audio(video_path=input_path, audio_path=mixed_audio_path, output_path=main_render_path, watermark_options=subtitle_preset.get("watermarkOptions"), video_meta=analysis["videoMeta"])
+            mux_video_with_audio(video_path=input_path, audio_path=mixed_audio_path, output_path=main_render_path, watermark_options=subtitle_preset.get("watermarkOptions"), video_meta=analysis["videoMeta"], output_ratio=output_ratio)
 
     if intro_hook.get("enabled", False) and main_render_path is not None:
         emit_progress(phase="render", step="intro_hook", progress=0.86, message="Đang tạo intro hook tự động")
@@ -1992,6 +2043,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 background_music_path=background_music_path,
                 background_music_volume=background_music_volume,
                 dynamic_regions=dynamic_regions,
+                output_ratio=output_ratio,
             )
             flattened_render_path = dirs["render"] / f"{Path(input_path).stem}_dubstudio.mp4"
             concat_rendered_videos(Path(intro_result["videoPath"]), main_render_path, flattened_render_path)

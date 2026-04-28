@@ -67,7 +67,7 @@ OLLAMA_WINGET_ID = env_value("DUB_OLLAMA_WINGET_ID", default="Ollama.Ollama")
 LLAMA_CPP_MODEL_URL = env_value("DUB_LLAMA_CPP_MODEL_URL", default="")
 
 DUB_TRANSCRIBE_PROVIDER = env_value("DUB_TRANSCRIBE_PROVIDER", default="auto").lower()
-DUB_TRANSLATE_PROVIDER = env_value("DUB_TRANSLATE_PROVIDER", default="auto").lower()
+DUB_TRANSLATE_PROVIDER = env_value("DUB_TRANSLATE_PROVIDER", default="ollama").lower()
 MICROSOFT_TRANSLATOR_KEY = env_value(
     "DUB_MICROSOFT_TRANSLATOR_KEY",
     "MICROSOFT_TRANSLATOR_KEY",
@@ -94,7 +94,7 @@ MICROSOFT_TRANSLATOR_TIMEOUT = max(
     5,
 )
 DUB_USE_GPU = env_bool("DUB_USE_GPU", default=True)
-DUB_USE_VIENEU = env_bool("DUB_USE_VIENEU", default=False)
+DUB_USE_VIENEU = env_bool("DUB_USE_VIENEU", default=True)
 DUB_USE_VALTEC = env_bool("DUB_USE_VALTEC", default=True)
 DUB_VALTEC_PRELOAD_ZEROSHOT = env_bool("DUB_VALTEC_PRELOAD_ZEROSHOT", default=True)
 DUB_TTS_ENABLE_PARALLEL = env_bool("DUB_TTS_ENABLE_PARALLEL", default=True)
@@ -121,14 +121,14 @@ LLAMA_CPP_THREADS = max(
 LLAMA_CPP_N_GPU_LAYERS = int(env_value("DUB_LLAMA_CPP_N_GPU_LAYERS", default=("999" if DUB_USE_GPU else "0")))
 LLAMA_CPP_TEMP = float(env_value("DUB_LLAMA_CPP_TEMP", default="0.2"))
 OLLAMA_BASE_URL = env_value("DUB_OLLAMA_BASE_URL", default="http://localhost:11434").rstrip("/")
-OLLAMA_MODEL = env_value("DUB_OLLAMA_MODEL", default="qwen3:4b")
-OLLAMA_CTX = max(int(env_value("DUB_OLLAMA_CTX", default="4096")), 1024)
-OLLAMA_TEMP = float(env_value("DUB_OLLAMA_TEMP", default="0.25"))
-OLLAMA_TIMEOUT = int(env_value("DUB_OLLAMA_TIMEOUT", default="120"))
-OLLAMA_MAX_TIMEOUT = max(int(env_value("DUB_OLLAMA_MAX_TIMEOUT", default="300")), OLLAMA_TIMEOUT)
-OLLAMA_KEEP_ALIVE = env_value("DUB_OLLAMA_KEEP_ALIVE", default="30m")
+OLLAMA_MODEL = env_value("DUB_OLLAMA_MODEL", default="qwen3.5:4b")
+OLLAMA_CTX = max(int(env_value("DUB_OLLAMA_CTX", default="8192")), 1024)
+OLLAMA_TEMP = float(env_value("DUB_OLLAMA_TEMP", default="0.30"))
+OLLAMA_TIMEOUT = int(env_value("DUB_OLLAMA_TIMEOUT", default="150"))
+OLLAMA_MAX_TIMEOUT = max(int(env_value("DUB_OLLAMA_MAX_TIMEOUT", default="420")), OLLAMA_TIMEOUT)
+OLLAMA_KEEP_ALIVE = env_value("DUB_OLLAMA_KEEP_ALIVE", default="5m")
 OLLAMA_WARMUP = env_bool("DUB_OLLAMA_WARMUP", default=True)
-OLLAMA_WARMUP_TIMEOUT = max(int(env_value("DUB_OLLAMA_WARMUP_TIMEOUT", default="90")), 15)
+OLLAMA_WARMUP_TIMEOUT = max(int(env_value("DUB_OLLAMA_WARMUP_TIMEOUT", default="120")), 15)
 EDGE_TTS_TIMEOUT = max(int(env_value("DUB_EDGE_TTS_TIMEOUT", default="45")), 10)
 EDGE_TTS_CONCURRENCY = max(
     int(
@@ -162,7 +162,7 @@ TRANSLATE_FIRST_BATCH_SIZE = max(
     int(env_value("DUB_TRANSLATE_FIRST_BATCH_SIZE", default=str(min(TRANSLATE_BATCH_SIZE, 4)))),
     1,
 )
-OLLAMA_TOKENS_PER_ITEM = max(int(env_value("DUB_OLLAMA_TOKENS_PER_ITEM", default="160")), 96)
+OLLAMA_TOKENS_PER_ITEM = max(int(env_value("DUB_OLLAMA_TOKENS_PER_ITEM", default="256")), 96)
 OLLAMA_TOKENS_MIN = max(int(env_value("DUB_OLLAMA_TOKENS_MIN", default="320")), 128)
 LLAMA_CPP_TIMEOUT = max(int(env_value("DUB_LLAMA_CPP_TIMEOUT", default="180")), 30)
 WHISPERX_MODEL = env_value("DUB_WHISPERX_MODEL", "WHISPERX_MODEL", default="large-v3") or "large-v3"

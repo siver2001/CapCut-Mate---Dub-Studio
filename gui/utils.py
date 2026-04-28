@@ -654,7 +654,7 @@ def default_settings() -> dict[str, Any]:
             "voicePresetKey": default_voice,
             "voiceRateDeltaPercent": 0,
             "useBackgroundAudio": True,
-            "backgroundVolume": 0.08,
+            "backgroundVolume": 0.3,
         },
         "subtitlePreset": {
             "enabled": True,
@@ -691,6 +691,7 @@ def default_settings() -> dict[str, Any]:
         "subtitleRegion": {"x": 0, "y": 0, "w": 0, "h": 0},
         "sourceSubtitleCleanupMode": "localized_blur",
         "outputTargets": {"mp4": True, "draft": False},
+        "outputRatio": "9:16",
         "timingMode": "balanced_natural",
         "videoCodecMode": "gpu_preferred",
         "uiThemePreset": "cinema",
@@ -699,7 +700,7 @@ def default_settings() -> dict[str, Any]:
         "backgroundMusic": {
             "enabled": False,
             "path": "",
-            "volume": 0.12,
+            "volume": 0.5,
         },
         "watermark": {
             "enabled": False,
@@ -718,7 +719,7 @@ def default_settings() -> dict[str, Any]:
             "transform_y": -0.3,
         },
         "draftRoot": str(getattr(config, "DRAFT_DIR", "") or ""),
-        "outputDirectory": str(DEFAULT_OUTPUT_DIR),
+        "outputDirectory": "",
     }
 
 

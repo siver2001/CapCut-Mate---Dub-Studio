@@ -500,7 +500,7 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
             raise OllamaResourceError(
                 f"Ollama không thể tải model {payload.get('model', '?')}: {error_detail}. "
                 f"Hãy đóng bớt ứng dụng để giải phóng RAM, hoặc dùng model nhỏ hơn "
-                f"(ví dụ: qwen3:4b, gemma4:e2b). Thiết lập trong file .env: DUB_OLLAMA_MODEL=qwen3:4b"
+                f"(ví dụ: qwen3.5:4b, gemma4:e2b). Thiết lập trong file .env: DUB_OLLAMA_MODEL=qwen3.5:4b"
             )
         resp.raise_for_status()
 
@@ -620,7 +620,7 @@ def run_ollama_prompt(
             if _is_resource_error(error_str):
                 raise OllamaResourceError(
                     f"Ollama không đủ tài nguyên: {error_str[:300]}. "
-                    f"Hãy đóng bớt ứng dụng hoặc dùng model nhỏ hơn (DUB_OLLAMA_MODEL=qwen3:4b)."
+                    f"Hãy đóng bớt ứng dụng hoặc dùng model nhỏ hơn (DUB_OLLAMA_MODEL=qwen3.5:4b)."
                 ) from exc
             if attempt < max_retries:
                 backoff = min(3.0 * (attempt + 1), 10.0)

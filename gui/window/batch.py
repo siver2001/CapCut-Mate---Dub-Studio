@@ -187,7 +187,6 @@ class WindowBatchMixin:
                 hasattr(self, "batch_output_dir_edit")
                 and self.batch_output_dir_edit.text().strip()
             )
-            or self.output_dir_edit.text().strip()
         )
         if not output_dir:
             QMessageBox.warning(
@@ -294,8 +293,8 @@ class WindowBatchMixin:
             item.error = str(exc)
             self._update_batch_log(f"  ✗ Lỗi phân tích: {exc}")
             self._refresh_batch_ui()
-            # Continue to next item after a small delay
-            QTimer.singleShot(200, self._batch_process_next)
+            # Continue to next item after a cooldown delay
+            QTimer.singleShot(5000, self._batch_process_next)
 
     def _batch_on_analysis_ready(self, job_id: str, analysis: dict[str, Any]) -> None:
         """Called when a batch item's analysis completes → start rendering."""
@@ -332,7 +331,7 @@ class WindowBatchMixin:
             item.error = str(exc)
             self._update_batch_log(f"  ✗ Lỗi render: {exc}")
             self._refresh_batch_ui()
-            QTimer.singleShot(200, self._batch_process_next)
+            QTimer.singleShot(5000, self._batch_process_next)
 
     def _batch_on_render_ready(self, job_id: str, payload: dict[str, Any]) -> None:
         """Called when a batch item's render completes → export & proceed."""
@@ -380,8 +379,8 @@ class WindowBatchMixin:
         item.progress = 1.0
         self._refresh_batch_ui()
 
-        # Move to the next item
-        QTimer.singleShot(300, self._batch_process_next)
+        # Move to the next item with a cooldown gap
+        QTimer.singleShot(5000, self._batch_process_next)
 
     def _batch_on_job_failed(self, job_id: str, message: str) -> None:
         """Called when a batch item fails."""
@@ -400,7 +399,7 @@ class WindowBatchMixin:
         self._refresh_batch_ui()
 
         # Continue to next item
-        QTimer.singleShot(300, self._batch_process_next)
+        QTimer.singleShot(5000, self._batch_process_next)
 
     def _batch_on_status_changed(self, job_id: str, payload: dict[str, Any]) -> None:
         """Update progress for the currently running batch item."""
@@ -467,59 +466,31 @@ class WindowBatchMixin:
 
     def _batch_build_overrides(self, analysis: dict[str, Any]) -> dict[str, Any]:
         """Build analysis overrides from the shared settings."""
-        return {
-            "sourceLanguage": ""
-            if self.settings["sourceLanguage"] == "auto"
-            else self.settings["sourceLanguage"],
-            "targetLanguage": self.settings["targetLanguage"],
-            "speakerDetectionMode": "narrator",
-            "speakerCount": 1,
-            "voiceMapping": self._batch_voice_mapping(),
-            "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
-        }
-
-    def _batch_voice_mapping(self) -> dict[str, str]:
-        voice_mapping = self._expanded_voice_mapping()
-        default_voice = str(
-            self.settings.get("defaultVoice")
-            or voice_mapping.get("speaker_1")
-            or "valtec:nf"
-        ).strip()
-        voice_mapping["speaker_1"] = default_voice
-        return voice_mapping
+        overrides = self.current_analysis_overrides()
+        if self.settings.get("sourceLanguage") == "auto":
+            overrides["sourceLanguage"] = ""
+        if analysis and "subtitleRegion" in analysis:
+            overrides["subtitleRegion"] = copy.deepcopy(analysis["subtitleRegion"])
+        return overrides
 
     def _batch_build_render_options(self, analysis: dict[str, Any]) -> dict[str, Any]:
         """Build render options from the shared settings for a batch item."""
+        options = self.current_render_options()
+        
         effective_source_language = (
             analysis.get("sourceLanguage")
-            if self.settings["sourceLanguage"] == "auto"
-            else self.settings["sourceLanguage"]
+            if self.settings.get("sourceLanguage") == "auto"
+            else self.settings.get("sourceLanguage")
         )
-        output_dir = self._batch_output_dir or self.settings.get("outputDirectory", "")
-        output_targets = copy.deepcopy(self.settings["outputTargets"])
-        if not any(bool(value) for value in output_targets.values()):
-            output_targets["mp4"] = True
-        return {
-            "sourceLanguage": effective_source_language or "",
-            "targetLanguage": self.settings["targetLanguage"],
-            "speakerDetectionMode": "narrator",
-            "speakerCount": 1,
-            "voiceMapping": self._batch_voice_mapping(),
-            "introHook": copy.deepcopy(self.settings["introHook"]),
-            "subtitlePreset": copy.deepcopy(self.settings["subtitlePreset"]),
-            "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
-            "sourceSubtitleCleanupMode": self.settings["sourceSubtitleCleanupMode"],
-            "outputTargets": output_targets,
-            "timingMode": self.settings["timingMode"],
-            "videoCodecMode": self.settings.get("videoCodecMode", "gpu_preferred"),
-            "keepOriginalAudio": self.settings["keepOriginalAudio"],
-            "draftRoot": self.settings["draftRoot"],
-            "outputDirectory": output_dir,
-            "watermarkEnabled": self.settings.get("watermark", {}).get("enabled", False),
-            "watermarkPath": self.settings.get("watermark", {}).get("path", ""),
-            "watermarkPosition": self.settings.get("watermark", {}).get("position", "top-right"),
-            "watermarkScale": self.settings.get("watermark", {}).get("scale", 0.15),
-        }
+        options["sourceLanguage"] = effective_source_language or ""
+        
+        if analysis and "subtitleRegion" in analysis:
+            options["subtitleRegion"] = copy.deepcopy(analysis["subtitleRegion"])
+            
+        if self._batch_output_dir:
+            options["outputDirectory"] = self._batch_output_dir
+            
+        return options
 
     def _batch_finalize(self) -> None:
         """Called when the batch queue is fully processed (or cancelled)."""
@@ -656,6 +627,19 @@ class WindowBatchMixin:
                 self._batch_queue[row].input_path,
                 switch_to_preview_tab=False,
             )
+
+    def on_batch_table_double_clicked(self, item) -> None:
+        if not item:
+            return
+        row = item.row()
+        if 0 <= row < len(self._batch_queue):
+            batch_item = self._batch_queue[row]
+            if batch_item.status == "error" and batch_item.error:
+                QMessageBox.critical(
+                    self,
+                    "Chi tiết lỗi",
+                    f"Video: {Path(batch_item.input_path).name}\n\nLỗi:\n{repair_mojibake_text(batch_item.error)}",
+                )
 
     def _update_batch_log(self, message: str) -> None:
         """Append a message to the batch log box."""

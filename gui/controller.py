@@ -401,7 +401,13 @@ class DubStudioJobController(QWidget):
             self._emit_status_changed(job_id, force=True)
             return
         if code != 0:
+            error_logs = [log["message"] for log in job.get("logs", []) if log.get("level") in ("error", "warn")]
+            if not error_logs:
+                error_logs = [log["message"] for log in job.get("logs", [])][-15:]
+            log_summary = "\n".join(error_logs)
             message = job.get("lastError") or f"Pipeline failed with exit code {code}."
+            if log_summary:
+                message = f"{message}\n\nChi tiết log lỗi:\n{log_summary}"
             self._fail_job(job_id, message)
             return
         try:

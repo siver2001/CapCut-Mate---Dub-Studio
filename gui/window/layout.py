@@ -439,12 +439,8 @@ class WindowLayoutMixin:
         )
         self.intro_voice_status_label.setObjectName("SectionHint")
         self.intro_voice_status_label.setWordWrap(True)
-        self.intro_background_volume_spin = SafeDoubleSpinBox()
-        self.intro_background_volume_spin.setRange(0.0, 0.3)
-        self.intro_background_volume_spin.setSingleStep(0.01)
-        self.intro_background_volume_spin.valueChanged.connect(
-            self.on_basic_settings_changed
-        )
+        self.intro_background_volume_spin = self._make_slider(0, 100, 30, self.on_basic_settings_changed)
+        self.intro_background_volume_label = QLabel("30%")
         self.keep_original_audio_check = QCheckBox("Giữ audio gốc nhỏ")
         self.keep_original_audio_check.stateChanged.connect(
             self.on_basic_settings_changed
@@ -453,11 +449,11 @@ class WindowLayoutMixin:
         self.background_music_enabled_check.stateChanged.connect(
             self.on_basic_settings_changed
         )
-        self.background_music_volume_spin = self._make_slider(0, 100, 6, self.on_basic_settings_changed)
+        self.background_music_volume_spin = self._make_slider(0, 100, 25, self.on_basic_settings_changed)
         self.background_music_volume_spin.setToolTip(
             "Âm lượng riêng cho nhạc nền. Nhạc ngắn sẽ tự lặp tới hết video."
         )
-        self.background_music_volume_label = QLabel("6%")
+        self.background_music_volume_label = QLabel("25%")
         self.background_music_path_edit = QLineEdit()
         self.background_music_path_edit.setReadOnly(True)
         self.background_music_path_edit.setPlaceholderText(
@@ -482,6 +478,17 @@ class WindowLayoutMixin:
         )
         self.output_mp4_check = QCheckBox("Xuất MP4")
         self.output_mp4_check.stateChanged.connect(self.on_basic_settings_changed)
+        self.output_ratio_combo = self._make_combo(
+            [
+                ("9:16", "Chuẩn 9:16 (FHD 1080x1920)"),
+                ("9:16_dynamic", "Chuẩn 9:16 (Giữ gốc 2K/4K)"),
+                ("original", "Giữ nguyên gốc"),
+                ("16:9", "Chuẩn 16:9 ngang (FHD 1920x1080)"),
+                ("16:9_dynamic", "Chuẩn 16:9 ngang (Giữ gốc 2K/4K)"),
+                ("1:1", "Chuẩn 1:1 vuông"),
+            ],
+            self.on_basic_settings_changed,
+        )
         self.output_draft_check = QCheckBox("Xuất Draft")
         self.output_draft_check.stateChanged.connect(self.on_basic_settings_changed)
         self.output_draft_check.setParent(self)
@@ -632,7 +639,12 @@ class WindowLayoutMixin:
         settings_grid.addWidget(intro_voice_row, 17, 3)
         settings_grid.addWidget(self.intro_background_check, 18, 0, 1, 2)
         settings_grid.addWidget(self._field_label("Âm nền teaser"), 18, 2)
-        settings_grid.addWidget(self.intro_background_volume_spin, 18, 3)
+        intro_bg_vol_row = QHBoxLayout()
+        intro_bg_vol_row.setContentsMargins(0, 0, 0, 0)
+        intro_bg_vol_row.setSpacing(6)
+        intro_bg_vol_row.addWidget(self.intro_background_volume_spin, 1)
+        intro_bg_vol_row.addWidget(self.intro_background_volume_label)
+        settings_grid.addLayout(intro_bg_vol_row, 18, 3)
         settings_grid.addWidget(self.background_music_enabled_check, 19, 0, 1, 2)
         settings_grid.addWidget(self._field_label("Âm lượng nhạc nền"), 19, 2)
         bg_vol_row = QHBoxLayout()
@@ -660,6 +672,8 @@ class WindowLayoutMixin:
         settings_grid.addWidget(ending_video_row, 22, 1, 1, 3)
         
         settings_grid.addWidget(self.output_mp4_check, 23, 0)
+        settings_grid.addWidget(self._field_label("Tỉ lệ video đầu ra"), 23, 1)
+        settings_grid.addWidget(self.output_ratio_combo, 23, 2, 1, 2)
         settings_grid.addWidget(self._field_label("Thư mục output"), 24, 0)
         output_row = QWidget()
         output_row_layout = QHBoxLayout(output_row)
@@ -901,16 +915,14 @@ class WindowLayoutMixin:
         default_voice_row.addWidget(self.default_voice_test_btn)
         self.main_intro_background_check = QCheckBox("Giữ âm nền teaser")
         self.main_intro_background_check.stateChanged.connect(self.on_basic_settings_changed)
-        self.main_intro_background_volume_spin = SafeDoubleSpinBox()
-        self.main_intro_background_volume_spin.setRange(0.0, 0.3)
-        self.main_intro_background_volume_spin.setSingleStep(0.01)
-        self.main_intro_background_volume_spin.valueChanged.connect(self.on_basic_settings_changed)
+        self.main_intro_background_volume_spin = self._make_slider(0, 100, 30, self.on_basic_settings_changed)
+        self.main_intro_background_volume_label = QLabel("30%")
         self.main_keep_original_audio_check = QCheckBox("Giữ audio gốc nhỏ")
         self.main_keep_original_audio_check.stateChanged.connect(self.on_basic_settings_changed)
         self.main_background_music_enabled_check = QCheckBox("Nhạc nền toàn video")
         self.main_background_music_enabled_check.stateChanged.connect(self.on_basic_settings_changed)
-        self.main_background_music_volume_spin = self._make_slider(0, 100, 6, self.on_basic_settings_changed)
-        self.main_background_music_volume_label = QLabel("6%")
+        self.main_background_music_volume_spin = self._make_slider(0, 100, 25, self.on_basic_settings_changed)
+        self.main_background_music_volume_label = QLabel("25%")
         self.main_background_music_path_edit = QLineEdit()
         self.main_background_music_path_edit.setReadOnly(True)
         self.main_background_music_path_edit.setPlaceholderText("Chưa chọn file nhạc nền")
@@ -936,7 +948,12 @@ class WindowLayoutMixin:
         audio_grid.addWidget(intro_voice_row, 1, 3)
         audio_grid.addWidget(self.main_intro_background_check, 2, 0, 1, 2)
         audio_grid.addWidget(self._field_label("Âm nền teaser"), 2, 2)
-        audio_grid.addWidget(self.main_intro_background_volume_spin, 2, 3)
+        main_intro_bg_vol_row = QHBoxLayout()
+        main_intro_bg_vol_row.setContentsMargins(0, 0, 0, 0)
+        main_intro_bg_vol_row.setSpacing(6)
+        main_intro_bg_vol_row.addWidget(self.main_intro_background_volume_spin, 1)
+        main_intro_bg_vol_row.addWidget(self.main_intro_background_volume_label)
+        audio_grid.addLayout(main_intro_bg_vol_row, 2, 3)
         audio_grid.addWidget(self.main_background_music_enabled_check, 3, 0, 1, 2)
         audio_grid.addWidget(self._field_label("Âm lượng nhạc nền"), 3, 2)
         main_bg_vol_row = QHBoxLayout()
@@ -981,6 +998,17 @@ class WindowLayoutMixin:
         self.main_output_draft_check.stateChanged.connect(self.on_basic_settings_changed)
         self.main_output_draft_check.setParent(self)
         self.main_output_draft_check.hide()
+        self.main_output_ratio_combo = self._make_combo(
+            [
+                ("9:16", "Chuẩn 9:16 (FHD 1080x1920)"),
+                ("9:16_dynamic", "Chuẩn 9:16 (Giữ gốc 2K/4K)"),
+                ("original", "Giữ nguyên gốc"),
+                ("16:9", "Chuẩn 16:9 ngang (FHD 1920x1080)"),
+                ("16:9_dynamic", "Chuẩn 16:9 ngang (Giữ gốc 2K/4K)"),
+                ("1:1", "Chuẩn 1:1 vuông"),
+            ],
+            self.on_basic_settings_changed,
+        )
         self.main_output_dir_edit = QLineEdit()
         self.main_output_dir_edit.setPlaceholderText("Thư mục output")
         self.main_output_dir_edit.editingFinished.connect(self.on_basic_settings_changed)
@@ -1004,6 +1032,8 @@ class WindowLayoutMixin:
         draft_dir_row.addWidget(self.main_draft_dir_edit)
         draft_dir_row.addWidget(draft_dir_btn)
         output_grid.addWidget(self.main_output_mp4_check, 0, 0)
+        output_grid.addWidget(self._field_label("Tỉ lệ đầu ra"), 0, 1)
+        output_grid.addWidget(self.main_output_ratio_combo, 0, 2, 1, 2)
         output_grid.addWidget(self._field_label("Thư mục output"), 1, 0)
         output_grid.addLayout(output_dir_row, 1, 1, 1, 3)
         # Đã ẩn Xuất Draft và Thư mục draft.
@@ -1524,6 +1554,7 @@ class WindowLayoutMixin:
         self.batch_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.batch_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.batch_table.itemSelectionChanged.connect(self.batch_preview_selected)
+        self.batch_table.itemDoubleClicked.connect(self.on_batch_table_double_clicked)
         self.batch_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.batch_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.batch_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -1637,10 +1668,34 @@ class WindowLayoutMixin:
         hf_cache_row.addWidget(hf_cache_btn)
         config_grid.addLayout(hf_cache_row, 5, 1)
 
+        # DUB_VIDEO_X264_CRF
+        config_grid.addWidget(self._field_label("Video x264 CRF (CPU):"), 6, 0)
+        self.conf_x264_crf_edit = QLineEdit()
+        self.conf_x264_crf_edit.setReadOnly(True)
+        config_grid.addWidget(self.conf_x264_crf_edit, 6, 1)
+
+        # DUB_VIDEO_X264_PRESET
+        config_grid.addWidget(self._field_label("Video x264 Preset:"), 7, 0)
+        self.conf_x264_preset_edit = QLineEdit()
+        self.conf_x264_preset_edit.setReadOnly(True)
+        config_grid.addWidget(self.conf_x264_preset_edit, 7, 1)
+
+        # DUB_VIDEO_NVENC_CQ
+        config_grid.addWidget(self._field_label("Video NVENC CQ (GPU):"), 8, 0)
+        self.conf_nvenc_cq_edit = QLineEdit()
+        self.conf_nvenc_cq_edit.setReadOnly(True)
+        config_grid.addWidget(self.conf_nvenc_cq_edit, 8, 1)
+
+        # DUB_VIDEO_NVENC_PRESET
+        config_grid.addWidget(self._field_label("Video NVENC Preset:"), 9, 0)
+        self.conf_nvenc_preset_edit = QLineEdit()
+        self.conf_nvenc_preset_edit.setReadOnly(True)
+        config_grid.addWidget(self.conf_nvenc_preset_edit, 9, 1)
+
         # Button Save
         self.conf_save_btn = self._make_button("Lưu cấu hình", "success")
         self.conf_save_btn.clicked.connect(self.save_system_config)
-        config_grid.addWidget(self.conf_save_btn, 6, 0, 1, 2)
+        config_grid.addWidget(self.conf_save_btn, 10, 0, 1, 2)
 
         config_inner_layout.addLayout(config_grid)
         config_inner_layout.addStretch(1)
