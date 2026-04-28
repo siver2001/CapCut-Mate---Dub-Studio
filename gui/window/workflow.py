@@ -637,6 +637,94 @@ class WindowWorkflowMixin:
             f"Đã xuất video ra file:\n{destination}",
         )
 
+    def export_video_thumbnail(self) -> None:
+        import requests
+        import os
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        from pathlib import Path
+        try:
+            env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+            if env_file.exists():
+                for raw_line in env_file.read_text(encoding="utf-8-sig").splitlines():
+                    line = raw_line.replace("\x00", "").strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+        # Check for HF_TOKEN
+        hf_token = ""
+        for key in ("HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+            val = os.getenv(key, "").strip()
+            if val:
+                hf_token = val
+                break
+        
+        if not hf_token:
+            QMessageBox.warning(
+                self,
+                "Thiếu Token Hugging Face",
+                "Chưa tìm thấy token kết nối Hugging Face (HF_TOKEN). Vui lòng thiết lập trong biến môi trường trước khi dùng.",
+            )
+            return
+
+        # Prompt user for description
+        prompt, ok = QInputDialog.getText(
+            self,
+            "Thiết kế Thumbnail",
+            "Nhập mô tả hình ảnh thumbnail (Tiếng Anh cho AI hiểu tốt nhất):",
+            QLineEdit.EchoMode.Normal,
+            "A beautiful YouTube thumbnail for a video, vibrant colors, cinematic, 4k"
+        )
+        if not ok or not prompt.strip():
+            return
+            
+        QMessageBox.information(
+            self,
+            "Đang xử lý",
+            "Đang gửi yêu cầu đến Hugging Face AI để thiết kế thumbnail. Vui lòng đợi...",
+        )
+        
+        try:
+            from huggingface_hub import InferenceClient
+            client = InferenceClient(token=hf_token)
+            image = client.text_to_image(
+                prompt.strip(),
+                model="black-forest-labs/FLUX.1-schnell"
+            )
+            
+            # Save location
+            default_dir = Path(
+                self.output_dir_edit.text().strip() or str(ROOT / "output")
+            )
+            default_dir.mkdir(parents=True, exist_ok=True)
+            
+            from PyQt6.QtWidgets import QFileDialog
+            target_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Lưu Thumbnail",
+                str(default_dir / "thumbnail.png"),
+                "Hình ảnh (*.png *.jpg *.jpeg)",
+            )
+            if not target_path:
+                return
+                
+            image.save(target_path)
+                
+            QMessageBox.information(
+                self,
+                "Thành công",
+                f"Đã thiết kế và lưu thumbnail thành công tại:\n{target_path}",
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Lỗi tạo thumbnail",
+                f"Không thể tạo thumbnail bằng Hugging Face API:\n{str(e)}",
+            )
+
+
     def open_output(self) -> None:
         target = self.last_output_path or self.output_dir_edit.text().strip()
         if not target:
@@ -655,6 +743,97 @@ class WindowWorkflowMixin:
             QMessageBox.warning(
                 self, "Không thể mở", f"Không thể mở đường dẫn:\n{open_target}"
             )
+
+    def choose_hf_cache_dir(self) -> None:
+        current = self.conf_hf_cache_edit.text().strip()
+        default_path = current if current else str(ROOT / "temp" / ".cache" / "huggingface" / "hub")
+        dir_path = QFileDialog.getExistingDirectory(self, "Chọn thư mục cache HuggingFace", default_path)
+        if dir_path:
+            self.conf_hf_cache_edit.setText(dir_path)
+
+    def load_system_config_into_ui(self) -> None:
+        import os
+        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+        env_data = {}
+        if env_file.exists():
+            try:
+                for raw_line in env_file.read_text(encoding="utf-8-sig").splitlines():
+                    line = raw_line.replace("\x00", "").strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        env_data[k.strip()] = v.strip().strip('"').strip("'")
+            except Exception:
+                pass
+
+        # Map data to UI fields with fallback to current environment or defaults
+        transcribe = env_data.get("DUB_TRANSCRIBE_PROVIDER") or os.getenv("DUB_TRANSCRIBE_PROVIDER", "auto")
+        self.conf_transcribe_combo.setCurrentText(transcribe)
+
+        translate = env_data.get("DUB_TRANSLATE_PROVIDER") or os.getenv("DUB_TRANSLATE_PROVIDER", "ollama")
+        self.conf_translate_combo.setCurrentText(translate)
+
+        ollama_url = env_data.get("DUB_OLLAMA_BASE_URL") or os.getenv("DUB_OLLAMA_BASE_URL", "http://localhost:11434")
+        self.conf_ollama_url_edit.setText(ollama_url)
+
+        ollama_model = env_data.get("DUB_OLLAMA_MODEL") or os.getenv("DUB_OLLAMA_MODEL", "qwen3:4b")
+        self.conf_ollama_model_edit.setText(ollama_model)
+
+        hf_token = env_data.get("HF_TOKEN") or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN", "")
+        self.conf_hf_token_edit.setText(hf_token)
+
+        hf_cache = env_data.get("DUB_HF_CACHE_DIR") or os.getenv("DUB_HF_CACHE_DIR") or str(ROOT / "temp" / ".cache" / "huggingface" / "hub")
+        self.conf_hf_cache_edit.setText(hf_cache)
+
+    def save_system_config(self) -> None:
+        import os
+        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+        
+        # Gather current lines from .env if it exists, to preserve unrelated configs
+        lines = []
+        if env_file.exists():
+            try:
+                lines = env_file.read_text(encoding="utf-8-sig").splitlines()
+            except Exception:
+                pass
+        
+        new_values = {
+            "DUB_TRANSCRIBE_PROVIDER": self.conf_transcribe_combo.currentText(),
+            "DUB_TRANSLATE_PROVIDER": self.conf_translate_combo.currentText(),
+            "DUB_OLLAMA_BASE_URL": self.conf_ollama_url_edit.text().strip(),
+            "DUB_OLLAMA_MODEL": self.conf_ollama_model_edit.text().strip(),
+            "HF_TOKEN": self.conf_hf_token_edit.text().strip(),
+            "DUB_HF_CACHE_DIR": self.conf_hf_cache_edit.text().strip().replace("\\", "/"),
+        }
+
+        # Apply changes to lines
+        updated_keys = set()
+        new_lines = []
+        for raw_line in lines:
+            line_stripped = raw_line.strip()
+            if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
+                k, v = line_stripped.split("=", 1)
+                k = k.strip()
+                if k in new_values:
+                    new_lines.append(f"{k}={new_values[k]}")
+                    updated_keys.add(k)
+                    # Also update current os.environ at runtime
+                    os.environ[k] = new_values[k]
+                else:
+                    new_lines.append(raw_line)
+            else:
+                new_lines.append(raw_line)
+
+        # Append new keys that weren't in the original .env
+        for k, v in new_values.items():
+            if k not in updated_keys:
+                new_lines.append(f"{k}={v}")
+                os.environ[k] = v
+
+        try:
+            env_file.write_text("\n".join(new_lines), encoding="utf-8")
+            QMessageBox.information(self, "Thành công", "Cấu hình đã được lưu vào file .env và áp dụng ngay lập tức.")
+        except Exception as e:
+            QMessageBox.warning(self, "Lỗi", f"Không thể ghi cấu hình ra file .env:\n{e}")
 
     def open_configured_output_directory(self) -> None:
         target = self.output_dir_edit.text().strip()
@@ -1036,6 +1215,23 @@ class WindowWorkflowMixin:
         self.settings["backgroundMusic"]["enabled"] = True
         self.on_basic_settings_changed()
 
+    def choose_ending_video_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chọn file ending clip",
+            "",
+            "Video (*.mp4 *.mov *.avi *.mkv *.wmv *.webm *.flv)",
+        )
+        if not path:
+            return
+        if hasattr(self, "ending_video_path_edit"):
+            self.ending_video_path_edit.setText(path)
+        if hasattr(self, "ending_video_enabled_check"):
+            self.ending_video_enabled_check.setChecked(True)
+        self.settings.setdefault("endingVideo", {})["path"] = path
+        self.settings["endingVideo"]["enabled"] = True
+        self.on_basic_settings_changed()
+
     def on_cleanup_region_dragged(self, region: dict[str, int]) -> None:
         self.settings["subtitleRegion"] = {
             "x": int(region.get("x", 0)),
@@ -1155,9 +1351,6 @@ class WindowWorkflowMixin:
         self.settings["videoCodecMode"] = str(
             self.video_codec_combo.currentData() or "gpu_preferred"
         )
-        self.settings["uiThemePreset"] = str(
-            self.ui_theme_combo.currentData() or "cinema"
-        )
         self.settings["sourceSubtitleCleanupMode"] = get_combo_val(getattr(self, "main_cleanup_combo", None), self.cleanup_combo)
         self.settings["subtitlePreset"]["enabled"] = (
             get_combo_val(None, self.subtitle_enabled_combo) == "on"
@@ -1268,6 +1461,14 @@ class WindowWorkflowMixin:
         if bg_path_edit is not None:
             bg_music["path"] = bg_path_edit.text().strip()
 
+        ending_vid = self.settings.setdefault("endingVideo", {})
+        ending_vid["enabled"] = get_check_val(getattr(self, "main_ending_video_enabled_check", None), getattr(self, "ending_video_enabled_check", None))
+        ending_path_edit = getattr(self, "main_ending_video_path_edit" if is_page_0 else "ending_video_path_edit", None)
+        if ending_path_edit is not None:
+            ending_vid["path"] = ending_path_edit.text().strip()
+        elif hasattr(self, "ending_video_path_edit"):
+            ending_vid["path"] = self.ending_video_path_edit.text().strip()
+
         self.settings["outputTargets"]["mp4"] = self.output_mp4_check.isChecked()
         self.settings["outputTargets"]["draft"] = self.output_draft_check.isChecked()
         output_directory = self.output_dir_edit.text().strip()
@@ -1323,6 +1524,7 @@ class WindowWorkflowMixin:
             "videoCodecMode": self.settings.get("videoCodecMode", "gpu_preferred"),
             "keepOriginalAudio": self.settings["keepOriginalAudio"],
             "backgroundMusic": copy.deepcopy(self.settings.get("backgroundMusic", {})),
+            "endingVideo": copy.deepcopy(self.settings.get("endingVideo", {})),
             "draftRoot": self.settings["draftRoot"],
             "outputDirectory": self.settings["outputDirectory"],
             "watermarkEnabled": self.settings.get("watermark", {}).get("enabled", False),
@@ -1434,7 +1636,6 @@ class WindowWorkflowMixin:
             self.speaker_count_spin,
             self.timing_mode_combo,
             self.video_codec_combo,
-            self.ui_theme_combo,
             self.cleanup_combo,
             self.subtitle_enabled_combo,
             self.subtitle_position_combo,
@@ -1504,9 +1705,6 @@ class WindowWorkflowMixin:
         self._set_combo_value(self.timing_mode_combo, self.settings["timingMode"])
         self._set_combo_value(
             self.video_codec_combo, self.settings.get("videoCodecMode", "gpu_preferred")
-        )
-        self._set_combo_value(
-            self.ui_theme_combo, self.settings.get("uiThemePreset", "cinema")
         )
         self._set_combo_value(
             self.cleanup_combo, self.settings["sourceSubtitleCleanupMode"]
@@ -1625,6 +1823,21 @@ class WindowWorkflowMixin:
             self.background_music_volume_label.setText(f"{bg_slider_val}%")
         if hasattr(self, "main_background_music_volume_label"):
             self.main_background_music_volume_label.setText(f"{bg_slider_val}%")
+
+        ending_vid = self.settings.get("endingVideo", {})
+        ending_enabled = bool(ending_vid.get("enabled", False))
+        ending_path = str(ending_vid.get("path", ""))
+        
+        if hasattr(self, "ending_video_enabled_check"):
+            self.ending_video_enabled_check.setChecked(ending_enabled)
+        if hasattr(self, "main_ending_video_enabled_check"):
+            self.main_ending_video_enabled_check.setChecked(ending_enabled)
+            
+        if hasattr(self, "ending_video_path_edit"):
+            self.ending_video_path_edit.setText(ending_path)
+        if hasattr(self, "main_ending_video_path_edit"):
+            self.main_ending_video_path_edit.setText(ending_path)
+
         self.output_dir_edit.setText(self.settings["outputDirectory"])
         self.output_folder_quick_edit.setText(self.settings["outputDirectory"])
         self.draft_dir_edit.setText(self.settings["draftRoot"])

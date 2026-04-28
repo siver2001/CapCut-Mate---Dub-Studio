@@ -281,9 +281,6 @@ def build_tts_delivery_profile(
         volume_percent += 1
     if source.endswith(("…", "...")):
         pitch_hz -= 2
-    if intro:
-        pitch_hz += 3
-        volume_percent += 2
     pitch_hz = max(min(pitch_hz, 14), -18)
     volume_percent = max(min(volume_percent, 6), -4)
     return {
@@ -338,14 +335,7 @@ def estimate_rate(text: str, target_ms: int, timing_mode: str = "balanced_natura
 
 
 def estimate_intro_rate(text: str, target_ms: int, timing_mode: str = "balanced_natural") -> str:
-    target_ms = max(target_ms, 1600)
-    target_seconds = target_ms / 1000
-    profile = estimate_tts_text_profile(text)
-    pressure = max(profile["expectedSeconds"] * 0.88, 1.1) / max(target_seconds, 0.1)
-    percent = int(round((pressure - 1.0) * (92 if is_ultra_tight_mode(timing_mode) else 82))) + (
-        12 if is_ultra_tight_mode(timing_mode) else 8
-    )
-    return format_rate_percent(percent, timing_mode=timing_mode, intro=True)
+    return format_rate_percent(0, timing_mode=timing_mode, intro=True)
 
 
 def apply_rate_delta(rate: str, delta_percent: int, timing_mode: str = "balanced_natural", *, intro: bool = False) -> str:
@@ -1219,7 +1209,7 @@ def synthesize_timed_tts_clip(
         text=translated,
         source_text=source_text or translated,
         voice=voice,
-        delivery="excited" if intro else delivery,
+        delivery=delivery,
         intro=intro,
     )
     tts_text = normalize_text(delivery_profile["text"])
@@ -1794,17 +1784,12 @@ def create_dub_audio(
     mix_inputs = ["[0:a]"]
     reference_dir = ensure_dir(tts_dir / "_reference")
     prepared_items: list[dict[str, Any]] = []
+    generated_items: list[dict[str, Any]] = []
 
     for index, segment in enumerate(segments, start=1):
         translated = normalize_text(segment.get("translatedText") or "")
-        if not translated:
-            _raise_missing_tts_text(segment, index, "translatedText")
         delivery = normalize_text(segment.get("delivery") or "neutral").lower() or "neutral"
         speaker_id = segment.get("speakerId") or "speaker_1"
-        tts_text = sanitize_for_tts_or_raise(
-            translated,
-            speaker_id=f"{segment.get('id') or index}/{speaker_id}",
-        )
         voice_override = normalize_text(
             segment.get("voice")
             or segment.get("voicePreset")
@@ -1812,6 +1797,52 @@ def create_dub_audio(
             or ""
         )
         voice = voice_override or voices.get(speaker_id) or DEFAULT_VOICES[0]
+
+        if not translated:
+            target_ms = resolve_segment_target_ms(
+                segments,
+                index - 1,
+                video_duration_ms=int(video_meta.get("durationMs", 0)),
+                timing_mode=timing_mode,
+                text="",
+            )
+            silent_duration = max(target_ms / 1000.0, 0.05)
+            silent_clip = tts_dir / f"{index:04d}_silent_fallback.wav"
+            if not silent_clip.exists() or silent_clip.stat().st_size <= 0:
+                run(
+                    [
+                        "ffmpeg", "-y",
+                        "-f", "lavfi",
+                        "-t", f"{silent_duration:.3f}",
+                        "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                        "-ac", str(STABLE_AUDIO_CHANNELS),
+                        "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
+                        "-c:a", "pcm_s16le",
+                        str(silent_clip),
+                    ],
+                    timeout=30.0,
+                )
+            generated_items.append(
+                {
+                    "index": index,
+                    "segment": segment,
+                    "translated": "",
+                    "voice": voice,
+                    "delivery": delivery,
+                    "target_ms": target_ms,
+                    "fitted_clip": silent_clip,
+                    "clip_ms": int(target_ms),
+                    "rate": "+0%",
+                    "pitch": "+0Hz",
+                    "volume": "+0%",
+                }
+            )
+            continue
+
+        tts_text = sanitize_for_tts_or_raise(
+            translated,
+            speaker_id=f"{segment.get('id') or index}/{speaker_id}",
+        )
         prepared_items.append(
             {
                 "index": index,
@@ -1836,7 +1867,6 @@ def create_dub_audio(
     for progress_index, item in enumerate(prepared_items, start=1):
         item["progress_index"] = progress_index
 
-    generated_items: list[dict[str, Any]] = []
     if prepared_items:
         provider_limits = {
             "edge": EDGE_TTS_CONCURRENCY,

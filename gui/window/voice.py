@@ -13,7 +13,7 @@ from gui.utils import decode_process_bytes, ensure_dir, repair_mojibake_text
 from .helpers import SafeComboBox
 
 
-VOICE_PREVIEW_TEXT = "Xin chào, đây là giọng nói tiếng Việt."
+VOICE_PREVIEW_TEXT = "Trong khoảnh khắc thành phố vừa thức dậy, những âm thanh quen thuộc như tiếng chim hót, tiếng gió lùa hòa vào nhau, tạo nên một bản nhạc khiến tôi muốn chậm lại, lắng nghe và mỉm cười."
 
 
 class WindowVoiceMixin:

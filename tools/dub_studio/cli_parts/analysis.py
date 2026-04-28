@@ -1501,10 +1501,6 @@ def detect_subtitle_region_in_frame(
         peak_start = max(peak_index - band_height // 2, 0)
         candidate_ranges = [(peak_start, min(peak_start + band_height, sample_height))]
 
-    fallback_center_y = int(
-        ((int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2) / max(int(video_meta["height"]), 1))
-        * sample_height
-    )
     fallback_width_ratio = min(max(int(fallback_region.get("w", 0)) / max(int(video_meta["width"]), 1), 0.22), 0.92)
     scale_x = video_meta["width"] / sample_width
     scale_y = video_meta["height"] / sample_height
@@ -1516,7 +1512,6 @@ def detect_subtitle_region_in_frame(
         end = min(raw_end + 4, sample_height)
         band_height = max(end - start, 1)
         band_score = sum(row_scores[start:end])
-        center_y = (start + end) // 2
         vertical_bias = 1.0
 
         col_scores = [0.0] * sample_width
@@ -1664,33 +1659,10 @@ def cross_validate_regions(
     if len(regions) < 3:
         return regions
 
-    def median_of(values: list[int]) -> int:
-        return _median(values)
-
-    med_x = median_of([int(r.get("x", 0)) for r in regions])
-    med_y = median_of([int(r.get("y", 0)) for r in regions])
-    med_w = median_of([int(r.get("w", 0)) for r in regions])
-    med_h = median_of([int(r.get("h", 0)) for r in regions])
-    med_center_x = med_x + med_w // 2
-    med_center_y = med_y + med_h // 2
-
-    # Stricter tolerances than before:
-    # - Horizontal deviation: within 15% of video width or 1.5x median width
-    # - Vertical deviation: within 0.12x video height (subtitle bands are tight)
-    max_dev_x = max(int(video_meta["width"] * 0.15), int(med_w * 1.5), 30)
-    max_dev_y = max(int(video_meta["height"] * 0.12), int(med_h * 1.2), 18)
-
     validated: list[dict[str, Any]] = []
     for region in regions:
-        cx = int(region.get("centerX", int(region.get("x", 0)) + int(region.get("w", 0)) // 2))
-        cy = int(region.get("centerY", int(region.get("y", 0)) + int(region.get("h", 0)) // 2))
-        rw = int(region.get("w", 0))
-        # Outlier: center too far from median OR width is 3x+ median (noise)
-        if True:
-            validated.append(region)
-        else:
-            # Keep but mark as low-confidence fallback
-            validated.append({**region, "_outlier": True})
+        # Outlier detection disabled
+        validated.append(region)
     return validated
 
 
@@ -1761,7 +1733,6 @@ def stabilize_region(candidate: dict[str, Any], previous: dict[str, Any], *, vid
     center_dy = abs(int(candidate.get("centerY", 0)) - int(previous.get("centerY", 0)))
     size_dw = abs(int(candidate.get("w", 0)) - int(previous.get("w", 0)))
     size_dh = abs(int(candidate.get("h", 0)) - int(previous.get("h", 0)))
-    iou = region_iou(candidate, previous)
 
     # Nếu box thay đổi cực kỳ ít (cả vị trí và kích thước), giữ nguyên box cũ để tránh rung giật
     if center_dx <= 12 and center_dy <= 8 and size_dw <= 18 and size_dh <= 12:
@@ -1938,14 +1909,6 @@ def build_dynamic_subtitle_regions(
             region["confidence"] = SOURCE_SUBTITLE_DETECTION_CONFIDENCE
 
         if detected_regions and previous_detected_region is not None:
-            big_vertical_jump = False
-            big_horizontal_jump = False
-            if (
-                previous_detected_region.get("confidence", 0.0) > 0.0
-                and (big_vertical_jump or big_horizontal_jump)
-                and float(region.get("confidence", 0.0)) < float(previous_detected_region.get("confidence", 0.0)) * 1.55
-            ):
-                region = previous_detected_region
             region = stabilize_region(region, previous_detected_region, video_meta=video_meta)
         elif detected_regions:
             region = quantize_region(region, video_meta=video_meta)
@@ -1968,13 +1931,6 @@ def build_dynamic_subtitle_regions(
         padded_region["centerX"] = padded_region["x"] + padded_region["w"] // 2
         padded_region["centerY"] = padded_region["y"] + padded_region["h"] // 2
 
-        # Temporal padding: lead/trail around the subtitle period
-        previous_end = int(subtitles[index - 1].end_ms) if index > 0 else 0
-        next_start = int(subtitles[index + 1].start_ms) if index + 1 < len(subtitles) else int(subtitle.end_ms)
-        gap_before = max(sub_start - previous_end, 0)
-        gap_after = max(next_start - sub_end, 0)
-        lead_ms = min(max(int(gap_before * 0.65), 120), 360)
-        trail_ms = min(max(int(gap_after * 0.65), 160), 520)
         padded_region["startMs"] = sub_start
         padded_region["endMs"] = sub_end
         padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)

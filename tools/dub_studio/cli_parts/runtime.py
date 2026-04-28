@@ -1419,8 +1419,22 @@ def ensure_valtec_runtime(
     get_valtec_provider(preload_zeroshot=preload_zeroshot or DUB_VALTEC_PRELOAD_ZEROSHOT)
 
 
+def ensure_thumbnail_runtime(*, phase: str, step: str, progress: float) -> None:
+    ensure_python_packages(
+        [
+            ("requests", "requests"),
+            ("PIL", "Pillow"),
+        ],
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang kiểm tra thư viện tạo thumbnail...",
+    )
+
+
 def prepare_runtime(target: str) -> None:
     normalized = str(target or "all").strip().lower()
+    ensure_thumbnail_runtime(phase="thumbnail", step="prepare", progress=0.01)
     if normalized not in {"analysis", "render", "all"}:
         normalized = "all"
     if normalized in {"analysis", "all"}:

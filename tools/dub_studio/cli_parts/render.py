@@ -206,13 +206,17 @@ def expand_cleanup_region_for_render(
     center_x = int(region.get("centerX", int(region.get("x", 0)) + region_w // 2))
     center_y = int(region.get("centerY", int(region.get("y", 0)) + region_h // 2))
 
-    return {"x": max(int(region.get("x", 0)), 0), "y": max(int(region.get("y", 0)), 0), "w": min(region_w, width), "h": min(region_h, height)}
-    min_h = min(height, max(int(height * 0.14), region_h + font_size * 2))
-    expanded_w = min(width, max(region_w + int(region_w * 0.7), min_w))
-    expanded_h = min(height, max(region_h + int(region_h * 1.6), min_h))
+    # Expand width and height slightly by adding padding
+    padding_w = max(int(region_w * 0.15), 30)
+    padding_h = max(int(region_h * 0.07), 8)
+    
+    expanded_w = min(width, region_w + padding_w)
+    expanded_h = min(height, region_h + padding_h)
 
+    # Center the expanded box on the original region
     x = max(min(center_x - expanded_w // 2, width - expanded_w), 0)
-    y = max(min(center_y - int(expanded_h * 0.58), height - expanded_h), 0)
+    y = max(min(center_y - expanded_h // 2, height - expanded_h), 0)
+
     return {"x": x, "y": y, "w": expanded_w, "h": expanded_h}
 
 
@@ -564,7 +568,7 @@ def render_intro_hook(
                 {
                     "translatedText": intro_text,
                     "startMs": 0,
-                    "endMs": actual_intro_duration_ms,
+                    "endMs": int(intro_clip_ms),
                 }
             ],
             max_words=int(subtitle_preset.get("maxWordsPerChunk", 5)),
@@ -666,6 +670,38 @@ def concat_rendered_videos(intro_video_path: Path, main_video_path: Path, output
             "192k",
             "-movflags",
             "+faststart",
+            str(output_path),
+        ],
+        cwd=ROOT,
+    )
+
+def concat_ending_video_safe(main_video_path: Path, ending_video_path: Path, output_path: Path) -> None:
+    codec, codec_args = choose_video_codec()
+    try:
+        from .common import get_video_meta
+        meta = get_video_meta(main_video_path)
+        w = int(meta.get("width", 1080))
+        h = int(meta.get("height", 1920))
+        if w % 2 != 0: w += 1
+        if h % 2 != 0: h += 1
+    except Exception:
+        w, h = 1080, 1920
+
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i", str(main_video_path),
+            "-i", str(ending_video_path),
+            "-filter_complex",
+            f"[1:v:0]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v1];"
+            f"[0:v:0][0:a:0][v1][1:a:0]concat=n=2:v=1:a=1[v][acat];"
+            f"[acat]{stable_audio_filter_chain()}[a]",
+            "-map", "[v]",
+            "-map", "[a]",
+            "-c:v", codec, *codec_args,
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
             str(output_path),
         ],
         cwd=ROOT,
@@ -1915,6 +1951,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     }
 
     sticker_options = render_options.get("stickerOptions") or {}
+    ending_video = render_options.get("endingVideo") or {}
 
     flattened_render_path: Path | None = None
     main_render_path: Path | None = None
@@ -1979,6 +2016,29 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         final_output_path = dirs["render"] / f"{Path(input_path).stem}_dubstudio.mp4"
         main_render_path = finalize_main_render_output(main_render_path, final_output_path)
         outputs["outputVideoPath"] = str(main_render_path)
+
+    if ending_video.get("enabled", False) and ending_video.get("path") and Path(ending_video["path"]).exists():
+        emit_progress(phase="render", step="ending_video", progress=0.87, message="Đang ghép ending video")
+        current_video_path = outputs.get("outputVideoPath")
+        if current_video_path and Path(current_video_path).exists():
+            ending_video_path = Path(ending_video["path"])
+            ending_output_path = dirs["render"] / f"{Path(input_path).stem}_dubstudio_with_ending.mp4"
+            try:
+                concat_ending_video_safe(Path(current_video_path), ending_video_path, ending_output_path)
+                if ending_output_path.exists():
+                    # Xóa file tạm và ghi đè
+                    Path(current_video_path).unlink(missing_ok=True)
+                    ending_output_path.rename(Path(current_video_path))
+            except Exception as exc:
+                warning_message = f"Ghép ending video thất bại: {exc}"
+                outputs["warnings"].append(warning_message)
+                emit_progress(
+                    phase="render",
+                    step="ending_video",
+                    progress=0.88,
+                    message="Ghép ending video lỗi, bỏ qua",
+                    extra={"warning": warning_message[:240]},
+                )
 
     # Apply sticker overlay to MP4 output
     if output_targets.get("mp4", True) and sticker_options.get("stickerId"):

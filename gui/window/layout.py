@@ -327,9 +327,6 @@ class WindowLayoutMixin:
         self.video_codec_combo = self._make_combo(
             VIDEO_CODEC_OPTIONS, self.on_basic_settings_changed
         )
-        self.ui_theme_combo = self._make_combo(
-            UI_THEME_OPTIONS, self.on_theme_preset_changed
-        )
         self.cleanup_combo = self._make_combo(
             CLEANUP_OPTIONS, self.on_basic_settings_changed
         )
@@ -470,16 +467,33 @@ class WindowLayoutMixin:
         self.background_music_choose_btn.clicked.connect(
             self.choose_background_music_file
         )
+        self.ending_video_enabled_check = QCheckBox("Ghép Ending Video")
+        self.ending_video_enabled_check.stateChanged.connect(
+            self.on_basic_settings_changed
+        )
+        self.ending_video_path_edit = QLineEdit()
+        self.ending_video_path_edit.setReadOnly(True)
+        self.ending_video_path_edit.setPlaceholderText(
+            "Chưa chọn file clip ending (.mp4, .mov, .avi...)"
+        )
+        self.ending_video_choose_btn = self._make_button("Chọn clip", "ghost")
+        self.ending_video_choose_btn.clicked.connect(
+            self.choose_ending_video_file
+        )
         self.output_mp4_check = QCheckBox("Xuất MP4")
         self.output_mp4_check.stateChanged.connect(self.on_basic_settings_changed)
         self.output_draft_check = QCheckBox("Xuất Draft")
         self.output_draft_check.stateChanged.connect(self.on_basic_settings_changed)
+        self.output_draft_check.setParent(self)
+        self.output_draft_check.hide()
         self.output_dir_edit = QLineEdit()
         self.output_dir_edit.setPlaceholderText("Ví dụ: C:/Users/.../output")
         self.output_dir_edit.editingFinished.connect(self.on_basic_settings_changed)
         self.draft_dir_edit = QLineEdit()
         self.draft_dir_edit.setPlaceholderText("Ví dụ: C:/Users/.../draft")
         self.draft_dir_edit.editingFinished.connect(self.on_basic_settings_changed)
+        self.draft_dir_edit.setParent(self)
+        self.draft_dir_edit.hide()
         output_dir_btn = self._make_button("Chọn", "ghost")
         output_dir_btn.clicked.connect(
             lambda: self.choose_directory(self.output_dir_edit)
@@ -488,17 +502,27 @@ class WindowLayoutMixin:
         draft_dir_btn.clicked.connect(
             lambda: self.choose_directory(self.draft_dir_edit)
         )
+        draft_dir_btn.setParent(self)
+        draft_dir_btn.hide()
         self.region_x_spin = self._make_region_spin()
+        self.region_x_spin.setParent(self)
+        self.region_x_spin.hide()
         self.region_y_spin = self._make_region_spin()
+        self.region_y_spin.setParent(self)
+        self.region_y_spin.hide()
         self.region_w_spin = self._make_region_spin()
+        self.region_w_spin.setParent(self)
+        self.region_w_spin.hide()
         self.region_h_spin = self._make_region_spin()
+        self.region_h_spin.setParent(self)
+        self.region_h_spin.hide()
 
         rows = [
             (
                 "Chế độ encode",
                 self.video_codec_combo,
-                "Preset giao diện",
-                self.ui_theme_combo,
+                None,
+                None,
             ),
             (
                 "Ngôn ngữ nguồn",
@@ -625,30 +649,25 @@ class WindowLayoutMixin:
         background_music_row_layout.addWidget(self.background_music_path_edit, 1)
         background_music_row_layout.addWidget(self.background_music_choose_btn)
         settings_grid.addWidget(background_music_row, 20, 1, 1, 3)
-        settings_grid.addWidget(self.output_mp4_check, 21, 0)
-        settings_grid.addWidget(self.output_draft_check, 21, 1)
-        settings_grid.addWidget(self._field_label("Thư mục output"), 22, 0)
+        settings_grid.addWidget(self.ending_video_enabled_check, 21, 0, 1, 2)
+        settings_grid.addWidget(self._field_label("File ending clip"), 22, 0)
+        ending_video_row = QWidget()
+        ending_video_row_layout = QHBoxLayout(ending_video_row)
+        ending_video_row_layout.setContentsMargins(0, 0, 0, 0)
+        ending_video_row_layout.setSpacing(8)
+        ending_video_row_layout.addWidget(self.ending_video_path_edit, 1)
+        ending_video_row_layout.addWidget(self.ending_video_choose_btn)
+        settings_grid.addWidget(ending_video_row, 22, 1, 1, 3)
+        
+        settings_grid.addWidget(self.output_mp4_check, 23, 0)
+        settings_grid.addWidget(self._field_label("Thư mục output"), 24, 0)
         output_row = QWidget()
         output_row_layout = QHBoxLayout(output_row)
         output_row_layout.setContentsMargins(0, 0, 0, 0)
         output_row_layout.addWidget(self.output_dir_edit)
         output_row_layout.addWidget(output_dir_btn)
-        settings_grid.addWidget(output_row, 22, 1, 1, 3)
-        settings_grid.addWidget(self._field_label("Thư mục draft"), 23, 0)
-        draft_row = QWidget()
-        draft_row_layout = QHBoxLayout(draft_row)
-        draft_row_layout.setContentsMargins(0, 0, 0, 0)
-        draft_row_layout.addWidget(self.draft_dir_edit)
-        draft_row_layout.addWidget(draft_dir_btn)
-        settings_grid.addWidget(draft_row, 23, 1, 1, 3)
-        settings_grid.addWidget(self._field_label("Vùng sub cũ X"), 24, 0)
-        settings_grid.addWidget(self.region_x_spin, 24, 1)
-        settings_grid.addWidget(self._field_label("Vùng sub cũ Y"), 24, 2)
-        settings_grid.addWidget(self.region_y_spin, 24, 3)
-        settings_grid.addWidget(self._field_label("Vùng sub cũ W"), 25, 0)
-        settings_grid.addWidget(self.region_w_spin, 25, 1)
-        settings_grid.addWidget(self._field_label("Vùng sub cũ H"), 25, 2)
-        settings_grid.addWidget(self.region_h_spin, 25, 3)
+        settings_grid.addWidget(output_row, 24, 1, 1, 3)
+        # Đã ẩn Xuất Draft và Vùng sub cũ thủ công theo yêu cầu.
         right_col.addWidget(settings_card)
 
         voice_card, voice_layout_root = self._make_card(
@@ -678,6 +697,8 @@ class WindowLayoutMixin:
     def _build_ui(self) -> None:
         # Keep a single supported UI path without disturbing existing behavior.
         self._build_ui_compact()
+        if hasattr(self, "load_system_config_into_ui"):
+            self.load_system_config_into_ui()
 
     def _build_ui_compact(self) -> None:
         self.setStyleSheet(APP_STYLESHEET)
@@ -697,9 +718,11 @@ class WindowLayoutMixin:
         self._nav_edit_btn.setObjectName("NavActive")
         self._nav_preview_btn = self._make_button("Preview", "ghost")
         self._nav_batch_btn = self._make_button("Batch", "ghost")
+        self._nav_config_btn = self._make_button("Cấu hình", "ghost")
         self._nav_edit_btn.clicked.connect(lambda: self._switch_page(0))
         self._nav_preview_btn.clicked.connect(lambda: self._switch_page(1))
-        self._nav_batch_btn.clicked.connect(lambda: self._switch_page(2))
+        self._nav_config_btn.clicked.connect(lambda: self._switch_page(2))
+        self._nav_batch_btn.clicked.connect(lambda: self._switch_page(3))
 
         self.mode_chip = self._make_chip("Chờ phân tích")
         self.subtitle_chip = self._make_chip("Vietsub: Bật")
@@ -707,6 +730,7 @@ class WindowLayoutMixin:
         nav_bar.addWidget(self._nav_edit_btn)
         nav_bar.addWidget(self._nav_preview_btn)
         nav_bar.addWidget(self._nav_batch_btn)
+        nav_bar.addWidget(self._nav_config_btn)
         nav_bar.addSpacing(12)
         nav_bar.addWidget(self.mode_chip)
         nav_bar.addWidget(self.subtitle_chip)
@@ -810,7 +834,6 @@ class WindowLayoutMixin:
         self.main_speaker_count_spin.valueChanged.connect(self.on_basic_settings_changed)
         self.main_timing_mode_combo = self._make_combo(TIMING_MODE_OPTIONS, self.on_basic_settings_changed)
         self.video_codec_combo = self._make_combo(VIDEO_CODEC_OPTIONS, self.on_basic_settings_changed)
-        self.ui_theme_combo = self._make_combo(UI_THEME_OPTIONS, self.on_theme_preset_changed)
         self.main_cleanup_combo = self._make_combo(CLEANUP_OPTIONS, self.on_basic_settings_changed)
 
         lang_grid.addWidget(self._field_label("Ngôn ngữ nguồn"), 0, 0)
@@ -827,8 +850,6 @@ class WindowLayoutMixin:
         lang_grid.addWidget(self.main_cleanup_combo, 2, 3)
         lang_grid.addWidget(self._field_label("Chế độ encode"), 3, 0)
         lang_grid.addWidget(self.video_codec_combo, 3, 1)
-        lang_grid.addWidget(self._field_label("Preset giao diện"), 3, 2)
-        lang_grid.addWidget(self.ui_theme_combo, 3, 3)
         lang_section.content_layout.addLayout(lang_grid)
 
         # Audio & Teaser
@@ -926,9 +947,27 @@ class WindowLayoutMixin:
         audio_grid.addLayout(main_bg_vol_row, 3, 3)
         audio_grid.addWidget(self._field_label("File nhạc nền"), 4, 0)
         audio_grid.addLayout(bg_music_row, 4, 1, 1, 3)
-        audio_grid.addWidget(self._field_label("Giọng lồng tiếng mặc định"), 5, 0)
-        audio_grid.addLayout(default_voice_row, 5, 1, 1, 3)
-        audio_grid.addWidget(self.default_voice_status_label, 6, 1, 1, 3)
+
+        self.main_ending_video_enabled_check = QCheckBox("Ghép Ending Video")
+        self.main_ending_video_enabled_check.stateChanged.connect(self.on_basic_settings_changed)
+        self.main_ending_video_path_edit = QLineEdit()
+        self.main_ending_video_path_edit.setReadOnly(True)
+        self.main_ending_video_path_edit.setPlaceholderText("Chưa chọn file clip ending")
+        self.main_ending_video_choose_btn = self._make_button("Chọn", "ghost")
+        self.main_ending_video_choose_btn.clicked.connect(self.choose_ending_video_file)
+        ending_vid_row = QHBoxLayout()
+        ending_vid_row.setContentsMargins(0, 0, 0, 0)
+        ending_vid_row.setSpacing(5)
+        ending_vid_row.addWidget(self.main_ending_video_path_edit, 1)
+        ending_vid_row.addWidget(self.main_ending_video_choose_btn)
+
+        audio_grid.addWidget(self.main_ending_video_enabled_check, 5, 0, 1, 2)
+        audio_grid.addWidget(self._field_label("File ending clip"), 6, 0)
+        audio_grid.addLayout(ending_vid_row, 6, 1, 1, 3)
+
+        audio_grid.addWidget(self._field_label("Giọng lồng tiếng mặc định"), 7, 0)
+        audio_grid.addLayout(default_voice_row, 7, 1, 1, 3)
+        audio_grid.addWidget(self.default_voice_status_label, 8, 1, 1, 3)
         audio_section.content_layout.addLayout(audio_grid)
 
         # Output
@@ -940,16 +979,22 @@ class WindowLayoutMixin:
         self.main_output_mp4_check.stateChanged.connect(self.on_basic_settings_changed)
         self.main_output_draft_check = QCheckBox("Xuất Draft")
         self.main_output_draft_check.stateChanged.connect(self.on_basic_settings_changed)
+        self.main_output_draft_check.setParent(self)
+        self.main_output_draft_check.hide()
         self.main_output_dir_edit = QLineEdit()
         self.main_output_dir_edit.setPlaceholderText("Thư mục output")
         self.main_output_dir_edit.editingFinished.connect(self.on_basic_settings_changed)
         self.main_draft_dir_edit = QLineEdit()
         self.main_draft_dir_edit.setPlaceholderText("Thư mục draft")
         self.main_draft_dir_edit.editingFinished.connect(self.on_basic_settings_changed)
+        self.main_draft_dir_edit.setParent(self)
+        self.main_draft_dir_edit.hide()
         output_dir_btn = self._make_button("Chọn", "ghost")
         output_dir_btn.clicked.connect(lambda: self.choose_directory(self.main_output_dir_edit))
         draft_dir_btn = self._make_button("Chọn", "ghost")
         draft_dir_btn.clicked.connect(lambda: self.choose_directory(self.main_draft_dir_edit))
+        draft_dir_btn.setParent(self)
+        draft_dir_btn.hide()
         output_dir_row = QHBoxLayout()
         output_dir_row.setContentsMargins(0, 0, 0, 0)
         output_dir_row.addWidget(self.main_output_dir_edit)
@@ -959,31 +1004,24 @@ class WindowLayoutMixin:
         draft_dir_row.addWidget(self.main_draft_dir_edit)
         draft_dir_row.addWidget(draft_dir_btn)
         output_grid.addWidget(self.main_output_mp4_check, 0, 0)
-        output_grid.addWidget(self.main_output_draft_check, 0, 1)
         output_grid.addWidget(self._field_label("Thư mục output"), 1, 0)
         output_grid.addLayout(output_dir_row, 1, 1, 1, 3)
-        output_grid.addWidget(self._field_label("Thư mục draft"), 2, 0)
-        output_grid.addLayout(draft_dir_row, 2, 1, 1, 3)
+        # Đã ẩn Xuất Draft và Thư mục draft.
         output_section.content_layout.addLayout(output_grid)
 
-        # Vùng sub cũ
-        region_section = self._make_section("Vùng subtitle cũ cần che", expanded=False)
-        region_grid = QGridLayout()
-        region_grid.setHorizontalSpacing(8)
-        region_grid.setVerticalSpacing(7)
+        # Vùng sub cũ (ẩn theo yêu cầu)
         self.main_region_x_spin = self._make_region_spin()
+        self.main_region_x_spin.setParent(self)
+        self.main_region_x_spin.hide()
         self.main_region_y_spin = self._make_region_spin()
+        self.main_region_y_spin.setParent(self)
+        self.main_region_y_spin.hide()
         self.main_region_w_spin = self._make_region_spin()
+        self.main_region_w_spin.setParent(self)
+        self.main_region_w_spin.hide()
         self.main_region_h_spin = self._make_region_spin()
-        region_grid.addWidget(self._field_label("X"), 0, 0)
-        region_grid.addWidget(self.main_region_x_spin, 0, 1)
-        region_grid.addWidget(self._field_label("Y"), 0, 2)
-        region_grid.addWidget(self.main_region_y_spin, 0, 3)
-        region_grid.addWidget(self._field_label("W"), 1, 0)
-        region_grid.addWidget(self.main_region_w_spin, 1, 1)
-        region_grid.addWidget(self._field_label("H"), 1, 2)
-        region_grid.addWidget(self.main_region_h_spin, 1, 3)
-        region_section.content_layout.addLayout(region_grid)
+        self.main_region_h_spin.setParent(self)
+        self.main_region_h_spin.hide()
 
         # Nhân vật - Gán giọng
         voice_card, voice_layout_root = self._make_card("Nhân vật - Gán giọng", "")
@@ -1038,7 +1076,7 @@ class WindowLayoutMixin:
         left_col.addWidget(lang_section)
         left_col.addWidget(audio_section)
         left_col.addWidget(output_section)
-        left_col.addWidget(region_section)
+        # left_col.addWidget(region_section) - Đã ẩn vùng manual sub cũ
         left_col.addWidget(voice_card)
         left_col.addWidget(subtitle_card)
         left_col.addStretch(1)
@@ -1161,6 +1199,8 @@ class WindowLayoutMixin:
         self.export_file_btn.clicked.connect(self.export_rendered_video_file)
         self.choose_output_folder_btn = self._make_button("Chọn thư mục xuất", "ghost")
         self.choose_output_folder_btn.clicked.connect(self.choose_output_directory)
+        self.export_thumbnail_btn = self._make_button("Xuất thumbnail", "ghost")
+        self.export_thumbnail_btn.clicked.connect(self.export_video_thumbnail)
         output_actions_layout.addWidget(self.output_result_edit)
         output_actions_layout.addWidget(self.output_export_status_label)
         output_actions_layout.addWidget(self.output_folder_quick_edit)
@@ -1169,6 +1209,7 @@ class WindowLayoutMixin:
         output_quick_actions.addWidget(self.preview_video_btn)
         output_quick_actions.addWidget(self.export_file_btn)
         output_quick_actions.addWidget(self.choose_output_folder_btn)
+        output_quick_actions.addWidget(self.export_thumbnail_btn)
         output_quick_actions.addStretch(1)
         output_actions_layout.addLayout(output_quick_actions)
 
@@ -1543,6 +1584,69 @@ class WindowLayoutMixin:
             if not hasattr(self, old) and hasattr(self, new):
                 setattr(self, old, getattr(self, new))
 
+        # =========================================================
+        # PAGE 3: CONFIGURATION
+        # =========================================================
+        config_page = QWidget()
+        config_page_layout = QVBoxLayout(config_page)
+        config_page_layout.setContentsMargins(0, 0, 0, 0)
+        config_page_layout.setSpacing(10)
+
+        config_card, config_inner_layout = self._make_card("Cấu hình hệ thống", "Thiết lập các biến môi trường hoạt động cho ứng dụng.")
+        config_inner_layout.setContentsMargins(16, 16, 16, 16)
+        
+        config_grid = QGridLayout()
+        config_grid.setHorizontalSpacing(12)
+        config_grid.setVerticalSpacing(12)
+
+        # DUB_TRANSCRIBE_PROVIDER
+        config_grid.addWidget(self._field_label("Bộ nhận diện Sub (Transcribe):"), 0, 0)
+        self.conf_transcribe_combo = QComboBox()
+        self.conf_transcribe_combo.addItems(["auto", "whisperx"])
+        config_grid.addWidget(self.conf_transcribe_combo, 0, 1)
+
+        # DUB_TRANSLATE_PROVIDER
+        config_grid.addWidget(self._field_label("Bộ dịch thuật (Translate):"), 1, 0)
+        self.conf_translate_combo = QComboBox()
+        self.conf_translate_combo.addItems(["auto", "ollama"])
+        config_grid.addWidget(self.conf_translate_combo, 1, 1)
+
+        # DUB_OLLAMA_BASE_URL
+        config_grid.addWidget(self._field_label("Ollama Base URL:"), 2, 0)
+        self.conf_ollama_url_edit = QLineEdit()
+        config_grid.addWidget(self.conf_ollama_url_edit, 2, 1)
+
+        # DUB_OLLAMA_MODEL
+        config_grid.addWidget(self._field_label("Ollama Model:"), 3, 0)
+        self.conf_ollama_model_edit = QLineEdit()
+        config_grid.addWidget(self.conf_ollama_model_edit, 3, 1)
+
+        # HF_TOKEN
+        config_grid.addWidget(self._field_label("HuggingFace Token:"), 4, 0)
+        self.conf_hf_token_edit = QLineEdit()
+        self.conf_hf_token_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        config_grid.addWidget(self.conf_hf_token_edit, 4, 1)
+
+        # DUB_HF_CACHE_DIR
+        config_grid.addWidget(self._field_label("HuggingFace Cache Dir:"), 5, 0)
+        hf_cache_row = QHBoxLayout()
+        self.conf_hf_cache_edit = QLineEdit()
+        hf_cache_btn = self._make_button("Chọn", "ghost")
+        hf_cache_btn.clicked.connect(self.choose_hf_cache_dir)
+        hf_cache_row.addWidget(self.conf_hf_cache_edit, 1)
+        hf_cache_row.addWidget(hf_cache_btn)
+        config_grid.addLayout(hf_cache_row, 5, 1)
+
+        # Button Save
+        self.conf_save_btn = self._make_button("Lưu cấu hình", "success")
+        self.conf_save_btn.clicked.connect(self.save_system_config)
+        config_grid.addWidget(self.conf_save_btn, 6, 0, 1, 2)
+
+        config_inner_layout.addLayout(config_grid)
+        config_inner_layout.addStretch(1)
+        config_page_layout.addWidget(config_card)
+
+        self._page_stack.addWidget(config_page)
         self._page_stack.addWidget(batch_page)
 
         # Page navigation
@@ -1559,7 +1663,8 @@ class WindowLayoutMixin:
         self.setStyleSheet(self.styleSheet())
         for btn, active in [(self._nav_edit_btn, index == 0),
                               (self._nav_preview_btn, index == 1),
-                              (self._nav_batch_btn, index == 2)]:
+                              (self._nav_config_btn, index == 2),
+                              (self._nav_batch_btn, index == 3)]:
             if btn:
                 btn.setObjectName("NavActive" if active else "")
                 btn.style().unpolish(btn)

@@ -637,10 +637,6 @@ class WindowHelpersMixin:
         self.sync_widgets_from_settings()
         self.refresh_all()
 
-    def on_theme_preset_changed(self) -> None:
-        preset_key = str(self.ui_theme_combo.currentData() or "cinema")
-        self.apply_ui_theme_preset(preset_key)
-
     def play_intro_animation(self) -> None:
         self._intro_animation_group = QParallelAnimationGroup(self)
         for index, widget in enumerate(self.animated_cards):

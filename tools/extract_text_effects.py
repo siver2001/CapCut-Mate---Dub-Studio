@@ -97,7 +97,8 @@ def generate_python_mapping(text_effects: dict) -> str:
 
 def main():
     # 读取 data.ts 文件
-    data_file = "d:\\code\\GitHub\\capcut-mate\\data.ts"
+    import os
+    data_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.ts")
     
     print("=" * 60)
     print("开始从 data.ts 提取花字效果...")
@@ -126,7 +127,7 @@ def main():
     python_code = generate_python_mapping(text_effects)
     
     # 保存到文件
-    output_file = "d:\\code\\GitHub\\capcut-mate\\text_effect_map_generated.py"
+    output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "text_effect_map_generated.py")
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(python_code)
     

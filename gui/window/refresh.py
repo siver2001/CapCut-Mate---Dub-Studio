@@ -44,7 +44,6 @@ class WindowRefreshMixin:
             "speaker_count_spin",
             "timing_mode_combo",
             "video_codec_combo",
-            "ui_theme_combo",
             "cleanup_combo",
             "subtitle_enabled_combo",
             "subtitle_position_combo",
@@ -75,6 +74,12 @@ class WindowRefreshMixin:
             "background_music_path_edit",
             "background_music_choose_btn",
             "background_music_volume_spin",
+            "ending_video_enabled_check",
+            "ending_video_path_edit",
+            "ending_video_choose_btn",
+            "main_ending_video_enabled_check",
+            "main_ending_video_path_edit",
+            "main_ending_video_choose_btn",
             "output_mp4_check",
             "output_draft_check",
             "output_dir_edit",
@@ -241,6 +246,8 @@ class WindowRefreshMixin:
             )
         if hasattr(self, "export_file_btn"):
             self.export_file_btn.setEnabled(not running and has_render_preview)
+        if hasattr(self, "export_thumbnail_btn"):
+            self.export_thumbnail_btn.setEnabled(not running and has_render_preview)
         if hasattr(self, "pause_preview_btn"):
             self.pause_preview_btn.setEnabled(
                 not running and has_render_preview and preview_available
@@ -377,15 +384,6 @@ class WindowRefreshMixin:
             else "Timing: Tự nhiên",
             max_width=170,
         )
-        preset_label = dict(UI_THEME_OPTIONS).get(
-            self.settings.get("uiThemePreset", "cinema"), "Cinema"
-        )
-        if hasattr(self, "sidebar_status_chip"):
-            self._set_chip_display_text(
-                self.sidebar_status_chip,
-                f"Preset: {preset_label}",
-                max_width=180,
-            )
         latest_output_path = self.last_output_path or ""
         output_directory = (
             self.output_dir_edit.text().strip()
