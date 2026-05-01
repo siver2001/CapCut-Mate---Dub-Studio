@@ -490,6 +490,8 @@ FONT_OPTIONS = [
 CLEANUP_OPTIONS = [
     ("localized_blur", "Làm mờ vùng phụ đề cũ"),
     ("localized_mask", "Phủ mềm vùng phụ đề cũ"),
+    ("pixelate", "Che bằng hiệu ứng Pixel (Mosaic)"),
+    ("custom_box", "Che bằng hộp trắng (Màu tùy chỉnh)"),
     ("none", "Giữ nguyên phụ đề gốc"),
 ]
 

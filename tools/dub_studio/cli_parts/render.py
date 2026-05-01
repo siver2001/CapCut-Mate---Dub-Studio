@@ -429,7 +429,7 @@ def burn_subtitles(
             f"BorderStyle={3 if box_enabled else 1},"
             f"Outline={effective_ass_outline(int(subtitle_preset.get('boxPaddingX', 24)), source_video_meta) if box_enabled else outline},Shadow={box_shadow},"
             f"FontSize={font_size},BackColour={box_fill_color if box_enabled else '&H00000000'},"
-            f"MarginV={margin_v},Alignment=2'"
+            f"MarginV={margin_v},Alignment={8 if str(subtitle_preset.get('positionPreset') or 'bottom').strip().lower() == 'top' else 5 if str(subtitle_preset.get('positionPreset') or 'bottom').strip().lower() == 'middle' else 2}'"
         )
 
     cleanup_region = expand_cleanup_region_for_render(
@@ -442,7 +442,7 @@ def burn_subtitles(
     region_w = int(cleanup_region.get("w", 0))
     region_h = int(cleanup_region.get("h", 0))
 
-    dynamic_regions = [region for region in (dynamic_regions or []) if int(region.get("w", 0)) > 0 and int(region.get("h", 0)) > 0]
+    dynamic_regions = [region for region in (dynamic_regions or []) if int(region.get("w", 0)) > 0 and int(region.get("h", 0)) > 0 and region.get("detected", False)]
 
     if dynamic_regions:
         if cleanup_mode == "localized_blur":
@@ -503,12 +503,71 @@ def burn_subtitles(
             video_filter = f"{drawbox_chain},{subtitles_filter}" if drawbox_chain else subtitles_filter
             filter_arg = "-vf"
             video_map = "0:v:0"
+        elif cleanup_mode == "pixelate":
+            drawbox_chain = ",".join(
+                [
+                    (
+                        lambda cleanup_region: (
+                            "drawbox="
+                            f"x={cleanup_region['x']}:"
+                            f"y={cleanup_region['y']}:"
+                            f"w={cleanup_region['w']}:"
+                            f"h={cleanup_region['h']}:"
+                            "color=white:t=fill:"
+                            f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
+                        )
+                    )(
+                        expand_cleanup_region_for_render(
+                            region,
+                            video_meta=source_video_meta,
+                            subtitle_preset=subtitle_preset,
+                        )
+                    )
+                    for region in dynamic_regions
+                ]
+            )
+            pixel_filter = "scale=iw/12:ih/12,scale=iw*12:ih*12:flags=neighbor"
+            video_filter = (
+                "[0:v]split=3[orig][pixel_src][mask_src];"
+                f"[pixel_src]{pixel_filter}[pixelated];"
+                f"[mask_src]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,{drawbox_chain}[mask];"
+                "[orig][pixelated][mask]maskedmerge[merged];"
+                f"[merged]{subtitles_filter}[vout]"
+            )
+            filter_arg = "-filter_complex"
+            video_map = "[vout]"
+        elif cleanup_mode == "custom_box":
+            drawbox_chain = ",".join(
+                [
+                    (
+                        lambda cleanup_region: (
+                            "drawbox="
+                            f"x={cleanup_region['x']}:"
+                            f"y={cleanup_region['y']}:"
+                            f"w={cleanup_region['w']}:"
+                            f"h={cleanup_region['h']}:"
+                            "color=white:t=fill:"
+                            f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
+                        )
+                    )(
+                        expand_cleanup_region_for_render(
+                            region,
+                            video_meta=source_video_meta,
+                            subtitle_preset=subtitle_preset,
+                        )
+                    )
+                    for region in dynamic_regions
+                ]
+            )
+            video_filter = f"{drawbox_chain},{subtitles_filter}" if drawbox_chain else subtitles_filter
+            filter_arg = "-vf"
+            video_map = "0:v:0"
         else:
             video_filter = subtitles_filter
             filter_arg = "-vf"
             video_map = "0:v:0"
     else:
-        if cleanup_mode == "localized_blur":
+        if cleanup_mode == "localized_blur" and subtitle_region.get("detected", False):
             video_filter = (
                 "[0:v]split=2[base][masksrc];"
                 f"[masksrc]crop=w={region_w}:h={region_h}:x={region_x}:y={region_y},"
@@ -518,8 +577,23 @@ def burn_subtitles(
             )
             filter_arg = "-filter_complex"
             video_map = "[vout]"
-        elif cleanup_mode == "localized_mask":
+        elif cleanup_mode == "localized_mask" and subtitle_region.get("detected", False):
             video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=black:t=fill,{subtitles_filter}"
+            filter_arg = "-vf"
+            video_map = "0:v:0"
+        elif cleanup_mode == "pixelate" and subtitle_region.get("detected", False):
+            pixel_filter = "scale=iw/12:ih/12,scale=iw*12:ih*12:flags=neighbor"
+            video_filter = (
+                "[0:v]split=2[base][masksrc];"
+                f"[masksrc]crop=w={region_w}:h={region_h}:x={region_x}:y={region_y},"
+                f"{pixel_filter}[mask];"
+                f"[base][mask]overlay={region_x}:{region_y}[clean];"
+                f"[clean]{subtitles_filter}[vout]"
+            )
+            filter_arg = "-filter_complex"
+            video_map = "[vout]"
+        elif cleanup_mode == "custom_box" and subtitle_region.get("detected", False):
+            video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=white:t=fill,{subtitles_filter}"
             filter_arg = "-vf"
             video_map = "0:v:0"
         else:

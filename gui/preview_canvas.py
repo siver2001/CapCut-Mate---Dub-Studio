@@ -170,6 +170,29 @@ class PreviewCanvas(QWidget):
         self._target_rect = QRectF(target)
         painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
 
+        # Draw old subtitle region if available
+        region = self.settings.get("subtitleRegion") or (self.analysis or {}).get("subtitleRegion") or {}
+        rw = float(region.get("w", 0))
+        rh = float(region.get("h", 0))
+        if rw > 0 and rh > 0:
+            scale_x = target.width() / pixmap.width()
+            scale_y = target.height() / pixmap.height()
+
+            rx = target.left() + float(region.get("x", 0)) * scale_x
+            ry = target.top() + float(region.get("y", 0)) * scale_y
+            rw_mapped = rw * scale_x
+            rh_mapped = rh * scale_y
+
+            rect_to_draw = QRectF(rx, ry, rw_mapped, rh_mapped)
+            painter.save()
+            painter.setBrush(QColor(59, 130, 246, 75))
+            painter.setPen(QPen(QColor(239, 68, 68, 200), 1.5, Qt.PenStyle.DashLine))
+            painter.drawRect(rect_to_draw)
+            painter.setPen(QColor(255, 255, 255, 210))
+            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            painter.drawText(rect_to_draw, int(Qt.AlignmentFlag.AlignCenter), "[Vùng sub cũ]")
+            painter.restore()
+
         # Sticker Preview
         sticker_opts = self.settings.get("stickerOptions") or {}
         sticker_id = str(sticker_opts.get("stickerId") or "")

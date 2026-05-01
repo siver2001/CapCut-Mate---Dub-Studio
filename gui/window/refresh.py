@@ -141,6 +141,7 @@ class WindowRefreshMixin:
                     "subtitlePreset": self.settings.get("subtitlePreset") or {},
                     "subtitleTimeline": (analysis or {}).get("subtitleTimeline") or [],
                     "preview_text": text,
+                    "subtitleRegion": self.settings.get("subtitleRegion") or (analysis or {}).get("subtitleRegion") or {},
                 },
                 self.settings.get("stickerOptions") or {},
                 self.settings.get("watermark") or {},

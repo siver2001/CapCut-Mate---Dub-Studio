@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsScene,
     QGraphicsView,
+    QGraphicsItem,
     QPushButton,
     QSlider,
     QStackedLayout,
@@ -43,33 +44,35 @@ def _fix_black_color(color: QColor) -> QColor:
     return color
 
 
-class _SubtitleOverlay(QWidget):
-    """Transparent widget that paints subtitle text + sticker at the correct position."""
+class _SubtitleOverlay(QGraphicsItem):
+    """Graphics item that paints subtitle text + sticker directly in the scene."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QGraphicsItem | None = None) -> None:
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
-        self.setAutoFillBackground(False)
-        self.setStyleSheet("background: transparent; border: none;")
         self._subtitle_data: dict[str, Any] = {}
         self._sticker_pixmap: QPixmap | None = None
         self._sticker_opts: dict[str, Any] = {}
         self._watermark_opts: dict[str, Any] = {}
 
-    def _get_video_frame_rect(self) -> QRectF:
-        widget_w = self.width()
-        widget_h = self.height()
-        if widget_w <= 0 or widget_h <= 0:
-            return QRectF(0, 0, widget_w, widget_h)
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, 4000, 4000)
 
-        video_size = QSizeF(16, 9)
+    def _get_video_frame_rect(self) -> QRectF:
+        scene_rect = self.scene().sceneRect() if self.scene() else QRectF(0, 0, 1920, 1080)
+        widget_w = scene_rect.width()
+        widget_h = scene_rect.height()
+        if widget_w <= 0 or widget_h <= 0:
+            return scene_rect
+
+        video_size = QSizeF(1920, 1080)
         try:
-            video_widget = self.parent().parent()
-            if hasattr(video_widget, "_video_item"):
-                native = video_widget._video_item.nativeSize()
-                if native.width() > 0 and native.height() > 0:
-                    video_size = native
+            if self.scene():
+                for item in self.scene().items():
+                    if isinstance(item, QGraphicsVideoItem):
+                        native = item.nativeSize()
+                        if native.width() > 0 and native.height() > 0:
+                            video_size = native
+                            break
         except Exception:
             pass
 
@@ -100,13 +103,53 @@ class _SubtitleOverlay(QWidget):
         self._watermark_opts = watermark_opts or {}
         self.update()
 
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
+    def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self._paint_old_subtitle_region(painter)
         self._paint_sticker(painter)
         self._paint_watermark(painter)
         self._paint_subtitle(painter)
-        painter.end()
+
+    def _paint_old_subtitle_region(self, painter: QPainter) -> None:
+        region = self._subtitle_data.get("subtitleRegion") or {}
+        if not region:
+            return
+        rw = float(region.get("w", 0))
+        rh = float(region.get("h", 0))
+        if rw <= 0 or rh <= 0:
+            return
+
+        frame_rect = self._get_video_frame_rect()
+        video_size = QSizeF(1920, 1080)
+        try:
+            if self.scene():
+                for item in self.scene().items():
+                    if isinstance(item, QGraphicsVideoItem):
+                        native = item.nativeSize()
+                        if native.width() > 0 and native.height() > 0:
+                            video_size = native
+                            break
+        except Exception:
+            pass
+
+        scale_x = frame_rect.width() / video_size.width()
+        scale_y = frame_rect.height() / video_size.height()
+
+        rx = frame_rect.left() + float(region.get("x", 0)) * scale_x
+        ry = frame_rect.top() + float(region.get("y", 0)) * scale_y
+        rw_mapped = rw * scale_x
+        rh_mapped = rh * scale_y
+
+        rect_to_draw = QRectF(rx, ry, rw_mapped, rh_mapped)
+        painter.save()
+        painter.setBrush(QColor(59, 130, 246, 75))
+        painter.setPen(QPen(QColor(239, 68, 68, 200), 1.5, Qt.PenStyle.DashLine))
+        painter.drawRect(rect_to_draw)
+        
+        painter.setPen(QColor(255, 255, 255, 210))
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        painter.drawText(rect_to_draw, int(Qt.AlignmentFlag.AlignCenter), "[Vùng sub cũ]")
+        painter.restore()
 
     def _paint_sticker(self, painter: QPainter) -> None:
         sticker_opts = self._sticker_opts
@@ -371,14 +414,18 @@ class VideoPreviewWidget(QWidget):
         self._video_surface.setMinimumHeight(260)
         self._video_surface.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._video_surface.installEventFilter(self)
-        self._surface_stack = QStackedLayout(self._video_surface)
-        self._surface_stack.setContentsMargins(0, 0, 0, 0)
-        self._surface_stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        surface_layout = QVBoxLayout(self._video_surface)
+        surface_layout.setContentsMargins(0, 0, 0, 0)
 
         self._scene = QGraphicsScene(self._video_surface)
         self._video_item = QGraphicsVideoItem()
         self._video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
         self._scene.addItem(self._video_item)
+
+        self._overlay = _SubtitleOverlay()
+        self._overlay.setZValue(100)
+        self._scene.addItem(self._overlay)
+
         self._video_view = QGraphicsView(self._scene, self._video_surface)
         self._video_view.setFrameShape(QFrame.Shape.NoFrame)
         self._video_view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -390,11 +437,7 @@ class VideoPreviewWidget(QWidget):
         self._video_view.viewport().installEventFilter(self)
         self._player.setVideoOutput(self._video_item)
 
-        self._overlay = _SubtitleOverlay(self._video_surface)
-        self._overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-        self._surface_stack.addWidget(self._video_view)
-        self._surface_stack.addWidget(self._overlay)
+        surface_layout.addWidget(self._video_view)
         self._layout.addWidget(self._video_surface, 1)
 
         # --- Controls ---
@@ -587,6 +630,7 @@ class VideoPreviewWidget(QWidget):
         """
         self._subtitle_preset = subtitle_data.get("subtitlePreset") or {}
         self._subtitle_timeline = subtitle_data.get("subtitleTimeline") or []
+        self._subtitle_region = subtitle_data.get("subtitleRegion") or {}
         self._preview_text = str(
             subtitle_data.get("preview_text")
             or subtitle_data.get("current_text")
@@ -749,17 +793,16 @@ class VideoPreviewWidget(QWidget):
                 "subtitleTimeline": self._subtitle_timeline,
                 "current_text": self._current_text,
                 "preview_text": self._preview_text,
+                "subtitleRegion": getattr(self, "_subtitle_region", {}),
             },
             self._sticker_opts,
             self._sticker_pixmap,
             self._watermark_opts,
         )
-        self._overlay.raise_()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._fit_video_scene()
-        self._overlay.resize(self._video_surface.size())
 
     def _fit_video_scene(self) -> None:
         width = max(1, self._video_surface.width())
@@ -767,6 +810,8 @@ class VideoPreviewWidget(QWidget):
         self._scene.setSceneRect(0, 0, width, height)
         self._video_item.setPos(0, 0)
         self._video_item.setSize(QSizeF(width, height))
+        if hasattr(self, "_overlay") and self._overlay is not None:
+            self._overlay.update()
 
     def eventFilter(self, watched, event) -> bool:
         watch_targets = {self._video_surface}
