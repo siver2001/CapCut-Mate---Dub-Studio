@@ -1896,28 +1896,13 @@ def build_stable_subtitle_positions(
     positions: list[dict[str, int]] = []
     for subtitle in subtitles:
         region = choose_region_for_subtitle(subtitle, dynamic_regions) or fallback_region
-        center_x = int(region.get("centerX", fallback_center["centerX"]))
+        center_x = video_meta["width"] // 2
         center_y = int(region.get("centerY", fallback_center["centerY"]))
 
-        if abs(center_x - fallback_center["centerX"]) <= 72:
-            center_x = fallback_center["centerX"]
-        if abs(center_y - fallback_center["centerY"]) <= 24:
-            center_y = fallback_center["centerY"]
-
-        dx = abs(center_x - previous["centerX"])
         dy = abs(center_y - previous["centerY"])
-        if dx <= 84:
-            center_x = previous["centerX"]
-        elif dx <= 144:
-            center_x = int(round((previous["centerX"] * 3 + center_x) / 4))
-
-        if dy <= 42:
+        if dy <= 12:
             center_y = previous["centerY"]
-        elif dy <= 96:
-            center_y = int(round((previous["centerY"] * 3 + center_y) / 4))
 
-        center_x = max(min(snap_axis(center_x, 6), int(video_meta["width"])), 0)
-        center_y = max(min(snap_axis(center_y, 6), int(video_meta["height"])), 0)
         stable_position = {"centerX": center_x, "centerY": center_y}
         positions.append(stable_position)
         previous = stable_position
@@ -2041,7 +2026,11 @@ def build_dynamic_subtitle_regions(
             region["confidence"] = SOURCE_SUBTITLE_DETECTION_CONFIDENCE
 
         if detected_regions and previous_detected_region is not None:
-            region = stabilize_region(region, previous_detected_region, video_meta=video_meta)
+            y_diff = abs(int(region.get("centerY", 0)) - int(previous_detected_region.get("centerY", 0)))
+            if y_diff > 16:
+                region = quantize_region(region, video_meta=video_meta)
+            else:
+                region = stabilize_region(region, previous_detected_region, video_meta=video_meta)
         elif detected_regions:
             region = quantize_region(region, video_meta=video_meta)
 
@@ -2090,9 +2079,12 @@ def build_dynamic_subtitle_regions(
         if r["w"] < min_w:
             r["w"] = min_w
 
+        # Vertical offset from center of the old sub for better coverage
+        y_offset = int(video_meta.get("height", 1024) * 0.005)
+
         # Keep both the mask and the new subtitle exactly centered horizontally on the video
         r["centerX"] = video_meta["width"] // 2
-        r["centerY"] = pos["centerY"]
+        r["centerY"] = pos["centerY"] + y_offset
         r["x"] = max(0, int(r["centerX"] - r["w"] // 2))
         r["y"] = max(0, int(r["centerY"] - r["h"] // 2))
         
