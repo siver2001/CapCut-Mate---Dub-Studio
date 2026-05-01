@@ -17,7 +17,6 @@ if VIENEU_REPO_SRC.exists() and str(VIENEU_REPO_SRC) not in sys.path:
 class VieneuProvider:
     _instance: "VieneuProvider | None" = None
     _model: Any = None
-    _clone_cache: dict[tuple[str, int, int], Any]
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -41,7 +40,6 @@ class VieneuProvider:
         os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
         self.model_dir = Path(model_dir or VIENEU_MODEL_DIR)
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        self._clone_cache = {}
 
         if not all((self.model_dir / filename).exists() for filename in VIENEU_REQUIRED_FILES):
             self._sync_local_assets(
@@ -112,21 +110,15 @@ class VieneuProvider:
         output_path: Path,
         *,
         voice_name: str | None = None,
-        prompt_audio: Path | None = None,
     ) -> bool:
-        from tools.dub_studio.config import VIENEU_CLONE_PRESET, VIENEU_PRESET_VOICE_IDS
+        from tools.dub_studio.config import VIENEU_PRESET_VOICE_IDS
 
         clean_text = str(text or "").strip()
         if not clean_text:
             raise RuntimeError("VieNeu-TTS synthesis skipped because text is empty.")
 
-        if voice_name == VIENEU_CLONE_PRESET:
-            if prompt_audio is None or not Path(prompt_audio).exists():
-                raise RuntimeError("VieNeu-TTS clone requires a valid speaker sample.")
-            voice = self._encode_reference(prompt_audio)
-        else:
-            resolved_voice = VIENEU_PRESET_VOICE_IDS.get(str(voice_name or "").strip(), "")
-            voice = self._model.get_preset_voice(resolved_voice or None)
+        resolved_voice = VIENEU_PRESET_VOICE_IDS.get(str(voice_name or "").strip(), "")
+        voice = self._model.get_preset_voice(resolved_voice or None)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         audio = self._model.infer(
@@ -138,15 +130,6 @@ class VieneuProvider:
         self._model.save(audio, str(output_path))
         return output_path.exists() and output_path.stat().st_size > 0
 
-    def _encode_reference(self, prompt_audio: Path) -> Any:
-        prompt_audio = Path(prompt_audio)
-        stat = prompt_audio.stat()
-        cache_key = (str(prompt_audio.resolve()), stat.st_mtime_ns, stat.st_size)
-        if cache_key not in self._clone_cache:
-            print(f"[info] Đang xử lý âm thanh mẫu: {prompt_audio.name}...", flush=True)
-            self._clone_cache[cache_key] = self._model.encode_reference(str(prompt_audio))
-        return self._clone_cache[cache_key]
-
     def close(self) -> None:
         if self._model is None:
             return
@@ -156,7 +139,6 @@ class VieneuProvider:
                 close_fn()
         finally:
             self._model = None
-            self._clone_cache.clear()
 
 
 def get_vieneu_provider() -> VieneuProvider:

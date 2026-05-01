@@ -4,10 +4,11 @@ import copy
 import hashlib
 import importlib
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
 try:
     from PyQt6.QtMultimedia import QMediaPlayer
@@ -18,12 +19,13 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QFileDialog,
+    QInputDialog,
     QLineEdit,
     QMessageBox,
     QTableWidgetItem,
 )
 
-from gui.config import BOX_STYLE_PRESETS, DEFAULT_OUTPUT_DIR, FONT_OPTIONS, get_sticker_by_id, ROOT, VOICE_LABELS, VOICE_OPTIONS
+from gui.config import BOX_STYLE_PRESETS, DEFAULT_OUTPUT_DIR, FONT_OPTIONS, get_sticker_by_id, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS
 from gui.utils import (
     default_settings,
     ensure_dir,
@@ -214,6 +216,531 @@ class WindowWorkflowMixin:
             switch_to_preview_tab=True,
             refresh_all=True,
         )
+
+    @staticmethod
+    def _parse_video_urls(raw_text: str) -> list[str]:
+        urls: list[str] = []
+        seen: set[str] = set()
+        for line in str(raw_text or "").replace(",", "\n").splitlines():
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            if not value.lower().startswith(("http://", "https://")):
+                raise RuntimeError(f"Link không hợp lệ, cần bắt đầu bằng http:// hoặc https://\n\n{value}")
+            if value not in seen:
+                urls.append(value)
+                seen.add(value)
+        return urls
+
+    def choose_video_from_url(self) -> None:
+        if self.controller.has_running_job():
+            QMessageBox.warning(
+                self,
+                "Đang xử lý",
+                "Hãy đợi tác vụ hiện tại hoàn tất hoặc dừng nó trước khi tải video mới.",
+            )
+            return
+        text, ok = QInputDialog.getMultiLineText(
+            self,
+            "Tải video từ link",
+            "Dán một link video. App sẽ dùng yt-dlp để tải về rồi tự chọn làm video nguồn:",
+            "",
+        )
+        if not ok:
+            return
+        try:
+            urls = self._parse_video_urls(text)
+            if len(urls) != 1:
+                raise RuntimeError("Màn phân tích chỉ nhận 1 link mỗi lần. Với nhiều link, dùng tab Batch > Thêm link.")
+            self._start_video_downloads(urls, mode="single")
+        except Exception as exc:
+            QMessageBox.warning(self, "Link chưa hợp lệ", repair_mojibake_text(str(exc)))
+
+    def _ytdlp_cookies_path(self) -> Path:
+        return ROOT / "config" / "yt_dlp_cookies.txt"
+
+    def choose_ytdlp_cookies_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chọn file cookies.txt cho yt-dlp",
+            "",
+            "Cookies (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            source = Path(path).expanduser()
+            if not source.exists() or not source.is_file():
+                raise RuntimeError(f"Không tìm thấy file cookies:\n{source}")
+            text_head = source.read_text(encoding="utf-8", errors="ignore")[:2048]
+            if "# Netscape HTTP Cookie File" not in text_head and "\tdouyin.com\t" not in text_head.lower():
+                answer = QMessageBox.question(
+                    self,
+                    "File cookies có thể không đúng định dạng",
+                    repair_mojibake_text(
+                        "File này không giống định dạng Netscape cookies.txt mà yt-dlp thường dùng.\n\n"
+                        "Bạn vẫn muốn lưu và thử dùng file này?"
+                    ),
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            target = self._ytdlp_cookies_path()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            QMessageBox.information(
+                self,
+                "Đã lưu cookies",
+                repair_mojibake_text(
+                    f"Đã lưu cookies cho yt-dlp:\n{target}\n\n"
+                    "Khi tải link Douyin, app sẽ ưu tiên dùng file cookies này trước."
+                ),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Không lưu được cookies", repair_mojibake_text(str(exc)))
+
+    @staticmethod
+    def _installed_ytdlp_version() -> str:
+        try:
+            from importlib import metadata
+
+            return metadata.version("yt-dlp")
+        except Exception:
+            return "chưa cài"
+
+    def update_ytdlp(self) -> None:
+        if getattr(self, "video_download_process", None) is not None:
+            QMessageBox.information(
+                self,
+                "yt-dlp đang tải video",
+                "Hãy đợi lượt tải hiện tại hoàn tất rồi cập nhật yt-dlp.",
+            )
+            return
+        if getattr(self, "ytdlp_update_process", None) is not None:
+            QMessageBox.information(self, "Đang cập nhật", "yt-dlp đang được cập nhật, vui lòng đợi.")
+            return
+        before_version = self._installed_ytdlp_version()
+        if not QMessageBox.question(
+            self,
+            "Cập nhật yt-dlp",
+            repair_mojibake_text(
+                f"Phiên bản hiện tại: {before_version}\n\n"
+                "App sẽ chạy lệnh trong đúng môi trường .venv:\n"
+                "python -m pip install -U yt-dlp\n\n"
+                "Bạn muốn tiếp tục?"
+            ),
+        ) == QMessageBox.StandardButton.Yes:
+            return
+
+        self._ytdlp_update_stdout = ""
+        self._ytdlp_update_stderr = ""
+        process = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONIOENCODING", "utf-8")
+        process.setProcessEnvironment(env)
+        process.setProgram(str(PIPELINE_PYTHON))
+        process.setArguments(["-m", "pip", "install", "-U", "yt-dlp"])
+        process.setWorkingDirectory(str(ROOT))
+        process.readyReadStandardOutput.connect(self._drain_ytdlp_update_output)
+        process.readyReadStandardError.connect(self._drain_ytdlp_update_output)
+        process.finished.connect(
+            lambda code, status, before=before_version: self._handle_ytdlp_update_finished(code, status, before)
+        )
+        self.ytdlp_update_process = process
+        self._set_video_download_controls_enabled(False)
+        if hasattr(self, "phase_label"):
+            self.phase_label.setText("Trạng thái: đang cập nhật yt-dlp")
+        if hasattr(self, "batch_log_box"):
+            self._update_batch_log(f"▶ Đang cập nhật yt-dlp từ phiên bản {before_version}...")
+        process.start()
+
+    def _drain_ytdlp_update_output(self) -> None:
+        process = getattr(self, "ytdlp_update_process", None)
+        if process is None:
+            return
+        from gui.utils import decode_process_bytes
+
+        stdout = decode_process_bytes(bytes(process.readAllStandardOutput()))
+        stderr = decode_process_bytes(bytes(process.readAllStandardError()))
+        self._ytdlp_update_stdout += stdout
+        self._ytdlp_update_stderr += stderr
+        merged = (stdout + "\n" + stderr).strip()
+        if merged and hasattr(self, "batch_log_box"):
+            last_line = merged.splitlines()[-1].strip()
+            if last_line:
+                self._update_batch_log(f"  {last_line[:220]}")
+
+    def _handle_ytdlp_update_finished(self, code: int, _status, before_version: str) -> None:
+        self._drain_ytdlp_update_output()
+        process = getattr(self, "ytdlp_update_process", None)
+        if process is not None:
+            try:
+                process.readyReadStandardOutput.disconnect(self._drain_ytdlp_update_output)
+                process.readyReadStandardError.disconnect(self._drain_ytdlp_update_output)
+            except Exception:
+                pass
+        self.ytdlp_update_process = None
+        self._set_video_download_controls_enabled(True)
+        if hasattr(self, "refresh_all"):
+            try:
+                self.refresh_all()
+            except Exception:
+                pass
+
+        after_version = self._installed_ytdlp_version()
+        output = (self._ytdlp_update_stderr.strip() or self._ytdlp_update_stdout.strip()).strip()
+        if code == 0:
+            message = (
+                f"yt-dlp đã sẵn sàng.\n\n"
+                f"Trước: {before_version}\n"
+                f"Sau: {after_version}"
+            )
+            if before_version == after_version:
+                message += "\n\nKhông có phiên bản mới hơn trong nguồn pip hiện tại."
+            if hasattr(self, "batch_log_box"):
+                self._update_batch_log(f"✓ Cập nhật yt-dlp xong: {before_version} → {after_version}")
+            QMessageBox.information(self, "Cập nhật yt-dlp hoàn tất", repair_mojibake_text(message))
+            return
+
+        detail = output or "pip không trả về thông tin lỗi."
+        if hasattr(self, "batch_log_box"):
+            self._update_batch_log(f"✗ Cập nhật yt-dlp thất bại: {detail[-500:]}")
+        QMessageBox.critical(
+            self,
+            "Cập nhật yt-dlp thất bại",
+            repair_mojibake_text(
+                "Không cập nhật được yt-dlp.\n\n"
+                f"Phiên bản hiện tại: {before_version}\n\n"
+                f"Chi tiết pip:\n{detail[-1800:]}"
+            ),
+        )
+
+    def _set_video_download_controls_enabled(self, enabled: bool) -> None:
+        for attr in (
+            "download_video_btn",
+            "ytdlp_cookies_btn",
+            "update_ytdlp_btn",
+            "analyze_btn",
+            "render_btn",
+            "batch_add_btn",
+            "batch_add_links_btn",
+            "batch_start_btn",
+        ):
+            button = getattr(self, attr, None)
+            if button is not None:
+                button.setEnabled(enabled)
+        if hasattr(self, "cancel_btn"):
+            self.cancel_btn.setEnabled(enabled)
+        if hasattr(self, "batch_stop_btn"):
+            self.batch_stop_btn.setEnabled(enabled and bool(getattr(self, "_batch_running", False)))
+
+    def _start_video_downloads(self, urls: list[str], *, mode: str) -> None:
+        if getattr(self, "video_download_process", None) is not None:
+            QMessageBox.information(self, "Đang tải video", "yt-dlp đang tải video, vui lòng đợi xong rồi thử lại.")
+            return
+        if not urls:
+            raise RuntimeError("Chưa có link video để tải.")
+        if not self._has_dependency("yt_dlp"):
+            raise RuntimeError(
+                "Thiếu thư viện `yt-dlp` nên chưa thể tải video từ link.\n\n"
+                "Cài bằng lệnh:\n"
+                "python -m pip install yt-dlp\n\n"
+                "Sau khi cài xong, mở lại app rồi thử lại."
+            )
+        self._video_download_queue = list(urls)
+        self._video_download_mode = mode
+        self._video_download_results = []
+        self._video_download_errors = []
+        self._video_download_stdout = ""
+        self._video_download_stderr = ""
+        self._set_video_download_controls_enabled(False)
+        if mode == "batch" and hasattr(self, "batch_log_box"):
+            self._update_batch_log(f"▶ Bắt đầu tải {len(urls)} link bằng yt-dlp...")
+        elif hasattr(self, "phase_label"):
+            self.phase_label.setText("Trạng thái: đang tải video")
+        self._start_next_video_download()
+
+    def _start_next_video_download(self) -> None:
+        if not self._video_download_queue:
+            self._finish_video_downloads()
+            return
+        url = self._video_download_queue.pop(0)
+        self._video_download_current_url = url
+        self._video_download_stdout = ""
+        self._video_download_stderr = ""
+        self._video_download_attempt_logs = []
+        download_root = ensure_dir(ROOT / "temp" / "dub_studio" / "downloads")
+        digest = hashlib.sha1(f"{url}|{time.time_ns()}".encode("utf-8")).hexdigest()[:12]
+        run_dir = ensure_dir(download_root / digest)
+        self._video_download_current_dir = run_dir
+        self._video_download_current_attempts = self._build_video_download_attempts(url, run_dir)
+        self._video_download_current_attempt_index = 0
+        self._start_video_download_attempt()
+
+    @staticmethod
+    def _is_douyin_url(url: str) -> bool:
+        lowered = str(url or "").lower()
+        return "douyin.com/" in lowered or "iesdouyin.com/" in lowered
+
+    def _common_ytdlp_download_args(self, url: str, run_dir: Path) -> list[str]:
+        return [
+            "-m",
+            "yt_dlp",
+            "--proxy=",
+            "--newline",
+            "--no-playlist",
+            "-f",
+            "bv*+ba/b",
+            "--merge-output-format",
+            "mp4",
+            "--remux-video",
+            "mp4",
+            "-P",
+            str(run_dir),
+            "-o",
+            "%(title).200B [%(id)s].%(ext)s",
+            url,
+        ]
+
+    def _build_video_download_attempts(self, url: str, run_dir: Path) -> list[dict[str, object]]:
+        base_args = self._common_ytdlp_download_args(url, run_dir)
+        if not self._is_douyin_url(url):
+            return [{"label": "yt-dlp", "args": base_args}]
+
+        douyin_headers = [
+            "--add-headers",
+            "Referer:https://www.douyin.com/",
+            "--add-headers",
+            "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        ]
+        attempts: list[dict[str, object]] = [
+            {"label": "Douyin headers", "args": base_args[:-1] + douyin_headers + [url]},
+            {
+                "label": "Douyin_TikTok_Download_API",
+                "args": [
+                    "-u",
+                    str(ROOT / "tools" / "douyin_api_downloader.py"),
+                    "--url",
+                    url,
+                    "--output-dir",
+                    str(run_dir),
+                    "--timeout",
+                    "20",
+                ],
+            },
+        ]
+        cookies_file = self._ytdlp_cookies_path()
+        if cookies_file.exists():
+            attempts.append(
+                {
+                    "label": "Douyin cookies.txt",
+                    "args": base_args[:-1] + douyin_headers + ["--cookies", str(cookies_file)] + [url],
+                }
+            )
+        for browser in ("edge", "chrome", "firefox"):
+            attempts.append(
+                {
+                    "label": f"Douyin cookies từ {browser}",
+                    "args": base_args[:-1] + douyin_headers + ["--cookies-from-browser", browser] + [url],
+                }
+            )
+        return attempts
+
+    def _start_video_download_attempt(self) -> None:
+        attempts = list(getattr(self, "_video_download_current_attempts", []) or [])
+        attempt_index = int(getattr(self, "_video_download_current_attempt_index", 0) or 0)
+        if not attempts or attempt_index >= len(attempts):
+            self._video_download_errors.append(self._video_download_error_detail())
+            self._start_next_video_download()
+            return
+        attempt = attempts[attempt_index]
+        attempt_label = str(attempt.get("label") or f"attempt {attempt_index + 1}")
+        attempt_args = list(attempt.get("args") or [])
+
+        process = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONIOENCODING", "utf-8")
+        ytdlp_temp_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "yt_dlp_tmp")
+        env.insert("TMP", str(ytdlp_temp_dir))
+        env.insert("TEMP", str(ytdlp_temp_dir))
+        for proxy_key in (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ):
+            env.remove(proxy_key)
+        process.setProcessEnvironment(env)
+        process.setProgram(str(PIPELINE_PYTHON))
+        process.setArguments([str(arg) for arg in attempt_args])
+        process.setWorkingDirectory(str(ROOT))
+        process.readyReadStandardOutput.connect(self._drain_video_download_output)
+        process.readyReadStandardError.connect(self._drain_video_download_output)
+        process.finished.connect(self._handle_video_download_finished)
+        self.video_download_process = process
+        if self._video_download_mode == "batch" and hasattr(self, "batch_log_box"):
+            total_done = len(self._video_download_results) + len(self._video_download_errors) + 1
+            self._update_batch_log(f"[yt-dlp {total_done}] Đang tải ({attempt_label}): {self._video_download_current_url}")
+        elif hasattr(self, "input_path_edit"):
+            self.input_path_edit.setText(f"Đang tải bằng yt-dlp ({attempt_label}): {self._video_download_current_url}")
+        process.start()
+
+    def _drain_video_download_output(self) -> None:
+        process = getattr(self, "video_download_process", None)
+        if process is None:
+            return
+        from gui.utils import decode_process_bytes
+
+        stdout = decode_process_bytes(bytes(process.readAllStandardOutput()))
+        stderr = decode_process_bytes(bytes(process.readAllStandardError()))
+        self._video_download_stdout += stdout
+        self._video_download_stderr += stderr
+        merged = (stdout + "\n" + stderr).strip()
+        if merged and self._video_download_mode == "batch" and hasattr(self, "batch_log_box"):
+            last_line = merged.splitlines()[-1].strip()
+            if last_line:
+                self._update_batch_log(f"  {last_line[:220]}")
+
+    def _find_downloaded_video_file(self, directory: Path) -> Path | None:
+        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
+        candidates = [
+            path
+            for path in directory.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in video_exts
+            and ".part" not in path.name.lower()
+            and path.stat().st_size > 0
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda path: (path.stat().st_size, path.stat().st_mtime_ns))
+
+    def _video_download_error_detail(self) -> str:
+        output = (self._video_download_stderr.strip() or self._video_download_stdout.strip()).strip()
+        if not output:
+            output = "yt-dlp không trả về thông tin lỗi."
+        attempt_logs = "\n\n".join(getattr(self, "_video_download_attempt_logs", []) or [])
+        if attempt_logs:
+            output = f"{attempt_logs}\n\nLỗi cuối:\n{output}"
+        return (
+            f"Không tải được video từ link:\n{self._video_download_current_url}\n\n"
+            f"Chi tiết yt-dlp:\n{output[-1800:]}"
+        )
+
+    def _remember_video_download_attempt_failure(self, label: str) -> None:
+        output = (self._video_download_stderr.strip() or self._video_download_stdout.strip()).strip()
+        if not output:
+            output = "Không có log chi tiết."
+        compact = output[-700:]
+        self._video_download_attempt_logs.append(f"[{label}] thất bại:\n{compact}")
+
+    def _handle_video_download_finished(self, code: int, _status) -> None:
+        self._drain_video_download_output()
+        process = getattr(self, "video_download_process", None)
+        if process is not None:
+            try:
+                process.readyReadStandardOutput.disconnect(self._drain_video_download_output)
+                process.readyReadStandardError.disconnect(self._drain_video_download_output)
+                process.finished.disconnect(self._handle_video_download_finished)
+            except Exception:
+                pass
+        self.video_download_process = None
+
+        run_dir = Path(self._video_download_current_dir) if self._video_download_current_dir else None
+        downloaded = self._find_downloaded_video_file(run_dir) if run_dir else None
+        if code == 0 and downloaded is not None:
+            self._video_download_results.append(str(downloaded))
+            if self._video_download_mode == "batch" and hasattr(self, "batch_log_box"):
+                self._update_batch_log(f"  ✓ Tải xong: {downloaded.name}")
+                if hasattr(self, "_add_downloaded_video_to_batch"):
+                    self._add_downloaded_video_to_batch(str(downloaded))
+            else:
+                self._use_downloaded_video_as_source(downloaded)
+        else:
+            attempts = list(getattr(self, "_video_download_current_attempts", []) or [])
+            attempt_index = int(getattr(self, "_video_download_current_attempt_index", 0) or 0)
+            if self._is_douyin_url(self._video_download_current_url) and attempt_index + 1 < len(attempts):
+                failed_label = str((attempts[attempt_index] or {}).get("label") or f"attempt {attempt_index + 1}")
+                self._remember_video_download_attempt_failure(failed_label)
+                self._video_download_current_attempt_index = attempt_index + 1
+                next_label = str((attempts[attempt_index + 1] or {}).get("label") or f"attempt {attempt_index + 2}")
+                if self._video_download_mode == "batch" and hasattr(self, "batch_log_box"):
+                    self._update_batch_log(f"  ⚠ Douyin chưa tải được bằng {failed_label}; thử lại bằng {next_label}...")
+                elif hasattr(self, "input_path_edit"):
+                    self.input_path_edit.setText(f"Douyin cần cookie, đang thử lại bằng {next_label}...")
+                self._video_download_stdout = ""
+                self._video_download_stderr = ""
+                self._start_video_download_attempt()
+                return
+            if self._is_douyin_url(self._video_download_current_url) and attempts:
+                failed_label = str((attempts[attempt_index] or {}).get("label") or f"attempt {attempt_index + 1}")
+                self._remember_video_download_attempt_failure(failed_label)
+            detail = self._video_download_error_detail()
+            if self._is_douyin_url(self._video_download_current_url):
+                detail += (
+                    "\n\nGợi ý cho Douyin:\n"
+                    "- Mở Douyin trong Edge hoặc Chrome trên máy này trước, chấp nhận xác minh/cookie nếu có.\n"
+                    "- Không nhất thiết phải đăng nhập, nhưng Douyin thường cần cookie mới.\n"
+                    "- Nếu trình duyệt bị Windows khóa cookie database, hãy export cookies Douyin ra file config/yt_dlp_cookies.txt.\n"
+                    "- Có thể tự host Evil0ctal/Douyin_TikTok_Download_API rồi set biến DOUYIN_TIKTOK_API_BASE_URL=http://127.0.0.1/api để app dùng fallback local.\n"
+                    "- Nếu vẫn lỗi, hãy cập nhật yt-dlp rồi thử lại link."
+                )
+            self._video_download_errors.append(detail)
+            if self._video_download_mode == "batch" and hasattr(self, "batch_log_box"):
+                self._update_batch_log(f"  ✗ Lỗi tải link: {repair_mojibake_text(detail)}")
+            else:
+                if hasattr(self, "input_path_edit"):
+                    self.input_path_edit.clear()
+                QMessageBox.critical(self, "Tải video thất bại", repair_mojibake_text(detail))
+
+        self._start_next_video_download()
+
+    def _use_downloaded_video_as_source(self, video_path: Path) -> None:
+        self.input_path_edit.setText(str(video_path))
+        self.job_id = None
+        self.analysis = None
+        self.effective_analysis = None
+        self.preview_media_analysis = None
+        self.job_status = None
+        self.last_output_path = ""
+        self.last_exported_output_path = ""
+        self.stop_render_preview(clear_source=True)
+        self.show_source_video_preview(
+            video_path,
+            switch_to_preview_tab=True,
+            refresh_all=True,
+        )
+
+    def _finish_video_downloads(self) -> None:
+        self._set_video_download_controls_enabled(True)
+        if hasattr(self, "refresh_all"):
+            try:
+                self.refresh_all()
+            except Exception:
+                pass
+        if self._video_download_mode == "batch":
+            if hasattr(self, "_refresh_batch_ui"):
+                self._refresh_batch_ui()
+            success_count = len(self._video_download_results)
+            error_count = len(self._video_download_errors)
+            if hasattr(self, "batch_log_box"):
+                self._update_batch_log(f"yt-dlp hoàn tất: {success_count} tải thành công, {error_count} lỗi.")
+            if success_count and hasattr(self, "batch_table"):
+                self.batch_table.selectRow(max(0, len(self._batch_queue) - success_count))
+            message = f"Đã tải thành công {success_count} video."
+            if error_count:
+                message += "\n\nMột số link bị lỗi. Chi tiết đã được ghi trong log batch; kiểm tra lại link, quyền xem, cookies hoặc mạng."
+            QMessageBox.information(self, "Tải batch hoàn tất", repair_mojibake_text(message))
+        elif self._video_download_results:
+            QMessageBox.information(
+                self,
+                "Tải video hoàn tất",
+                repair_mojibake_text(f"Đã tải và chọn video nguồn:\n{Path(self._video_download_results[-1]).name}"),
+            )
+        self._video_download_mode = ""
+        self._video_download_current_url = ""
+        self._video_download_current_dir = None
 
     def choose_directory(self, target_edit: QLineEdit) -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -1444,8 +1971,6 @@ class WindowWorkflowMixin:
             self._resolve_voice_combo_value(self.intro_voice_combo)
             or preferred_default_voice()
         )
-        if str(intro_voice_value) in {"vieneu:clone", "valtec:clone"}:
-            intro_voice_value = preferred_default_voice()
         intro_preset = resolve_intro_voice_preset(intro_voice_value)
         self.settings["introHook"]["voicePresetKey"] = intro_preset["key"]
         self.settings["introHook"]["voice"] = str(intro_preset["voice"])
@@ -1798,8 +2323,6 @@ class WindowWorkflowMixin:
             or self.settings["introHook"].get("voice")
             or preferred_default_voice()
         )
-        if intro_voice_key in {"vieneu:clone", "valtec:clone"}:
-            intro_voice_key = preferred_default_voice()
         if self.intro_voice_combo.findData(intro_voice_key) >= 0:
             self._set_combo_value(self.intro_voice_combo, intro_voice_key)
         else:

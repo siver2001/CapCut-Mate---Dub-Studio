@@ -45,6 +45,140 @@ from .translation import (
 from ..subtitle_utils import renumber_subtitle_timeline
 from ..tts.text import sanitize_for_tts_or_raise
 
+def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    import re
+    import copy
+    
+    new_segments = []
+    seg_index = 1
+    
+    for item in raw_segments:
+        subtitle_text = normalize_text(item.get("text") or item.get("sourceText") or "")
+        if not subtitle_text:
+            continue
+        speaker_id = item.get("speakerId") or item.get("speaker") or "speaker_1"
+        
+        # Split by sentence boundaries (. ! ? …)
+        sentences = re.findall(r'[^.!?…]*(?:[.!?…]|$)', subtitle_text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if len(sentences) <= 1:
+            new_segments.append(
+                {
+                    "id": f"seg_{seg_index:04d}",
+                    "index": seg_index,
+                    "startMs": int(item["startMs"]),
+                    "endMs": int(item["endMs"]),
+                    "speakerId": speaker_id,
+                    "sourceText": subtitle_text,
+                    "translatedText": "",
+                    "delivery": "neutral",
+                    "subtitleChunks": split_display_text(subtitle_text),
+                }
+            )
+            seg_index += 1
+            continue
+            
+        total_len = sum(len(s) for s in sentences)
+        start_ms = int(item["startMs"])
+        end_ms = int(item["endMs"])
+        duration_ms = end_ms - start_ms
+        
+        current_start = start_ms
+        for i, s in enumerate(sentences):
+            s_len = len(s)
+            ratio = s_len / total_len if total_len > 0 else 1.0
+            s_duration = int(duration_ms * ratio)
+            
+            current_end = current_start + s_duration
+            if i == len(sentences) - 1:
+                current_end = end_ms
+                
+            if i > 0 and current_start < new_segments[-1]["endMs"]:
+                current_start = new_segments[-1]["endMs"]
+                
+            if current_end <= current_start:
+                current_end = current_start + 150
+                
+            new_segments.append(
+                {
+                    "id": f"seg_{seg_index:04d}",
+                    "index": seg_index,
+                    "startMs": current_start,
+                    "endMs": current_end,
+                    "speakerId": speaker_id,
+                    "sourceText": s,
+                    "translatedText": "",
+                    "delivery": "neutral",
+                    "subtitleChunks": split_display_text(s),
+                }
+            )
+            seg_index += 1
+            current_start = current_end
+            
+    return new_segments
+
+
+def _split_translated_segments_by_sentence(translated_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    import re
+    import copy
+    
+    new_segments = []
+    seg_index = 1
+    
+    for item in translated_segments:
+        text = normalize_text(item.get("translatedText") or item.get("sourceText") or "")
+        if not text:
+            continue
+            
+        # Split by sentence boundaries (. ! ? …)
+        sentences = re.findall(r'[^.!?…]*(?:[.!?…]|$)', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if len(sentences) <= 1:
+            new_item = copy.deepcopy(item)
+            new_item["id"] = f"seg_{seg_index:04d}"
+            new_item["index"] = seg_index
+            new_segments.append(new_item)
+            seg_index += 1
+            continue
+            
+        total_len = sum(len(s) for s in sentences)
+        start_ms = int(item["startMs"])
+        end_ms = int(item["endMs"])
+        duration_ms = end_ms - start_ms
+        
+        current_start = start_ms
+        for i, s in enumerate(sentences):
+            s_len = len(s)
+            ratio = s_len / total_len if total_len > 0 else 1.0
+            s_duration = int(duration_ms * ratio)
+            
+            current_end = current_start + s_duration
+            if i == len(sentences) - 1:
+                current_end = end_ms
+                
+            if i > 0 and current_start < new_segments[-1]["endMs"]:
+                current_start = new_segments[-1]["endMs"]
+                
+            if current_end <= current_start:
+                current_end = current_start + 150
+                
+            new_item = copy.deepcopy(item)
+            new_item["id"] = f"seg_{seg_index:04d}"
+            new_item["index"] = seg_index
+            new_item["startMs"] = current_start
+            new_item["endMs"] = current_end
+            new_item["translatedText"] = s
+            new_item["subtitleChunks"] = split_display_text(s)
+            
+            new_segments.append(new_item)
+            seg_index += 1
+            current_start = current_end
+            
+    return new_segments
+
+
 def stable_video_codec() -> tuple[str, list[str]]:
     # Favor a faster default preset for interactive dubbing/export iterations.
     return "libx264", [
@@ -205,9 +339,10 @@ def expand_cleanup_region_for_render(
     center_x = int(region.get("centerX", int(region.get("x", 0)) + region_w // 2))
     center_y = int(region.get("centerY", int(region.get("y", 0)) + region_h // 2))
 
-    # Expand width and height slightly by adding padding
-    padding_w = max(int(region_w * 0.15), 30)
-    padding_h = max(int(region_h * 0.07), 8)
+    # Expand width and height "surgically" just enough to cover text + anti-aliasing
+    # Increased padding to ensure full coverage of original subtitles
+    padding_w = max(int(region_w * 0.15), 32)
+    padding_h = max(int(region_h * 0.22), 12)
     
     expanded_w = min(width, region_w + padding_w)
     expanded_h = min(height, region_h + padding_h)
@@ -352,7 +487,7 @@ def burn_subtitles(
                             f"y={cleanup_region['y']}:"
                             f"w={cleanup_region['w']}:"
                             f"h={cleanup_region['h']}:"
-                            "color=black@0.78:t=fill:"
+                            "color=black:t=fill:"
                             f"enable='between(t,{max(int(region.get('startMs', 0)), 0) / 1000:.3f},{max(int(region.get('endMs', 0)), 0) / 1000:.3f})'"
                         )
                     )(
@@ -384,7 +519,7 @@ def burn_subtitles(
             filter_arg = "-filter_complex"
             video_map = "[vout]"
         elif cleanup_mode == "localized_mask":
-            video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=black@0.78:t=fill,{subtitles_filter}"
+            video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=black:t=fill,{subtitles_filter}"
             filter_arg = "-vf"
             video_map = "0:v:0"
         else:
@@ -755,23 +890,23 @@ def apply_watermark_to_ffmpeg_command(
     else: # bottom-right
         overlay_pos = f"W-w-{margin}:H-h-{margin}"
 
-    wm_filter = f"[{watermark_idx}:v]scale={wm_w}:-1,format=rgba[wm];"
+    wm_filter = f"[{watermark_idx}:v]format=rgba,scale={wm_w}:-1[wm];"
     
     if filter_arg == "-vf":
         # Convert -vf to -filter_complex
         filter_arg = "-filter_complex"
         if video_map == "0:v:0":
             # No existing filter_complex, just apply to 0:v:0
-            video_filter = f"{wm_filter}[0:v:0][wm]overlay={overlay_pos}[vout]"
+            video_filter = f"{wm_filter}[0:v:0][wm]overlay={overlay_pos}:format=auto[vout]"
         else:
             # -vf with an output? Unlikely. But if so:
-            video_filter = f"[0:v:0]{video_filter}[base];{wm_filter}[base][wm]overlay={overlay_pos}[vout]"
+            video_filter = f"[0:v:0]{video_filter}[base];{wm_filter}[base][wm]overlay={overlay_pos}:format=auto[vout]"
         video_map = "[vout]"
     else:
         # Already -filter_complex
         # We need to take the output map, overlay watermark, and output a new map
         old_out = video_map.strip("[]")
-        video_filter = f"{video_filter};{wm_filter}[{old_out}][wm]overlay={overlay_pos}[vout_wm]"
+        video_filter = f"{video_filter};{wm_filter}[{old_out}][wm]overlay={overlay_pos}:format=auto[vout_wm]"
         video_map = "[vout_wm]"
         
     return filter_arg, video_filter, video_map
@@ -972,7 +1107,7 @@ def apply_sticker_overlay(
             "-ignore_loop", "1",
             "-i", str(cached_path),
             "-filter_complex",
-            f"[1:v]scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
+            f"[1:v]format=rgba,scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
             f"pad={sw_scaled}:{sh_scaled}:(ow-iw)/2:(oh-ih)/2:color=0x00000000@0"
             f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}:format=auto",
             "-c:a", "copy",
@@ -985,7 +1120,7 @@ def apply_sticker_overlay(
             "-i", str(input_video_path),
             "-i", str(cached_path),
             "-filter_complex",
-            f"[1:v]scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
+            f"[1:v]format=rgba,scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
             f"pad={sw_scaled}:{sh_scaled}:(ow-iw)/2:(oh-ih)/2:color=0x00000000@0"
             f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}:format=auto",
             "-c:a", "copy",
@@ -1226,7 +1361,7 @@ def build_default_render_options(analysis: dict[str, Any]) -> dict[str, Any]:
             "boxRadius": 16,
             "boxPaddingX": 24,
             "boxPaddingY": 12,
-            "bottomOffset": 54,
+            "bottomOffset": 420,
             "cleanupBlurStrength": 14,
             "maxWordsPerChunk": 5,
             "maxCharsPerChunk": 22,
@@ -1279,7 +1414,7 @@ def analysis_cache_key(input_path: Path) -> str:
         if str(path) and path.exists()
     }
     payload = {
-        "cacheVersion": ANALYSIS_CACHE_VERSION,
+        "cacheVersion": f"{ANALYSIS_CACHE_VERSION}_v30",
         "inputPath": str(resolved_input),
         "inputSize": int(stat.st_size),
         "inputMtimeNs": int(stat.st_mtime_ns),
@@ -1352,6 +1487,8 @@ def restore_cached_analysis(
         sample_path = target_speaker_dir / f"{speaker_id}_sample.wav"
         speaker["samplePath"] = str(sample_path) if sample_path.exists() else ""
         speaker["voiceCloneReady"] = sample_path.exists()
+    if "segments" in restored:
+        restored["segments"] = _split_translated_segments_by_sentence(restored["segments"])
     return restored
 
 
@@ -1414,25 +1551,7 @@ def do_analyze(
     voice_layout = str(whisperx_analysis.get("voiceLayout") or "single_voice")
     speaker_stats = whisperx_analysis.get("speakerStats") or {}
     main_speaker_id = whisperx_analysis.get("mainSpeakerId") or "speaker_1"
-    segments = []
-    for index, item in enumerate(whisperx_analysis.get("mergedSegments") or [], start=1):
-        subtitle_text = normalize_text(item.get("text") or "")
-        if not subtitle_text:
-            continue
-        speaker_id = item.get("speakerId") or "speaker_1"
-        segments.append(
-            {
-                "id": f"seg_{index:04d}",
-                "index": index,
-                "startMs": int(item["startMs"]),
-                "endMs": int(item["endMs"]),
-                "speakerId": speaker_id,
-                "sourceText": subtitle_text,
-                "translatedText": "",
-                "delivery": "neutral",
-                "subtitleChunks": split_display_text(subtitle_text),
-            }
-        )
+    segments = _split_segments_into_sentences(whisperx_analysis.get("mergedSegments") or [])
 
     refinement = {}
 
@@ -1472,6 +1591,7 @@ def do_analyze(
         target_language=target_language,
         phase="analyze",
     )
+    segments = _split_translated_segments_by_sentence(segments)
     subtitle_timeline = build_subtitle_timeline(segments)
 
     analysis = {
@@ -1635,24 +1755,7 @@ def do_analyze_resilient(
     main_speaker_id = transcription.get("mainSpeakerId") or "speaker_1"
     voice_layout = str(transcription.get("voiceLayout") or "single_voice")
 
-    segments = []
-    for index, item in enumerate(transcription.get("mergedSegments") or [], start=1):
-        subtitle_text = normalize_text(item.get("text") or "")
-        if not subtitle_text:
-            continue
-        segments.append(
-            {
-                "id": f"seg_{index:04d}",
-                "index": index,
-                "startMs": int(item["startMs"]),
-                "endMs": int(item["endMs"]),
-                "speakerId": item.get("speakerId") or "speaker_1",
-                "sourceText": subtitle_text,
-                "translatedText": "",
-                "delivery": "neutral",
-                "subtitleChunks": split_display_text(subtitle_text),
-            }
-        )
+    segments = _split_segments_into_sentences(transcription.get("mergedSegments") or [])
     refinement = {}
 
     if segments:
@@ -1691,6 +1794,7 @@ def do_analyze_resilient(
         target_language=target_language,
         phase="analyze",
     )
+    segments = _split_translated_segments_by_sentence(segments)
     subtitle_timeline = build_subtitle_timeline(segments)
 
     analysis = {
@@ -1752,7 +1856,13 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         "position": render_options.get("watermarkPosition", "top-right"),
         "scale": float(render_options.get("watermarkScale", 0.15)),
     }
-    voice_mapping = {**analysis.get("renderDefaults", {}).get("voiceMapping", {}), **render_options.get("voiceMapping", {})}
+    voice_mapping = {
+        speaker_id: resolve_voice_preset(voice)
+        for speaker_id, voice in {
+            **analysis.get("renderDefaults", {}).get("voiceMapping", {}),
+            **render_options.get("voiceMapping", {}),
+        }.items()
+    }
     uses_vieneu_voice = any(
         is_vieneu_voice_preset(resolve_voice_preset(voice))
         for voice in voice_mapping.values()
@@ -1791,6 +1901,10 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         **analysis.get("renderDefaults", {}).get("introHook", {}),
         **render_options.get("introHook", {}),
     }
+    if intro_hook.get("voice"):
+        intro_hook["voice"] = resolve_voice_preset(intro_hook.get("voice") or "")
+    if intro_hook.get("voicePresetKey"):
+        intro_hook["voicePresetKey"] = resolve_voice_preset(intro_hook.get("voicePresetKey") or "")
     background_music = {
         **analysis.get("renderDefaults", {}).get("backgroundMusic", {}),
         **(render_options.get("backgroundMusic") or {}),
@@ -1823,11 +1937,9 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
             step="prepare",
             progress=0.055,
             preload_zeroshot=any(
-                resolve_voice_preset(voice) == VALTEC_CLONE_PRESET
-                or is_valtec_reference_voice(resolve_voice_preset(voice))
+                is_valtec_reference_voice(resolve_voice_preset(voice))
                 for voice in voice_mapping.values()
             )
-            or resolve_voice_preset(intro_hook.get("voice") or "") == VALTEC_CLONE_PRESET
             or is_valtec_reference_voice(resolve_voice_preset(intro_hook.get("voice") or "")),
         )
 
@@ -2191,7 +2303,7 @@ def do_preview_voice(
     cache_scope = (
         f"reference:{selected_voice}{reference_signature}"
         if is_valtec_reference_voice(selected_voice)
-        else ("shared" if selected_voice != VALTEC_CLONE_PRESET else f"{speaker_id}|{job_id}")
+        else "shared"
     )
     cache_key = hashlib.sha1(
         f"{selected_voice}|{cache_scope}|{preview_text}".encode("utf-8", errors="ignore")
@@ -2199,7 +2311,7 @@ def do_preview_voice(
     preview_file_prefix = (
         "reference"
         if is_valtec_reference_voice(selected_voice)
-        else ("shared" if selected_voice != VALTEC_CLONE_PRESET else (speaker_id or "speaker_1"))
+        else "shared"
     )
     output_path = preview_dir / f"{preview_file_prefix}_{cache_key}{extension}"
     result = {
@@ -2226,8 +2338,7 @@ def do_preview_voice(
             phase="preview",
             step="prepare",
             progress=0.12,
-            preload_zeroshot=selected_voice == VALTEC_CLONE_PRESET
-            or is_valtec_reference_voice(selected_voice),
+            preload_zeroshot=is_valtec_reference_voice(selected_voice),
         )
     emit_progress(
         phase="preview",

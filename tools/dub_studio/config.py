@@ -140,7 +140,7 @@ EDGE_TTS_CONCURRENCY = max(
     1,
 )
 DUB_SUBTITLE_REGION_SAMPLES = max(
-    int(env_value("DUB_SUBTITLE_REGION_SAMPLES", default="3")),
+    int(env_value("DUB_SUBTITLE_REGION_SAMPLES", default="12")),
     1,
 )
 VIENEU_TTS_CONCURRENCY = max(
@@ -208,8 +208,7 @@ EDGE_VOICE_PRESETS = {
     "edge:male": "vi-VN-NamMinhNeural",
 }
 EDGE_VOICE_NAME_PATTERN = re.compile(r"^[a-z]{2,5}-[A-Z]{2,5}-.+Neural$")
-VIENEU_CLONE_PRESET = "vieneu:clone"
-VALTEC_CLONE_PRESET = "valtec:clone"
+# Cloning presets removed
 VIENEU_PRESET_VOICE_IDS = {
     "vieneu:ngoc": "Bích Ngọc (Nữ - Miền Bắc)",
     "vieneu:tuyen": "Phạm Tuyên (Nam - Miền Bắc)",
@@ -231,6 +230,17 @@ VALTEC_REFERENCE_VOICES = {
     "valtec:ngoc_anh": {"filename": "ngoc_anh.wav", "label": "Valtec-TTS • Ngọc Ánh"},
     "valtec:hoang_nam": {"filename": "hoang_nam.wav", "label": "Valtec-TTS • Hoàng Nam"},
 }
+
+CUSTOM_VALTEC_VOICES_FILE = ROOT / "config" / "custom_valtec_voices.json"
+if CUSTOM_VALTEC_VOICES_FILE.exists():
+    try:
+        import json
+        custom_data = json.loads(CUSTOM_VALTEC_VOICES_FILE.read_text(encoding="utf-8"))
+        for k, v in custom_data.items():
+            VALTEC_REFERENCE_VOICES[k] = v
+    except Exception:
+        pass
+
 VALTEC_REPO_URL = env_value("DUB_VALTEC_REPO_URL", default="https://github.com/tronghieuit/valtec-tts.git")
 VALTEC_ZEROSHOT_REPO = env_value("DUB_VALTEC_ZEROSHOT_REPO", default="valtecAI-team/valtec-zeroshot-voice-cloning")
 VIENEU_BACKBONE_REPO = env_value("DUB_VIENEU_BACKBONE_REPO", default="pnnbao-ump/VieNeu-TTS-v2-Turbo-GGUF")
@@ -248,6 +258,10 @@ VALTEC_MODEL_DIR = ROOT / "temp" / "models" / "valtec"
 VALTEC_ZEROSHOT_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "zeroshot-vietnamese"
 VALTEC_HASP_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "hasp"
 VALTEC_REFERENCE_DIR = VALTEC_MODEL_DIR / "references"
+VALTEC_ZEROSHOT_CODE_PATH = ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
+VALTEC_ZEROSHOT_AVAILABLE = VALTEC_ZEROSHOT_CODE_PATH.exists()
+if not VALTEC_ZEROSHOT_AVAILABLE:
+    VALTEC_REFERENCE_VOICES = {}
 VIENEU_REQUIRED_FILES = (
     VIENEU_BACKBONE_FILENAME,
     "voices.json",
@@ -255,24 +269,32 @@ VIENEU_REQUIRED_FILES = (
     VIENEU_ENCODER_FILENAME,
 )
 
-DEFAULT_VOICES = [
-    "valtec:thanh_tam",
-    "valtec:thu_ha",
-    "valtec:nf",
-    "valtec:nm1",
-    "valtec:sf",
-    "valtec:sm",
-    "valtec:nm2",
-]
+DEFAULT_VOICES = (
+    [
+        "valtec:thanh_tam",
+        "valtec:thu_ha",
+        "valtec:nf",
+        "valtec:nm1",
+        "valtec:sf",
+        "valtec:sm",
+        "valtec:nm2",
+    ]
+    if VALTEC_ZEROSHOT_AVAILABLE
+    else [
+        "valtec:nf",
+        "valtec:sf",
+        "valtec:nm1",
+        "valtec:sm",
+        "valtec:nm2",
+    ]
+)
 VOICE_LABELS = {
     "edge:female": "EdgeTTS • Nữ Hoài My",
     "edge:male": "EdgeTTS • Nam Nam Minh",
-    VIENEU_CLONE_PRESET: "VieNeu-TTS • Clone từ mẫu speaker",
     "vieneu:ngoc": "VieNeu-TTS • Bích Ngọc (Nữ - Miền Bắc)",
     "vieneu:tuyen": "VieNeu-TTS • Phạm Tuyên (Nam - Miền Bắc)",
     "vieneu:doan": "VieNeu-TTS • Thục Đoan (Nữ - Miền Nam)",
     "vieneu:vinh": "VieNeu-TTS • Xuân Vĩnh (Nam - Miền Nam)",
-    VALTEC_CLONE_PRESET: "Valtec-TTS • Clone tu mau speaker",
     "valtec:nf": "Valtec-TTS • NF Nu Bac",
     "valtec:sf": "Valtec-TTS • SF Nu Nam",
     "valtec:nm1": "Valtec-TTS • NM1 Nam Bac",
@@ -296,6 +318,16 @@ VOICE_LABELS.update(
         "valtec:nm2": "Valtec-TTS • NM2 (Northern Male / Nam miền Bắc)",
     }
 )
+if not VALTEC_ZEROSHOT_AVAILABLE:
+    for _voice_key in (
+        "valtec:thu_ha",
+        "valtec:minh_duc",
+        "valtec:thanh_tam",
+        "valtec:quang_huy",
+        "valtec:ngoc_anh",
+        "valtec:hoang_nam",
+    ):
+        VOICE_LABELS.pop(_voice_key, None)
 LANGUAGE_OPTIONS = ("en", "zh", "ko", "ja")
 WHISPERX_PRELOAD_ALIGN_LANGUAGES = tuple(
     language

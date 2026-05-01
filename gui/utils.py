@@ -467,7 +467,19 @@ QTabBar::tab:selected {
 QTabBar::tab:hover {
     color: white;
 }
+QMessageBox {
+    background-color: #0d1b31;
+    color: #f8fafc;
+}
+QMessageBox QLabel {
+    color: #f8fafc;
+}
+QMessageBox QPushButton {
+    min-width: 70px;
+    background: #1e293b;
+}
 """
+
 
 
 def apply_app_theme(app: QApplication) -> None:

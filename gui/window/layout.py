@@ -154,6 +154,12 @@ class WindowLayoutMixin:
         self.input_path_edit.setPlaceholderText("Chưa chọn video nguồn")
         browse_btn = self._make_button("Chọn video", "ghost")
         browse_btn.clicked.connect(self.choose_video)
+        self.download_video_btn = self._make_button("Tải từ link", "ghost")
+        self.download_video_btn.clicked.connect(self.choose_video_from_url)
+        self.ytdlp_cookies_btn = self._make_button("Chọn cookies", "ghost")
+        self.ytdlp_cookies_btn.clicked.connect(self.choose_ytdlp_cookies_file)
+        self.update_ytdlp_btn = self._make_button("Cập nhật yt-dlp", "ghost")
+        self.update_ytdlp_btn.clicked.connect(self.update_ytdlp)
         analyze_btn = self._make_button("Phân tích video", "primary")
         analyze_btn.clicked.connect(self.start_analysis)
         render_btn = self._make_button("Render bản lồng tiếng", "success")
@@ -168,6 +174,9 @@ class WindowLayoutMixin:
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
         action_row.addWidget(browse_btn)
+        action_row.addWidget(self.download_video_btn)
+        action_row.addWidget(self.ytdlp_cookies_btn)
+        action_row.addWidget(self.update_ytdlp_btn)
         action_row.addWidget(analyze_btn)
         action_row.addWidget(render_btn)
         action_row.addWidget(cancel_btn)
@@ -733,6 +742,7 @@ class WindowLayoutMixin:
         self._nav_preview_btn = self._make_button("Preview", "ghost")
         self._nav_batch_btn = self._make_button("Batch", "ghost")
         self._nav_config_btn = self._make_button("Cấu hình", "ghost")
+        
         self._nav_edit_btn.clicked.connect(lambda: self._switch_page(0))
         self._nav_preview_btn.clicked.connect(lambda: self._switch_page(1))
         self._nav_config_btn.clicked.connect(lambda: self._switch_page(2))
@@ -799,9 +809,18 @@ class WindowLayoutMixin:
         self.cancel_btn = cancel_btn
         self.install_env_btn = self._make_button("Chuẩn bị model", "ghost")
         self.install_env_btn.clicked.connect(self.install_environment)
+        self.download_video_btn = self._make_button("Tải từ link", "ghost")
+        self.download_video_btn.clicked.connect(self.choose_video_from_url)
+        self.ytdlp_cookies_btn = self._make_button("Chọn cookies", "ghost")
+        self.ytdlp_cookies_btn.clicked.connect(self.choose_ytdlp_cookies_file)
+        self.update_ytdlp_btn = self._make_button("Cập nhật yt-dlp", "ghost")
+        self.update_ytdlp_btn.clicked.connect(self.update_ytdlp)
         action_row = QHBoxLayout()
         action_row.setSpacing(5)
         action_row.addWidget(browse_btn)
+        action_row.addWidget(self.download_video_btn)
+        action_row.addWidget(self.ytdlp_cookies_btn)
+        action_row.addWidget(self.update_ytdlp_btn)
         action_row.addWidget(analyze_btn)
         action_row.addWidget(render_btn)
         action_row.addWidget(cancel_btn)
@@ -891,11 +910,7 @@ class WindowLayoutMixin:
         )
         self.main_intro_voice_status_label.setObjectName("SectionHint")
         self.main_intro_voice_status_label.setWordWrap(True)
-        default_voice_options = [
-            (value, text)
-            for value, text in VOICE_OPTIONS
-            if value not in {"vieneu:clone", "valtec:clone"}
-        ]
+        default_voice_options = list(VOICE_OPTIONS)
         self.default_voice_combo = self._make_combo(default_voice_options, self.on_basic_settings_changed)
         self.default_voice_combo.setEditable(True)
         if self.default_voice_combo.lineEdit() is not None:
@@ -1530,6 +1545,8 @@ class WindowLayoutMixin:
         batch_toolbar.setSpacing(5)
         self.batch_add_btn = self._make_button("Thêm video", "primary")
         self.batch_add_btn.clicked.connect(self.batch_add_videos)
+        self.batch_add_links_btn = self._make_button("Thêm link", "ghost")
+        self.batch_add_links_btn.clicked.connect(self.batch_add_video_links)
         self.batch_remove_btn = self._make_button("Xóa chọn", "ghost")
         self.batch_remove_btn.clicked.connect(self.batch_remove_selected)
         self.batch_clear_btn = self._make_button("Xóa tất cả", "ghost")
@@ -1540,6 +1557,7 @@ class WindowLayoutMixin:
         self.batch_stop_btn.clicked.connect(self.batch_stop)
         self.batch_stop_btn.setEnabled(False)
         batch_toolbar.addWidget(self.batch_add_btn)
+        batch_toolbar.addWidget(self.batch_add_links_btn)
         batch_toolbar.addWidget(self.batch_remove_btn)
         batch_toolbar.addWidget(self.batch_clear_btn)
         batch_toolbar.addSpacing(10)
@@ -1713,7 +1731,7 @@ class WindowLayoutMixin:
         self.animated_cards = []
 
     def _switch_page(self, index: int) -> None:
-        """Switch between Edit/Preview/Batch pages and update nav button styles."""
+        """Switch between Edit/Preview/Batch/Config pages and update nav button styles."""
         self._page_stack.setCurrentIndex(index)
         self.setStyleSheet(self.styleSheet())
         for btn, active in [(self._nav_edit_btn, index == 0),

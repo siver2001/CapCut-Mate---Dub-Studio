@@ -145,6 +145,11 @@ class VietnameseTTS:
             phone_ids = commons.intersperse(phone_ids, 0)
             tone_ids = commons.intersperse(tone_ids, 0)
             lang_ids = commons.intersperse(lang_ids, 0)
+            
+            # Append 15 blank tokens to ensure complete synthesis of the final word
+            phone_ids.extend([0] * 15)
+            tone_ids.extend([0] * 15)
+            lang_ids.extend([0] * 15)
         
         # Get speaker ID
         if speaker not in self.spk2id:

@@ -466,6 +466,7 @@ def _build_localization_prompt(
         "3. Every translatedText MUST be in Vietnamese. Never echo the source language, except proper names, brands, or places.\n"
         "4. Translate every sourceText, including single words, short phrases, reactions, interjections, slang, jokes, and idioms.\n"
         "5. Do NOT leave meaningful source-language words untranslated.\n"
+        "6. STRICT BAN ON CHINESE CHARACTERS: Absolutely ZERO Chinese hanzi (e.g., 堆积如山) must remain in the output. Translate EVERY single word into standard, natural Vietnamese.\n"
         "\n"
         "Each item must be a JSON object with exactly these keys:\n"
         '- "translatedText": natural, concise, captivating Vietnamese subtitle text.\n'
@@ -476,8 +477,9 @@ def _build_localization_prompt(
         "- STORYTELLING STYLE: Write with the smooth, captivating tone of professional voice actors and content creators.\n"
         "- COLLOQUIAL & TRENDY: Rephrase idioms, slang, jokes, sarcasm, and memes into natural, modern Vietnamese equivalents organically.\n"
         "- EMOTIONAL RESONANCE: Choose Vietnamese pronouns naturally based on relationship, age, and tone: mình/cậu, anh/em, tao/mày, chú mèo, cô mèo, anh bạn nhỏ...\n"
-        "- PRONOUN CONSISTENCY: Keep pronouns and names strictly consistent across all items for the same subject.\n"
-        "- CONTEXT AWARE: Smooth out fragmented or noisy transcripts using nearby context conservatively without cutting off essential words.\n"
+        "- COMPLETE MEANINGFUL SENTENCES: Every translation must be a complete, grammatically sound, and fully logical sentence in Vietnamese. Never leave a sentence hanging, cut off, or incomplete.\n"
+        "- PRONOUN CONSISTENCY: Keep pronouns and names strictly consistent across all items for the same speaker/subject throughout the video.\n"
+        "- CONTEXT AWARE: Connect fragmented or noisy transcripts into coherent spoken stories using nearby context conservatively.\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
@@ -564,6 +566,7 @@ def _build_machine_review_prompt(
         f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
         "2. Do NOT include markdown, notes, explanations, comments, or any text outside the JSON array.\n"
         "3. Every translatedText MUST be in Vietnamese. Fix weird machine artifacts. Never echo the source language untranslated.\n"
+        "4. STRICT BAN ON CHINESE CHARACTERS: Absolutely ZERO Chinese hanzi (e.g., 堆积如山) must remain in the reviewed output. Rewrite everything into pure, spoken Vietnamese.\n"
         "\n"
         "Each output item must be a JSON object with exactly these keys:\n"
         '- "translatedText": natural, smooth, highly engaging Vietnamese text.\n'
@@ -574,8 +577,9 @@ def _build_machine_review_prompt(
         "- STORYTELLING STYLE: Write with the smooth, emotional cadence of content creators and professional voice actors.\n"
         "- COLLOQUIAL & TRENDY: Rephrase machine idioms, slang, jokes, and sarcasm into organic Vietnamese equivalents.\n"
         "- EMOTIONAL RESONANCE: Choose relational pronouns naturally (tớ, cậu, anh, em, chú mèo, anh bạn nhỏ...) to engage viewers.\n"
-        "- PRONOUN CONSISTENCY: Keep pronouns perfectly matching and consistent for the same character across nearby lines.\n"
-        "- CONTEXT AWARE: Smooth broken transcript gaps into coherent spoken sentences without dropping final words.\n"
+        "- COMPLETE MEANINGFUL SENTENCES: Ensure each reviewed sentence is complete, logical, and grammatically flawless in Vietnamese. Do not output incomplete fragments.\n"
+        "- PRONOUN CONSISTENCY: Keep pronouns strictly consistent for the same character across all dialogue lines in the video.\n"
+        "- CONTEXT AWARE: Connect broken transcript gaps into smooth, logical narrative threads without dropping final words.\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
@@ -801,8 +805,10 @@ def _count_intro_sentences(text: str) -> int:
 
 def _intro_word_range(clip_duration_ms: int) -> tuple[int, int]:
     clip_seconds = max(int(clip_duration_ms), 7000) / 1000.0
-    min_words = max(24, min(58, int(round(clip_seconds * 2.35))))
-    max_words = max(min_words + 12, min(84, int(round(clip_seconds * 3.85))))
+    # Vietnamese narration averages 2.85-3.2 words per second.
+    # Increase word counts so audio aligns closely with video duration.
+    min_words = max(28, min(65, int(round(clip_seconds * 2.85))))
+    max_words = max(min_words + 12, min(92, int(round(clip_seconds * 4.15))))
     return min_words, max_words
 
 
@@ -907,7 +913,8 @@ def _build_intro_teaser_prompt(
         "- Every word must feel specific and real, not templated\n"
         "- Write like a natural excited narrator speaking, not like subtitles\n"
         "- Sound like a Vietnamese friend telling you something amazing they just saw\n"
-        f"- Total: {min_words}-{max_words} spoken Vietnamese words\n"
+        f"- Total length requirement: EXACTLY {min_words}-{max_words} spoken Vietnamese words. "
+        "Expand the dialogue to cover the full timeframe appropriately so narration ends exactly as the teaser clip concludes.\n"
         "- No hashtags, emojis, or markdown\n"
         '- Return ONLY: {"teaser":"<your teaser text>"}'
         f"{retry_block}\n"

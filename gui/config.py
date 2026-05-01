@@ -170,6 +170,21 @@ VALTEC_REFERENCE_OPTIONS = [
     ("valtec:hoang_nam", "Hoàng Nam"),
 ]
 
+CUSTOM_VALTEC_VOICES_FILE = ROOT / "config" / "custom_valtec_voices.json"
+if CUSTOM_VALTEC_VOICES_FILE.exists():
+    try:
+        import json
+        custom_data = json.loads(CUSTOM_VALTEC_VOICES_FILE.read_text(encoding="utf-8"))
+        for k, v in custom_data.items():
+            VALTEC_REFERENCE_OPTIONS.append((k, v.get("label", k).replace("Valtec-TTS • ", "")))
+    except Exception:
+        pass
+
+VALTEC_ZEROSHOT_CODE_PATH = ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
+VALTEC_ZEROSHOT_AVAILABLE = VALTEC_ZEROSHOT_CODE_PATH.exists()
+if not VALTEC_ZEROSHOT_AVAILABLE:
+    VALTEC_REFERENCE_OPTIONS = []
+
 VOICE_OPTIONS = [
     *VALTEC_PRESET_OPTIONS,
     *VALTEC_REFERENCE_OPTIONS,
@@ -531,15 +546,25 @@ VOICE_OPTIONS = [
 INTRO_TTS_OPTIONS = list(VOICE_OPTIONS)
 VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
 
-DEFAULT_VOICES = [
-    "valtec:thanh_tam",
-    "valtec:thu_ha",
-    "valtec:nf",
-    "valtec:nm1",
-    "valtec:sf",
-    "valtec:sm",
-    "valtec:nm2",
-]
+DEFAULT_VOICES = (
+    [
+        "valtec:thanh_tam",
+        "valtec:thu_ha",
+        "valtec:nf",
+        "valtec:nm1",
+        "valtec:sf",
+        "valtec:sm",
+        "valtec:nm2",
+    ]
+    if VALTEC_ZEROSHOT_AVAILABLE
+    else [
+        "valtec:nf",
+        "valtec:sf",
+        "valtec:nm1",
+        "valtec:sm",
+        "valtec:nm2",
+    ]
+)
 
 SPEAKER_COLORS = ["#FFB703", "#56CFE1", "#EF476F", "#90BE6D"]
 FONT_COLOR_SWATCHES = ["#ffd200", "#ffffff", "#8ef9f3", "#ff9f1c", "#ffcad4", "#a7f3d0"]

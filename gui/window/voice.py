@@ -29,20 +29,13 @@ class WindowVoiceMixin:
         speakers = (self.effective_analysis or {}).get("speakers") or []
         if hasattr(self, "voice_overview_label"):
             if speakers:
-                clone_ready = sum(
-                    1 for speaker in speakers if bool(speaker.get("voiceCloneReady"))
-                )
                 self.voice_overview_label.setText(
-                    f"Đã nhận diện {len(speakers)} speaker. VieNeu-TTS local có 4 giọng preset và clone theo mẫu speaker, hiện sẵn sàng clone cho {clone_ready}/{len(speakers)} speaker."
+                    f"Đã nhận diện {len(speakers)} speaker. Chọn một giọng preset rồi bấm Nghe thử để kiểm tra trước khi render."
                 )
             else:
                 self.voice_overview_label.setText(
                     "Danh sách speaker sẽ hiện sau khi phân tích video."
                 )
-        if hasattr(self, "voice_overview_label") and speakers:
-            self.voice_overview_label.setText(
-                f"Đã nhận diện {len(speakers)} speaker. Chọn một giọng preset rồi bấm Nghe thử để kiểm tra trước khi render."
-            )
         if not speakers:
             empty_label = QLabel("Danh sách speaker sẽ hiện sau khi phân tích video.")
             empty_label.setObjectName("SectionHint")
@@ -64,9 +57,6 @@ class WindowVoiceMixin:
                 f"font-weight: 700; color: {speaker.get('colorTag') or '#f8fafc'};"
             )
             detail_label = QLabel(
-                f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s • {'Đã có mẫu để clone VieNeu-TTS' if speaker.get('voiceCloneReady') else 'Chưa có mẫu speaker để clone VieNeu-TTS'}"
-            )
-            detail_label.setText(
                 f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s"
             )
             detail_label.setObjectName("SectionHint")
@@ -78,16 +68,6 @@ class WindowVoiceMixin:
                 or speaker.get("voicePreset")
                 or VOICE_OPTIONS[0][0]
             )
-            original_selected_voice = str(selected_voice)
-            if str(selected_voice) in {"vieneu:clone", "valtec:clone"}:
-                fallback_voice = speaker.get("voicePreset") or VOICE_OPTIONS[0][0]
-                selected_voice = (
-                    fallback_voice
-                    if str(fallback_voice) not in {"vieneu:clone", "valtec:clone"}
-                    else VOICE_OPTIONS[0][0]
-                )
-            if original_selected_voice in {"vieneu:clone", "valtec:clone"}:
-                self.settings["voiceMapping"][speaker["speakerId"]] = str(selected_voice)
             combo.setEditable(True)
             if combo.findData(selected_voice) >= 0:
                 self._set_combo_value(combo, selected_voice)
@@ -141,36 +121,18 @@ class WindowVoiceMixin:
 
     def _voice_options_for_speaker(self, speaker: dict[str, Any]) -> list[tuple[str, str]]:
         options: list[tuple[str, str]] = []
-        clone_ready = bool(speaker.get("voiceCloneReady"))
         recommended = str(speaker.get("voicePreset") or "")
-        if recommended in {"vieneu:clone", "valtec:clone"}:
-            recommended = ""
         if recommended:
             options.append(
                 (recommended, f"{self._format_voice_label(recommended)} (đề xuất)")
             )
         for value, text in VOICE_OPTIONS:
-            if value in {"vieneu:clone", "valtec:clone"} and not clone_ready:
-                continue
-            if value == "vieneu:clone":
-                label = "VieNeu-TTS • Clone từ speaker này"
-            elif value == "valtec:clone":
-                label = "Valtec-TTS • Clone từ speaker này"
-            else:
-                label = repair_mojibake_text(text)
+            label = repair_mojibake_text(text)
             if value == recommended:
                 label = f"{label} (đề xuất)"
             options.append((value, label))
-        if recommended and recommended != "vieneu:clone" and all(recommended != value for value, _ in options):
+        if recommended and all(recommended != value for value, _ in options):
             options.append((recommended, self._format_voice_label(recommended)))
-        if clone_ready:
-            clone_options = [
-                ("vieneu:clone", "VieNeu-TTS • Clone từ speaker này"),
-                ("valtec:clone", "Valtec-TTS • Clone từ speaker này"),
-            ]
-            for value, label in clone_options:
-                if all(value != existing_value for existing_value, _ in options):
-                    options.append((value, label))
         return options
 
     def _speaker_preview_text(self, speaker_id: str, display_name: str) -> str:
@@ -220,18 +182,10 @@ class WindowVoiceMixin:
             return
         if selected_voice.startswith(("vieneu:", "valtec:")):
             provider_label = "Valtec-TTS" if selected_voice.startswith("valtec:") else "VieNeu-TTS"
-            if selected_voice in {"vieneu:clone", "valtec:clone"} and speaker.get("voiceCloneReady"):
-                status_message = (
-                    f"Đang nghe thử {self._format_voice_label(selected_voice)}. "
-                    f"Lần đầu {provider_label} có thể mất 10-20 giây để nạp model local."
-                )
-            elif selected_voice in {"vieneu:clone", "valtec:clone"}:
-                status_message = f"Speaker này chưa có mẫu clone {provider_label}, app sẽ nghe thử bằng EdgeTTS thay thế."
-            else:
-                status_message = (
-                    f"Đang nghe thử {self._format_voice_label(selected_voice)}. "
-                    f"{provider_label} local sẽ phát bằng preset đã chọn."
-                )
+            status_message = (
+                f"Đang nghe thử {self._format_voice_label(selected_voice)}. "
+                f"{provider_label} local sẽ phát bằng preset đã chọn."
+            )
             status_label = self.voice_status_label_map.get(speaker_id)
             if getattr(self, "_voice_preview_timed_out", False):
                 message = "Nghe thử bị quá thời gian 120 giây. Kiểm tra lại runtime/model TTS rồi thử lại."

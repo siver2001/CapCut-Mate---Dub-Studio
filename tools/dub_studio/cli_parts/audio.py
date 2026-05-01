@@ -13,7 +13,6 @@ from .analysis import (
     resolve_tts_output_extension,
     resolve_valtec_prompt_audio,
     resolve_valtec_reference_audio,
-    resolve_vieneu_prompt_audio,
     resolve_voice_preset,
     should_use_valtec_voice,
     should_use_vieneu_voice,
@@ -308,12 +307,12 @@ def clamp_rate_percent(percent: int, timing_mode: str = "balanced_natural", *, i
         if ultra_tight:
             min_rate, max_rate = (-2, 40)
         else:
-            min_rate, max_rate = (-6, 28) if timing_mode == "balanced_natural" else (-10, 34)
+            min_rate, max_rate = (-6, 40) if timing_mode == "balanced_natural" else (-10, 48)
     else:
         if ultra_tight:
-            min_rate, max_rate = (-6, 34)
+            min_rate, max_rate = (-6, 50)
         else:
-            min_rate, max_rate = (-10, 22) if timing_mode == "balanced_natural" else (-14, 28)
+            min_rate, max_rate = (-10, 38) if timing_mode == "balanced_natural" else (-14, 45)
     return max(min_rate, min(percent, max_rate))
 
 
@@ -335,7 +334,13 @@ def estimate_rate(text: str, target_ms: int, timing_mode: str = "balanced_natura
 
 
 def estimate_intro_rate(text: str, target_ms: int, timing_mode: str = "balanced_natural") -> str:
-    return format_rate_percent(0, timing_mode=timing_mode, intro=True)
+    target_ms = max(target_ms, 2000)
+    target_seconds = target_ms / 1000
+    profile = estimate_tts_text_profile(text)
+    # Give intro slightly more breathing room (lower multiplier)
+    pressure = profile["expectedSeconds"] / max(target_seconds, 0.1)
+    percent = int(round((pressure - 1.0) * (80 if is_ultra_tight_mode(timing_mode) else 70)))
+    return format_rate_percent(percent, timing_mode=timing_mode, intro=True)
 
 
 def apply_rate_delta(rate: str, delta_percent: int, timing_mode: str = "balanced_natural", *, intro: bool = False) -> str:
@@ -754,77 +759,32 @@ def synthesize_tts(
     # Clean text early for all TTS engines (ensures NFC, removes weird chars, adds punctuation)
     edge_text = sanitize_for_tts_or_raise(text, speaker_id=speaker_id)
     
-    prompt_audio = resolve_vieneu_prompt_audio(
-        speaker_id=speaker_id,
-        job_id=job_id,
-    )
     valtec_prompt_audio = resolve_valtec_prompt_audio(
         speaker_id=speaker_id,
         job_id=job_id,
     )
     valtec_reference_audio = resolve_valtec_reference_audio(selected_voice)
-    if is_vieneu_voice_preset(selected_voice) and DUB_USE_VIENEU:
-        try:
-            from tools.vieneu_wrapper import get_vieneu_provider
 
-            safe_print(
-                f"Đang khởi động VieNeu-TTS cho {speaker_id} (lần đầu có thể mất 10-20 giây)...",
-                flush=True,
-            )
-            provider = get_vieneu_provider()
-            success = provider.synthesize(
-                edge_text,
-                output_path,
-                voice_name=selected_voice,
-                prompt_audio=prompt_audio,
-            )
-            if success:
-                validate_generated_audio_file(output_path, context="VieNeu-TTS synthesis")
-                return
-        except Exception as e:
-            raise RuntimeError(
-                f"VieNeu-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {e}"
-            ) from e
-        raise RuntimeError(
-            f"VieNeu-TTS did not create audio for {speaker_id} with voice {selected_voice}."
-        )
-    elif is_vieneu_voice_preset(selected_voice):
-        if not DUB_USE_VIENEU:
-            raise RuntimeError(
-                f"Voice {selected_voice} requires VieNeu-TTS, but DUB_USE_VIENEU is disabled."
-            )
-        else:
-            raise RuntimeError(
-                f"Voice {selected_voice} requires a valid VieNeu speaker sample for {speaker_id}."
-            )
-    if is_valtec_voice_preset(selected_voice) and DUB_USE_VALTEC:
+    if is_valtec_voice_preset(selected_voice):
         try:
-            ensure_valtec_runtime(
-                phase="render",
-                step="tts",
-                progress=0.05,
-                preload_zeroshot=selected_voice == VALTEC_CLONE_PRESET
-                or selected_voice in VALTEC_REFERENCE_VOICES,
-            )
-            valtec_reference_audio = resolve_valtec_reference_audio(selected_voice)
             from tools.valtec_wrapper import get_valtec_provider
+            
+            # Convert Edge rate (+0%, -10%, etc) to speed factor (1.0, 0.9, etc) for Valtec
+            speed_val = 1.0
+            try:
+                if rate and rate.endswith("%"):
+                    speed_val = 1.0 + (float(rate[:-1]) / 100.0)
+                speed_val = max(0.5, min(2.0, speed_val))
+            except Exception:
+                speed_val = 1.0
 
-            safe_print(
-                f"Đang dùng Valtec-TTS cho {speaker_id} (model đã được nạp sẵn trước khi tạo audio)...",
-                flush=True,
-            )
-            provider = get_valtec_provider(
-                preload_zeroshot=selected_voice == VALTEC_CLONE_PRESET
-                or selected_voice in VALTEC_REFERENCE_VOICES
-            )
-            percent = parse_rate_percent(rate)
-            valtec_speed = max(min(1.0 / (1.0 + percent / 100.0), 2.5), 0.4)
+            provider = get_valtec_provider()
             success = provider.synthesize(
-                edge_text,
-                output_path,
+                text=edge_text,
+                output_path=output_path,
                 voice_name=selected_voice,
-                prompt_audio=valtec_reference_audio or valtec_prompt_audio,
-                speed=valtec_speed,
+                prompt_audio=valtec_prompt_audio or valtec_reference_audio,
+                speed=speed_val
             )
             if success:
                 validate_generated_audio_file(output_path, context="Valtec-TTS synthesis")
@@ -836,15 +796,26 @@ def synthesize_tts(
         raise RuntimeError(
             f"Valtec-TTS did not create audio for {speaker_id} with voice {selected_voice}."
         )
-    elif is_valtec_voice_preset(selected_voice):
-        if not DUB_USE_VALTEC:
-            raise RuntimeError(
-                f"Voice {selected_voice} requires Valtec-TTS, but DUB_USE_VALTEC is disabled."
+
+    if is_vieneu_voice_preset(selected_voice):
+        try:
+            from tools.vieneu_wrapper import get_vieneu_provider
+            provider = get_vieneu_provider()
+            success = provider.synthesize(
+                text=edge_text,
+                output_path=output_path,
+                voice_name=selected_voice,
             )
-        else:
+            if success:
+                validate_generated_audio_file(output_path, context="VieNeu-TTS synthesis")
+                return
+        except Exception as e:
             raise RuntimeError(
-                f"Voice {selected_voice} requires a valid Valtec speaker sample for {speaker_id}."
-            )
+                f"VieNeu-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {e}"
+            ) from e
+        raise RuntimeError(
+            f"VieNeu-TTS did not create audio for {speaker_id} with voice {selected_voice}."
+        )
 
     requested_edge_text = ensure_edge_tts_terminal_punctuation(_normalize_edge_tts_text(text, preserve_pauses=True))
     if requested_edge_text and edge_text != requested_edge_text:
@@ -1148,15 +1119,17 @@ def resolve_segment_target_ms(
     gap_after = max(next_start - end_ms, 0)
     ultra_tight = is_ultra_tight_mode(timing_mode)
     lead_guard = min(36 if ultra_tight else 60, gap_before // (4 if ultra_tight else 3))
-    tail_allowance = min(int(gap_after * (0.18 if ultra_tight else 0.48)), 120 if ultra_tight else 260)
-    target_ms = base_duration - lead_guard - (40 if ultra_tight else 70) + tail_allowance
+    tail_allowance = min(int(gap_after * (0.25 if ultra_tight else 0.65)), 250 if ultra_tight else 650)
+    target_ms = base_duration - lead_guard - (30 if ultra_tight else 50) + tail_allowance
     max_available = max(next_start - start_ms - (40 if ultra_tight else 70), 520)
     profile = estimate_tts_text_profile(text or segment.get("translatedText") or segment.get("sourceText") or "")
     punctuation_bonus = 80 if normalize_text(text or "").endswith(("?", "!", "...", "…")) else 0
     speech_floor = int(profile["expectedSeconds"] * 1000) + punctuation_bonus
     min_target = 600 if ultra_tight else 620 if base_duration < 1200 else 760
     target_ms = max(int(target_ms), min(speech_floor, int(max_available)))
-    return max(min(int(target_ms), int(max_available)), min_target)
+    # Allow 150ms overlap if speech floor is still higher than max available
+    final_limit = max_available + 150
+    return max(min(int(target_ms), int(final_limit)), min_target)
 
 
 def refine_tts_rate(
@@ -1498,6 +1471,29 @@ def _run_tts_chain(
     job_id: str,
 ) -> list[dict[str, Any]]:
     chain_results: list[dict[str, Any]] = []
+
+    # Natural Pacing Chaining: Group adjacent segments into 'flow blocks'
+    # if they share the same voice/speaker and have minimal gaps.
+    flow_blocks: list[list[dict[str, Any]]] = []
+    current_block: list[dict[str, Any]] = []
+
+    for item in items:
+        if not current_block:
+            current_block.append(item)
+            continue
+
+        prev = current_block[-1]
+        gap = int(item["segment"]["startMs"]) - int(prev["segment"]["endMs"])
+
+        # If segments are very close (< 250ms), treat them as one continuous speech flow
+        if 0 <= gap < 250:
+            current_block.append(item)
+        else:
+            flow_blocks.append(current_block)
+            current_block = [item]
+    if current_block:
+        flow_blocks.append(current_block)
+
     previous_rate: str | None = None
 
     edge_voices: list[str] = []
@@ -1521,84 +1517,150 @@ def _run_tts_chain(
     if edge_voices:
         warm_up_edge_tts(edge_voices[0])
 
-    for chain_index, item in enumerate(items):
-        # Throttle between consecutive Edge TTS requests to avoid
-        # rate-limiting from Microsoft's service (NoAudioReceived).
-        if chain_index > 0 and item.get("provider") == "edge":
-            time.sleep(1.5)
-        emit_progress(
-            phase="render",
-            step="tts",
-            progress=0.44 + (item["progress_index"] / max(total_segments, 1)) * 0.16,
-            message=(
-                f"Đang tạo lồng tiếng {item['progress_index']}/{total_segments}"
-                f" · {item['speaker_id']} · {item['voice']}"
-            ),
-        )
-        safe_print(
-            f"[tts] segment {item['progress_index']}/{total_segments} "
-            f"{item['speaker_id']} {item['voice']}",
-            flush=True,
-        )
-        try:
-            fitted_clip, clip_ms, rate, pitch, volume, tts_text = synthesize_timed_tts_clip(
-                index=item["index"],
-                speaker_id=item["speaker_id"],
-                voice=item["voice"],
-                translated=item["translated"],
-                source_text=item["source_text"],
-                delivery=item["delivery"],
-                target_ms=item["target_ms"],
-                timing_mode=timing_mode,
-                tts_dir=tts_dir,
-                previous_rate=previous_rate,
-                job_id=job_id,
+    for block in flow_blocks:
+        if not block:
+            continue
+
+        # If block has multiple items, we synthesize them as ONE to get natural intonation
+        if len(block) > 1:
+            combined_text = ". ".join(normalize_text(it["translated"]) for it in block)
+            # Add final punctuation if missing
+            if not combined_text.endswith((".", "!", "?", "…")):
+                combined_text += "."
+
+            first_item = block[0]
+            last_item = block[-1]
+            total_target_ms = int(last_item["segment"]["endMs"]) - int(first_item["segment"]["startMs"])
+
+            safe_print(f"[tts] Chaining {len(block)} segments for natural pacing (Total: {total_target_ms}ms)", flush=True)
+
+            try:
+                fitted_clip, clip_ms, rate, pitch, volume, tts_text = synthesize_timed_tts_clip(
+                    index=first_item["index"],
+                    speaker_id=first_item["speaker_id"],
+                    voice=first_item["voice"],
+                    translated=combined_text,
+                    source_text=first_item["source_text"],
+                    delivery=first_item["delivery"],
+                    target_ms=total_target_ms,
+                    timing_mode=timing_mode,
+                    tts_dir=tts_dir,
+                    previous_rate=previous_rate,
+                    job_id=job_id,
+                )
+                previous_rate = rate
+
+                # The first item gets the combined audio
+                chain_results.append({
+                    **first_item,
+                    "fitted_clip": fitted_clip,
+                    "clip_ms": clip_ms,
+                    "rate": rate,
+                    "pitch": pitch,
+                    "volume": volume,
+                    "tts_text": tts_text,
+                })
+
+                # Subsequent items in the same block are marked as 'chained' with a silent placeholder
+                # so they don't trigger redundant synthesis or overlapping audio.
+                for idx in range(1, len(block)):
+                    sub_item = block[idx]
+                    silent_clip = tts_dir / f"{sub_item['index']:04d}_chained_placeholder.wav"
+                    if not silent_clip.exists():
+                        run(["ffmpeg", "-y", "-f", "lavfi", "-t", "0.01", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-ac", str(STABLE_AUDIO_CHANNELS), "-ar", str(STABLE_AUDIO_SAMPLE_RATE), "-c:a", "pcm_s16le", str(silent_clip)], timeout=15.0)
+
+                    chain_results.append({
+                        **sub_item,
+                        "fitted_clip": silent_clip,
+                        "clip_ms": 10,
+                        "rate": rate,
+                        "pitch": pitch,
+                        "volume": volume,
+                        "tts_text": "(chained)",
+                    })
+                continue
+            except Exception as exc:
+                safe_print(f"[tts] Chain synthesis failed, falling back to individual processing: {exc}", flush=True)
+
+        # Individual processing for single-item blocks or fallback
+        for item in block:
+            if item.get("provider") == "edge":
+                time.sleep(1.0)
+
+            emit_progress(
+                phase="render",
+                step="tts",
+                progress=0.44 + (item["progress_index"] / max(total_segments, 1)) * 0.16,
+                message=(
+                    f"Đang tạo lồng tiếng {item['progress_index']}/{total_segments}"
+                    f" · {item['speaker_id']} · {item['voice']}"
+                ),
             )
-        except Exception as exc:
-            if not DUB_TTS_ALLOW_SILENT_FALLBACK:
-                raise RuntimeError(
-                    f"TTS failed for segment {item['index']} ({item['speaker_id']}), "
-                    f"silent fallback is disabled: {exc}"
-                ) from exc
             safe_print(
-                f"  [!] TTS thất bại cho segment {item['index']}: {exc} — tạo clip im thay thế",
+                f"[tts] segment {item['progress_index']}/{total_segments} "
+                f"{item['speaker_id']} {item['voice']}",
                 flush=True,
             )
-            target_ms = int(item["target_ms"])
-            silent_duration = max(target_ms / 1000.0, 0.05)
-            silent_clip = tts_dir / f"{item['index']:04d}_silent_fallback.wav"
-            run(
-                [
-                    "ffmpeg", "-y",
-                    "-f", "lavfi",
-                    "-t", f"{silent_duration:.3f}",
-                    "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-                    "-ac", str(STABLE_AUDIO_CHANNELS),
-                    "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
-                    "-c:a", "pcm_s16le",
-                    str(silent_clip),
-                ],
-                timeout=30.0,
+            try:
+                fitted_clip, clip_ms, rate, pitch, volume, tts_text = synthesize_timed_tts_clip(
+                    index=item["index"],
+                    speaker_id=item["speaker_id"],
+                    voice=item["voice"],
+                    translated=item["translated"],
+                    source_text=item["source_text"],
+                    delivery=item["delivery"],
+                    target_ms=item["target_ms"],
+                    timing_mode=timing_mode,
+                    tts_dir=tts_dir,
+                    previous_rate=previous_rate,
+                    job_id=job_id,
+                )
+            except Exception as exc:
+                if not DUB_TTS_ALLOW_SILENT_FALLBACK:
+                    raise RuntimeError(
+                        f"TTS failed for segment {item['index']} ({item['speaker_id']}), "
+                        f"silent fallback is disabled: {exc}"
+                    ) from exc
+                safe_print(
+                    f"  [!] TTS thất bại cho segment {item['index']}: {exc} — tạo clip im thay thế",
+                    flush=True,
+                )
+                target_ms = int(item["target_ms"])
+                silent_duration = max(target_ms / 1000.0, 0.05)
+                silent_clip = tts_dir / f"{item['index']:04d}_silent_fallback.wav"
+                run(
+                    [
+                        "ffmpeg", "-y",
+                        "-f", "lavfi",
+                        "-t", f"{silent_duration:.3f}",
+                        "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                        "-ac", str(STABLE_AUDIO_CHANNELS),
+                        "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
+                        "-c:a", "pcm_s16le",
+                        str(silent_clip),
+                    ],
+                    timeout=30.0,
+                )
+                fitted_clip = silent_clip
+                clip_ms = int(target_ms)
+                rate = "+0%"
+                pitch = "+0Hz"
+                volume = "+0%"
+                tts_text = str(item.get("translated") or "")
+            previous_rate = rate
+            chain_results.append(
+                {
+                    **item,
+                    "fitted_clip": fitted_clip,
+                    "clip_ms": clip_ms,
+                    "rate": rate,
+                    "pitch": pitch,
+                    "volume": volume,
+                    "tts_text": tts_text,
+                }
             )
-            fitted_clip = silent_clip
-            clip_ms = int(target_ms)
-            rate = "+0%"
-            pitch = "+0Hz"
-            volume = "+0%"
-            tts_text = str(item.get("translated") or "")
-        previous_rate = rate
-        chain_results.append(
-            {
-                **item,
-                "fitted_clip": fitted_clip,
-                "clip_ms": clip_ms,
-                "rate": rate,
-                "pitch": pitch,
-                "volume": volume,
-                "tts_text": tts_text,
-            }
-        )
     return chain_results
+
 
 
 def _create_dub_audio_legacy(

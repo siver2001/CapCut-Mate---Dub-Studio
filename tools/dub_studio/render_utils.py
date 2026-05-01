@@ -14,7 +14,7 @@ def subtitle_preview_to_video_px(value: int | float, video_meta: dict[str, Any])
 
 
 def subtitle_preview_offset(position_preset: str, bottom_offset: int) -> float:
-    safe_offset = max(min(int(bottom_offset), 240), 0)
+    safe_offset = max(int(bottom_offset), 0)
     if position_preset == "top":
         return 32.0 + safe_offset * 0.35
     if position_preset == "middle":
@@ -50,21 +50,30 @@ def effective_ass_margin_v(
 def default_subtitle_region(video_meta: dict[str, Any]) -> dict[str, Any]:
     width = int(video_meta["width"])
     height = int(video_meta["height"])
-    # Thu hẹp vùng làm mờ từ 0.68 -> 0.45 chiều rộng để không quá rộng
-    region_width = int(width * 0.45)
-    # Giảm chiều cao từ 0.085 -> 0.05 và min = 60 để không quá to
-    region_height = int(max(height * 0.05, 60))
-    x = max((width - region_width) // 2, 0)
-    # Tinh chỉnh lại vị trí Y để nằm sát dưới hơn một chút, bớt che video
-    y = max(height - region_height - int(height * 0.04), 0)
+    # Thu hẹp vùng làm mờ từ 0.8 -> 0.85 chiều rộng để phủ tốt hơn
+    region_width = int(width * 0.85)
+    region_height = int(height * 0.052) if height > width else 90
+    region_height = max(min(region_height, 120), 60)
+    
+    x = int((width - region_width) / 2)
+    # Tự động điều chỉnh vị trí mặc định dựa trên tỷ lệ khung hình
+    if height > width:
+        # Video dọc (TikTok/Douyin): Sub thường ở khoảng 70-80% chiều cao
+        y = int(height * 0.72)
+    else:
+        # Video ngang: Sub thường ở khoảng 85% chiều cao
+        y = int(height * 0.82)
+        
     return {
         "detected": False,
         "cleanupMode": "localized_blur",
-        "blurStrength": 10,
+        "blurStrength": 20,
         "x": x,
         "y": y,
         "w": region_width,
         "h": region_height,
+        "centerX": x + region_width // 2,
+        "centerY": y + region_height // 2,
         "normalized": {
             "x": round(x / width, 4),
             "y": round(y / height, 4),
@@ -276,7 +285,7 @@ def compose_ass(
         
         if position:
             cx = int(position['centerX'])
-            cy = int(position['centerY'])
+            cy = int(position['centerY']) - max(int(font_size * 0.12), 4)
         else:
             cx = res_x // 2
             if alignment == 8:
@@ -285,6 +294,10 @@ def compose_ass(
                 cy = res_y // 2
             else:
                 cy = res_y - margin_v - h // 2
+
+        # Prevent text from bleeding off the screen edges
+        cx = max(w // 2 + 30, min(cx, res_x - w // 2 - 30))
+        cy = max(h // 2 + 20, min(cy, res_y - h // 2 - 20))
 
         if box_enabled:
             # Draw dynamic rounded rectangle vector at absolute coordinates

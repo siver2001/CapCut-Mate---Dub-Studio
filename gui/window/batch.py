@@ -8,6 +8,7 @@ from typing import Any
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QInputDialog,
     QMessageBox,
 )
 
@@ -95,6 +96,39 @@ class WindowBatchMixin:
                 self._batch_queue[last_added_index].input_path,
                 switch_to_preview_tab=True,
             )
+
+    def batch_add_video_links(self) -> None:
+        """Download one or more links with yt-dlp, then add the results to the queue."""
+        if self._batch_running:
+            QMessageBox.warning(
+                self,
+                "Batch đang chạy",
+                "Hãy dừng batch hoặc đợi batch hoàn tất trước khi thêm link mới.",
+            )
+            return
+        text, ok = QInputDialog.getMultiLineText(
+            self,
+            "Thêm video từ link",
+            "Dán mỗi link một dòng. App sẽ tải tuần tự bằng yt-dlp rồi thêm video vào batch:",
+            "",
+        )
+        if not ok:
+            return
+        try:
+            urls = self._parse_video_urls(text)
+            if not urls:
+                raise RuntimeError("Chưa có link video nào.")
+            self._start_video_downloads(urls, mode="batch")
+        except Exception as exc:
+            QMessageBox.warning(self, "Không thể thêm link", repair_mojibake_text(str(exc)))
+
+    def _add_downloaded_video_to_batch(self, video_path: str) -> bool:
+        if any(item.input_path == video_path for item in self._batch_queue):
+            self._update_batch_log(f"  • Bỏ qua vì đã có trong batch: {Path(video_path).name}")
+            return False
+        self._batch_queue.append(_BatchItem(video_path))
+        self._refresh_batch_ui()
+        return True
 
     def batch_remove_selected(self) -> None:
         """Remove the currently-selected row from the batch queue."""
@@ -192,7 +226,7 @@ class WindowBatchMixin:
             QMessageBox.warning(
                 self,
                 "Thiếu thông tin",
-                "Vui lòng chọn 'Thư mục xuất batch' để lưu các video sau khi render.",
+                "Vui lòng chọn 'Thư mục output' trước khi render.",
             )
             return
 
@@ -605,6 +639,8 @@ class WindowBatchMixin:
             self.batch_stop_btn.setEnabled(self._batch_running)
         if hasattr(self, "batch_add_btn"):
             self.batch_add_btn.setEnabled(not self._batch_running)
+        if hasattr(self, "batch_add_links_btn"):
+            self.batch_add_links_btn.setEnabled(not self._batch_running)
         if hasattr(self, "batch_remove_btn"):
             self.batch_remove_btn.setEnabled(
                 not self._batch_running and len(self._batch_queue) > 0

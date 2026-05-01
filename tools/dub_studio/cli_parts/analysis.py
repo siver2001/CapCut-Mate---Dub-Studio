@@ -790,6 +790,7 @@ def assign_speakers(subtitles: list[SubtitleLine], speaker_count: int) -> tuple[
 
 def is_vieneu_voice_preset(candidate: str) -> bool:
     value = str(candidate or "").strip()
+    VIENEU_CLONE_PRESET = "vieneu:clone"
     return value == VIENEU_CLONE_PRESET or value in VIENEU_PRESET_VOICE_IDS
 
 
@@ -800,6 +801,7 @@ def is_valtec_reference_voice(candidate: str) -> bool:
 
 def is_valtec_voice_preset(candidate: str) -> bool:
     value = str(candidate or "").strip()
+    VALTEC_CLONE_PRESET = "valtec:clone"
     return (
         value == VALTEC_CLONE_PRESET
         or value in VALTEC_PRESET_SPEAKER_IDS
@@ -1462,6 +1464,96 @@ def detect_subtitle_region_in_frame(
     if len(frame) < sample_width * sample_height:
         return fallback_region
 
+    import numpy as np
+    import cv2
+
+    im = np.frombuffer(frame, dtype=np.uint8).reshape((sample_height, sample_width))
+    blur = cv2.GaussianBlur(im, (3, 3), 0)
+    thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 15)
+    edges = cv2.Canny(blur, 20, 80)
+    comb = cv2.bitwise_or(edges, thresh)
+
+    kw = max(int(sample_width * 0.40), 96)
+    kh = max(int(sample_height * 0.035), 6)
+    ker = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
+    dil = cv2.dilate(comb, ker, iterations=2)
+
+    cnts, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    best_cv_candidate = None
+    best_cv_score = -1.0
+
+    scale_x = video_meta["width"] / sample_width
+    scale_y = video_meta["height"] / sample_height
+
+    pref_y_scaled = None
+    pref_y = fallback_region.get("preferred_y")
+    if pref_y is not None:
+        pref_y_scaled = int(pref_y * (sample_height / max(video_meta["height"], 1)))
+
+    for c in cnts:
+        xx, yy, ww, hh = cv2.boundingRect(c)
+        cx = xx + ww // 2
+        cy = yy + hh // 2
+
+        dx_center = abs(cx - sample_width // 2)
+        if ww < sample_width * 0.08 or dx_center > sample_width * 0.35:
+            continue
+
+        if hh < max(int(sample_height * 0.02), 4) or hh > sample_height * 0.26:
+            continue
+
+        y_center_norm = cy / max(sample_height, 1)
+        vertical_score = 1.0
+        
+        if pref_y_scaled is not None:
+            dy_pref = abs(cy - pref_y_scaled) / max(sample_height, 1)
+            if dy_pref <= 0.12:
+                vertical_score = 2.0 - (dy_pref * 2.5)
+            else:
+                vertical_score = max(0.2, 1.0 - dy_pref)
+        else:
+            if 0.65 <= y_center_norm <= 0.90:
+                vertical_score = 1.6
+            else:
+                vertical_score = 1.0 - abs(y_center_norm - 0.78)
+
+        roi = im[yy:yy+hh, xx:xx+ww]
+        contrast = float(np.std(roi)) if roi.size > 0 else 0.0
+
+        score = ww * (contrast + 1.0) * vertical_score
+
+        if score > best_cv_score:
+            best_cv_score = score
+            best_cv_candidate = (xx, yy, ww, hh, cx, cy)
+
+    if best_cv_candidate and best_cv_score > 5.0:
+        xx, yy, ww, hh, cx, cy = best_cv_candidate
+        
+        region_w = int(max((ww + 24) * scale_x, video_meta["width"] * 0.85))
+        region_h = int(max((hh + 12) * scale_y, video_meta["height"] * 0.075))
+        
+        # Exact horizontal center of the video
+        centerX = int(video_meta["width"] // 2)
+        region_y = int(max((yy - 6) * scale_y, 0))
+        centerY = int(region_y + region_h // 2)
+        
+        region_x = max(0, int(centerX - region_w // 2))
+        region_w = min(region_w, video_meta["width"] - region_x)
+        region_h = min(region_h, video_meta["height"] - region_y)
+
+        return {
+            "detected": True,
+            "cleanupMode": fallback_region.get("cleanupMode", "localized_blur"),
+            "x": region_x,
+            "y": region_y,
+            "w": region_w,
+            "h": region_h,
+            "centerX": centerX,
+            "centerY": centerY,
+            "confidence": 1.0,
+        }
+
     margin_x = max(int(sample_width * 0.06), 8)
     row_scores = [0.0] * sample_height
     for y in range(1, sample_height - 1):
@@ -1502,8 +1594,6 @@ def detect_subtitle_region_in_frame(
         candidate_ranges = [(peak_start, min(peak_start + band_height, sample_height))]
 
     fallback_width_ratio = min(max(int(fallback_region.get("w", 0)) / max(int(video_meta["width"]), 1), 0.22), 0.92)
-    scale_x = video_meta["width"] / sample_width
-    scale_y = video_meta["height"] / sample_height
     best_candidate: dict[str, Any] | None = None
     best_candidate_score = -1.0
 
@@ -1552,7 +1642,7 @@ def detect_subtitle_region_in_frame(
             right = min(left + max(fallback_width, int(sample_width * 0.48)), sample_width - 1)
             chosen_span_score = band_score * 0.55
         else:
-            chosen_span: tuple[int, int] | None = None
+            chosen_span = None
             chosen_span_score = -1.0
             for span_start, span_end in spans:
                 span_width = max(span_end - span_start, 1)
@@ -1584,7 +1674,17 @@ def detect_subtitle_region_in_frame(
         fallback_distance = abs(region_center_y - fallback_center_y_full) / max(int(video_meta["height"]), 1)
         confidence = (band_score / max(sample_width * band_height * 0.16, 1.0)) * vertical_bias
         confidence += min(chosen_span_score / max(sample_height * max(right - left, 1) * 0.18, 1.0), 1.35) * 0.22
-        confidence *= 1.0 - min(fallback_distance * 1.0, 0.88)
+        
+        pref_y = fallback_region.get("preferred_y") if fallback_region else None
+        if pref_y is not None:
+            distance_to_preferred = abs(region_center_y - pref_y) / max(int(video_meta["height"]), 1)
+            if distance_to_preferred <= 0.08:
+                confidence *= 1.45
+            else:
+                confidence *= 1.0 - min(distance_to_preferred * 1.0, 0.72)
+        else:
+            confidence *= 1.0 - min(fallback_distance * 0.25, 0.22)
+
         candidate = {
             "detected": True,
             "cleanupMode": fallback_region.get("cleanupMode", "localized_blur"),
@@ -1842,6 +1942,38 @@ def build_dynamic_subtitle_regions(
     sample_height = max(int(video_meta["height"] * sample_width / max(video_meta["width"], 1)), 180)
     cache: dict[int, dict[str, Any]] = {}
     dynamic_regions: list[dict[str, Any]] = []
+    y_votes = []
+    try:
+        tot_dur = max(int(video_meta.get("durationMs", 0)), 1000)
+        t_pts = [int(tot_dur * i / 11) for i in range(1, 11)]
+        for pt in t_pts:
+            fr = extract_gray_frame(video_path, pt, sample_width, sample_height)
+            if len(fr) >= sample_width * sample_height:
+                im = np.frombuffer(fr, dtype=np.uint8).reshape((sample_height, sample_width))
+                b_mask = cv2.adaptiveThreshold(im, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, -20)
+                edges = cv2.Canny(im, 20, 80)
+                comb = cv2.bitwise_or(edges, b_mask)
+                kw = max(int(sample_width * 0.12), 64)
+                kh = max(int(sample_height * 0.04), 16)
+                ker = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
+                dil = cv2.dilate(comb, ker, iterations=2)
+                cnts, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for c in cnts:
+                    xx, yy, ww, hh = cv2.boundingRect(c)
+                    if ww > sample_width * 0.12 and abs((xx + ww // 2) - sample_width // 2) < sample_width * 0.15:
+                        y_votes.append(int(yy * (video_meta["height"] / sample_height)))
+    except Exception:
+        pass
+
+    if y_votes:
+        buckets = {}
+        for y_v in y_votes:
+            b_idx = y_v // 40
+            buckets[b_idx] = buckets.get(b_idx, 0) + 1
+            buckets[b_idx - 1] = buckets.get(b_idx - 1, 0) + 0.5
+            buckets[b_idx + 1] = buckets.get(b_idx + 1, 0) + 0.5
+        best_b = max(buckets.items(), key=lambda x: x[1])[0]
+        fallback_region["preferred_y"] = best_b * 40
     fallback_position_region = {
         **fallback_region,
         "centerX": fallback_region.get("x", 0) + fallback_region.get("w", 0) // 2,
@@ -1951,5 +2083,21 @@ def build_dynamic_subtitle_regions(
         fallback_region=fallback_region,
         video_meta=video_meta,
     )
+
+    # Align dynamic regions exactly with the final subtitle positions
+    for r, pos in zip(dynamic_regions, subtitle_positions):
+        min_w = int(video_meta["width"] * 0.85)
+        if r["w"] < min_w:
+            r["w"] = min_w
+
+        # Keep both the mask and the new subtitle exactly centered horizontally on the video
+        r["centerX"] = video_meta["width"] // 2
+        r["centerY"] = pos["centerY"]
+        r["x"] = max(0, int(r["centerX"] - r["w"] // 2))
+        r["y"] = max(0, int(r["centerY"] - r["h"] // 2))
+        
+        pos["centerX"] = r["centerX"]
+        pos["centerY"] = r["centerY"]
+
     return dynamic_regions, subtitle_positions
 
