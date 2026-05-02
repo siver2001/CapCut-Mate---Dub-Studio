@@ -150,7 +150,11 @@ def run_output(cmd: list[str], cwd: Path | None = None, timeout: float | None = 
 
 
 def module_available(module_name: str) -> bool:
-    return importlib.util.find_spec(module_name) is not None
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return False
+
 
 
 def ensure_python_packages(

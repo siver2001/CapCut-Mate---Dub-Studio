@@ -1473,7 +1473,37 @@ def ensure_ffmpeg_runtime(*, phase: str, step: str, progress: float) -> None:
         phase=phase,
         step=step,
         progress=progress,
-        message="Đang tải FFmpeg & FFprobe cho Windows (khoảng 50MB)...",
+        message="Đang kiểm tra và cài đặt FFmpeg/FFprobe cho Windows...",
+    )
+    
+    # 1. Try winget first (cleanest way on modern Windows)
+    try:
+        if shutil.which("winget"):
+            safe_print("[info] Đang thử cài FFmpeg bằng winget (Gyan.FFmpeg)...")
+            run(
+                [
+                    "winget",
+                    "install",
+                    "Gyan.FFmpeg",
+                    "--accept-source-agreements",
+                    "--accept-package-agreements",
+                    "--silent",
+                ],
+                timeout=300.0,
+            )
+            # Check if it's now in PATH
+            if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+                safe_print("[info] Đã cài FFmpeg thành công qua winget.")
+                return
+    except Exception as exc:
+        safe_print(f"[warn] Winget install failed: {exc}")
+
+    # 2. Fallback to manual zip download if winget fails or is missing
+    emit_progress(
+        phase=phase,
+        step=step,
+        progress=progress + 0.005,
+        message="Đang tải FFmpeg & FFprobe thủ công (khoảng 50MB)...",
     )
     
     url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -1487,9 +1517,11 @@ def ensure_ffmpeg_runtime(*, phase: str, step: str, progress: float) -> None:
         headers = {'User-Agent': 'Mozilla/5.0'}
         req = urllib.request.Request(url, headers=headers)
         
+        safe_print(f"[info] Đang tải FFmpeg từ {url}...")
         with urllib.request.urlopen(req) as response, open(zip_path, 'wb') as out_file:
             shutil.copyfileobj(response, out_file)
             
+        safe_print("[info] Đang giải nén FFmpeg...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             for member in zip_ref.namelist():
                 if member.endswith("bin/ffmpeg.exe") or member.endswith("bin/ffprobe.exe"):
@@ -1501,15 +1533,18 @@ def ensure_ffmpeg_runtime(*, phase: str, step: str, progress: float) -> None:
         
         if FFMPEG_BIN_DIR.exists():
             os.environ["PATH"] = str(FFMPEG_BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
+            safe_print(f"[info] Đã cài FFmpeg thủ công vào {FFMPEG_BIN_DIR}")
             
     except Exception as exc:
-        safe_print(f"[warn] Khong the tu dong tai FFmpeg: {exc}")
+        safe_print(f"[error] Không thể tự động tải FFmpeg: {exc}")
+        raise RuntimeError(f"Không thể cài đặt FFmpeg tự động. Hãy tải và cài FFmpeg thủ công từ gyan.dev và thêm vào PATH. Lỗi: {exc}") from exc
     finally:
         if zip_path.exists():
             try:
                 os.remove(zip_path)
             except:
                 pass
+
 
 
 
