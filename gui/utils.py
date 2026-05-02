@@ -204,9 +204,9 @@ def decode_process_bytes(data: bytes) -> str:
 
 APP_STYLESHEET = """
 QMainWindow, QWidget#AppRoot, QScrollArea QWidget {
-    background: #07111f;
-    color: #e8eefc;
-    font-family: "Segoe UI", "Arial";
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0a192f, stop:1 #020617);
+    color: #f1f5f9;
+    font-family: "Inter", "Segoe UI", "Arial";
     font-size: 13px;
 }
 QLabel, QCheckBox, QRadioButton, QGroupBox {
@@ -217,16 +217,16 @@ QScrollArea {
     background: transparent;
 }
 QFrame#HeroCard {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #102443, stop:0.5 #0f766e, stop:1 #0ea5e9);
-    border: 1px solid rgba(255,255,255,0.14);
-    border-radius: 12px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1e40af, stop:0.5 #0d9488, stop:1 #0284c7);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 14px;
     color: white;
 }
 QFrame#SurfaceCard {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0d1b31, stop:0.55 #0d1829, stop:1 #091321);
-    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0f172a, stop:0.5 #020617, stop:1 #0a192f);
+    border: 1px solid rgba(148, 163, 184, 0.25);
     border-radius: 20px;
-    color: #e8eefc;
+    color: #f1f5f9;
 }
 QFrame#StatCard {
     background: rgba(255,255,255,0.06);
@@ -356,52 +356,66 @@ QSlider::handle:horizontal {
     border: 2px solid #ffffff;
 }
 QPushButton {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(18, 34, 59, 0.95), stop:1 rgba(22, 44, 71, 0.95));
-    border: 1px solid rgba(125, 211, 252, 0.16);
-    border-radius: 12px;
-    color: #f1f5f9;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(37, 99, 235, 0.4), stop:1 rgba(37, 99, 235, 0.15));
+    border: 1px solid rgba(147, 197, 253, 0.3);
+    border-radius: 8px;
+    color: #f8fafc;
     font-weight: 700;
-    font-size: 12px;
-    padding: 6px 10px;
-    min-height: 30px;
+    font-size: 11px;
+    padding: 5px 12px;
+    min-height: 28px;
 }
 QPushButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(15, 112, 136, 0.95), stop:1 rgba(37, 99, 235, 0.95));
-    border: 1px solid rgba(186, 230, 253, 0.42);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(37, 99, 235, 0.7), stop:1 rgba(29, 78, 216, 0.5));
+    border: 1px solid rgba(191, 219, 254, 0.7);
     color: white;
 }
 QPushButton:pressed {
-    background: rgba(12, 26, 45, 0.92);
-    border: 1px solid rgba(103, 232, 249, 0.35);
+    background: rgba(30, 58, 138, 0.95);
+    border: 1px solid rgba(191, 219, 254, 0.4);
+    padding-top: 7px; padding-bottom: 3px;
 }
 QPushButton[variant="primary"] {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #06b6d4, stop:1 #2563eb);
-    border: 1px solid rgba(186, 230, 253, 0.24);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #1d4ed8);
+    border: 1px solid rgba(255, 255, 255, 0.35);
 }
 QPushButton[variant="primary"]:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #22d3ee, stop:1 #3b82f6);
-    border: 1px solid rgba(255,255,255,0.34);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3b82f6, stop:1 #2563eb);
+    border: 1px solid rgba(255, 255, 255, 0.65);
 }
 QPushButton[variant="success"] {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #14b8a6, stop:1 #16a34a);
-    border: 1px solid rgba(220, 252, 231, 0.22);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #059669, stop:1 #047857);
+    border: 1px solid rgba(255, 255, 255, 0.35);
 }
 QPushButton[variant="success"]:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2dd4bf, stop:1 #22c55e);
-    border: 1px solid rgba(255,255,255,0.34);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #10b981, stop:1 #059669);
+    border: 1px solid rgba(255, 255, 255, 0.65);
+}
+QPushButton[variant="danger"] {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #dc2626, stop:1 #b91c1c);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+}
+QPushButton[variant="danger"]:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ef4444, stop:1 #dc2626);
+    border: 1px solid rgba(255, 255, 255, 0.65);
 }
 QPushButton[variant="ghost"] {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(21, 34, 53, 0.88), stop:1 rgba(15, 38, 52, 0.88));
-    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
 }
 QPushButton[variant="ghost"]:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(14, 116, 144, 0.82), stop:1 rgba(14, 165, 233, 0.82));
-    border: 1px solid rgba(186, 230, 253, 0.3);
+    background: rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.35);
 }
-QPushButton:disabled, QComboBox:disabled, QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
-    color: rgba(226, 232, 240, 0.52);
-    border: 1px solid rgba(148, 163, 184, 0.10);
-    background: rgba(15, 23, 42, 0.55);
+QPushButton#NavActive {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0ea5e9, stop:1 #2563eb);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    color: white;
+}
+QPushButton:disabled {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.2);
 }
 QPushButton#ColorButton {
     text-align: left;
@@ -659,6 +673,8 @@ def default_settings() -> dict[str, Any]:
         "speakerCount": 1,
         "defaultVoice": default_voice,
         "voiceMapping": {},
+        "localizationMode": "creative",
+        "translateProvider": "auto",
         "introHook": {
             "enabled": True,
             "clipDurationMs": 15000,
@@ -699,6 +715,8 @@ def default_settings() -> dict[str, Any]:
             "maxWordsPerChunk": 5,
             "maxCharsPerChunk": 22,
             "punctuationAwareSplit": True,
+            "subtitleStyle": "classic",
+            "subtitleAnimation": "none",
         },
         "subtitleRegion": {"x": 0, "y": 0, "w": 0, "h": 0},
         "sourceSubtitleCleanupMode": "localized_blur",

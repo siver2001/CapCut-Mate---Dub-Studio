@@ -545,13 +545,44 @@ def run_ollama_prompt(
     timeout: int | None = None,
     json_schema: dict[str, Any] | None = None,
 ) -> str:
-    """Send a prompt to Ollama API and return the generated text with retries.
+    if os.getenv("DUB_AI_MODE") == "cloud":
+        api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+        model_name = os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash").strip()
+        if not model_name.startswith("models/"):
+            model_name = f"models/{model_name}"
+        safe_print(f"[info] Đang gửi yêu cầu tới Gemini Cloud API ({model_name})...", flush=True)
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": temperature if temperature is not None else 0.35,
+                "maxOutputTokens": max_tokens or 2048
+            }
+        }
+        if json_schema or (isinstance(prompt, str) and "json" in prompt.lower()):
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout or 60)
+            if resp.status_code == 429:
+                raise RuntimeError("Hết quota")
+            if resp.status_code != 200:
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                raise RuntimeError(f"Gemini API Error: {err_msg}")
+            data = resp.json()
+            try:
+                txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                return txt.strip()
+            except (KeyError, IndexError):
+                raise RuntimeError("Phản hồi từ Gemini API không đúng cấu trúc.")
+        except Exception as exc:
+            if "quota" in str(exc).lower():
+                raise RuntimeError("Hết quota")
+            raise RuntimeError(f"Cloud AI Error: {exc}")
 
-    Uses **streaming mode** so that the HTTP connection stays alive as
-    long as tokens keep arriving.  A per-chunk stall timeout (default
-    60 s) replaces the old single-shot socket timeout, eliminating the
-    false-timeout failures with slow models like gemma4.
-    """
     ensure_ollama_runtime(
         required=True,
         phase="render",
@@ -1431,12 +1462,76 @@ def ensure_thumbnail_runtime(*, phase: str, step: str, progress: float) -> None:
         message="Đang kiểm tra thư viện tạo thumbnail...",
     )
 
+def ensure_ffmpeg_runtime(*, phase: str, step: str, progress: float) -> None:
+    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+        return
+
+    if sys.platform != "win32":
+        return
+
+    emit_progress(
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang tải FFmpeg & FFprobe cho Windows (khoảng 50MB)...",
+    )
+    
+    url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+    zip_path = ROOT / "temp" / "ffmpeg.zip"
+    ensure_dir(zip_path.parent)
+    
+    try:
+        import zipfile
+        import urllib.request
+        
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        req = urllib.request.Request(url, headers=headers)
+        
+        with urllib.request.urlopen(req) as response, open(zip_path, 'wb') as out_file:
+            shutil.copyfileobj(response, out_file)
+            
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            for member in zip_ref.namelist():
+                if member.endswith("bin/ffmpeg.exe") or member.endswith("bin/ffprobe.exe"):
+                    filename = os.path.basename(member)
+                    target_path = FFMPEG_BIN_DIR / filename
+                    ensure_dir(FFMPEG_BIN_DIR)
+                    with zip_ref.open(member) as source, open(target_path, "wb") as target:
+                        shutil.copyfileobj(source, target)
+        
+        if FFMPEG_BIN_DIR.exists():
+            os.environ["PATH"] = str(FFMPEG_BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
+            
+    except Exception as exc:
+        safe_print(f"[warn] Khong the tu dong tai FFmpeg: {exc}")
+    finally:
+        if zip_path.exists():
+            try:
+                os.remove(zip_path)
+            except:
+                pass
+
+
 
 def prepare_runtime(target: str) -> None:
     normalized = str(target or "all").strip().lower()
-    ensure_thumbnail_runtime(phase="thumbnail", step="prepare", progress=0.01)
+    
+    # 1. Essential Tools (FFmpeg, yt-dlp)
+    ensure_ffmpeg_runtime(phase="prepare", step="prepare", progress=0.01)
+    ensure_python_packages(
+        [("yt_dlp", "yt-dlp")],
+        phase="prepare",
+        step="prepare",
+        progress=0.015,
+        message="Đang kiểm tra thư viện yt-dlp...",
+    )
+    
+    # 2. Functional components
+    ensure_thumbnail_runtime(phase="thumbnail", step="prepare", progress=0.02)
+    
     if normalized not in {"analysis", "render", "all"}:
         normalized = "all"
+        
     if normalized in {"analysis", "all"}:
         if not whisperx_disabled():
             ensure_whisperx_runtime(phase="analysis", step="prepare", progress=0.02)
@@ -1448,6 +1543,7 @@ def prepare_runtime(target: str) -> None:
                 step="prepare",
                 progress=0.04,
             )
+            
     if normalized in {"render", "all"}:
         ensure_edge_tts_runtime(phase="render", step="prepare", progress=0.03)
         if DUB_SOURCE_SEPARATION_ENABLED:

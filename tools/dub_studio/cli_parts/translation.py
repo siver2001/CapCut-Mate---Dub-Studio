@@ -455,10 +455,30 @@ def _build_localization_prompt(
     *,
     source_language: str,
     target_language: str,
+    localization_mode: str = "creative",
 ) -> str:
+    mode_instructions = ""
+    if localization_mode == "creative":
+        mode_instructions = (
+            "- CREATIVE REWRITE: Do not just translate. Re-imagine the sentences to be as engaging, catchy, and smooth as possible for a Vietnamese audience.\n"
+            "- NATURAL FLOW: Use natural Vietnamese connectors and sentence structures that sound like a professional storyteller.\n"
+        )
+    elif localization_mode == "vietnamese_slang":
+        mode_instructions = (
+            "- VIETNAMESE SLANG & GEN Z STYLE: Use natural, trendy Vietnamese slang and informal language where appropriate.\n"
+            "- TRENDY PRONOUNS: Use informal pronouns like 'tui', 'ông', 'bà', 'mấy bác' if it fits the vibe.\n"
+            "- CATCHY & FUN: Make the text sound like a viral TikTok video or a fun vlog.\n"
+        )
+    else: # literal
+        mode_instructions = (
+            "- ACCURATE & LITERAL: Stick closer to the original meaning while maintaining correct Vietnamese grammar.\n"
+            "- FORMAL TONE: Use standard, neutral Vietnamese suitable for documentaries or news.\n"
+        )
+
     return (
         "You are an elite Vietnamese subtitle translator and expert localization editor.\n"
         f"Source language: {source_language or 'auto-detected language'}. Target language: Vietnamese ({target_language}).\n"
+        f"Localization Style: {localization_mode.replace('_', ' ').title()}\n"
         "\n"
         "CRITICAL OUTPUT RULES:\n"
         f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
@@ -473,17 +493,107 @@ def _build_localization_prompt(
         '- "delivery": exactly one of: calm, neutral, curious, excited, urgent, suspense.\n'
         "\n"
         "LOCALIZATION & WRITING EXCELLENCE RULES:\n"
-        "- AVOID ROBOTIC TRANSLATIONS: Translate by meaning and emotion, not word-for-word. Rewrite naturally in spoken Vietnamese.\n"
-        "- STORYTELLING STYLE: Write with the smooth, captivating tone of professional voice actors and content creators.\n"
-        "- DUBBING & VOICEOVER COMPATIBLE: Ensure the translation makes perfect sense when read aloud for voiceovers. Avoid robotic word-for-word translations, strange sentence breaks, and awkward wording. Prioritize conversational flow and immediate comprehensibility.\n"
-        "- COLLOQUIAL & TRENDY: Rephrase idioms, slang, jokes, sarcasm, and memes into natural, modern Vietnamese equivalents organically.\n"
+        f"{mode_instructions}"
+                "- IDIOMATIC & COHERENT: Do NOT translate word-for-word. Do not use direct literal meanings. Translate the complete contextual meaning to make sense in Vietnamese. For example, do not translate '打' as 'đánh' unless it makes sense, and do not use 'vừa gió vừa sưng' for 'gout/arthritis' or 'red and swollen'.\n"
+        "- CLARITY & CONTEXT: The translation must be instantly comprehensible to native Vietnamese speakers. Avoid weird or robotic phrases. All sentences must sound natural for a product review, vlog, or voiceover.\n"
+        "- NO NONSENSE & GIBBERISH: Completely eliminate gibberish sentences and Whisper hallucinations (e.g., weird phrases about 'microphones', 'esports', or 'American team' when the topic is cat toothpaste). Avoid translating out-of-context terms literally. Instead, rewrite them smoothly to match the product topic (e.g., 'theo công nghệ Mỹ', 'đạt chuẩn quốc tế').\n" 
         "- EMOTIONAL RESONANCE: Choose Vietnamese pronouns naturally based on relationship, age, and tone: mình/cậu, anh/em, tao/mày, chú mèo, cô mèo, anh bạn nhỏ...\n"
         "- COMPLETE MEANINGFUL SENTENCES: Every translation must be a complete, grammatically sound, and fully logical sentence in Vietnamese. Never leave a sentence hanging, cut off, or incomplete.\n"
         "- PRONOUN CONSISTENCY: Keep pronouns and names strictly consistent across all items for the same speaker/subject throughout the video.\n"
         "- CONTEXT AWARE: Connect fragmented or noisy transcripts into coherent spoken stories using nearby context conservatively.\n"
+        "- GLOBAL THEME ALIGNMENT: Ensure the vocabulary and style match the overall topic of the video (e.g., technical for tech reviews, playful for vlogs).\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
+
+
+def _build_global_analysis_prompt(full_transcript: str) -> str:
+    """Build a prompt to analyze the global theme and style of the video."""
+    return (
+        "You are a master video content strategist and expert localization editor.\n"
+        "Analyze the following full transcript from a video to build a deep understanding of its context.\n"
+        "\n"
+        "YOUR MISSION:\n"
+        "1. THEME & TOPIC: Precisely identify what the video is about (e.g., 'A review of cat dental hygiene products', 'A tutorial on fixing a leaky faucet').\n"
+        "2. AUDIENCE & TONE: Describe the target audience and the required emotional tone (e.g., 'Friendly advice for pet owners', 'Urgent news update', 'Playful children vlog').\n"
+        "3. CHARACTER ROLES: Identify who is speaking and their relationship (e.g., 'An expert host talking to viewers', 'A person talking to their pet cat').\n"
+        "4. DOMAIN GLOSSARY: List specific technical terms, brand names, or recurring nouns that must be translated correctly and consistently (e.g., 'nha chu', 'cao răng', 'kem đánh răng dành cho mèo').\n"
+        "5. VIETNAMESE PRONOUNS: Choose the most natural and professional Vietnamese pronouns based on the roles (e.g., use 'mình' for host, 'bé' for pets, 'bạn' for viewers).\n"
+        "\n"
+        "OUTPUT FORMAT: Return ONLY a valid JSON object with these keys:\n"
+        '- "theme": string\n'
+        '- "audience": string\n'
+        '- "tone": string\n'
+        '- "pronouns": string (preferred Vietnamese pronouns for dialogue)\n'
+        '- "glossary": array of strings (the specific terminology to use)\n'
+        "\n"
+        "TRANSCRIPT FOR ANALYSIS:\n"
+        f"{full_transcript[:7500]}"
+    )
+
+
+def analyze_global_context_via_ollama(
+    segments: list[dict[str, Any]],
+    *,
+    phase: str = "render",
+) -> dict[str, Any]:
+    """Analyze the full transcript to provide global context for translation."""
+    full_text = " ".join([normalize_text(s.get("sourceText") or "") for s in segments])
+    if not full_text.strip():
+        return {}
+
+    emit_progress(
+        phase=phase,
+        step="translate",
+        progress=0.31,
+        message="Đang phân tích toàn bộ ngữ cảnh video để tối ưu hóa bản dịch...",
+    )
+
+    try:
+        prompt = _build_global_analysis_prompt(full_text)
+        response = run_ollama_prompt(
+            prompt,
+            max_tokens=800,
+            temperature=0.1,
+            timeout=60,
+        )
+        
+        # Resilient JSON extraction
+        clean_response = response.strip()
+        if "```json" in clean_response:
+            clean_response = clean_response.split("```json")[-1].split("```")[0].strip()
+        elif "```" in clean_response:
+            clean_response = clean_response.split("```")[-1].split("```")[0].strip()
+            
+        # Aggressive cleanup of trailing commas and non-JSON text
+        clean_response = re.sub(r',\s*([\]}])', r'\1', clean_response)
+        
+        try:
+            analysis = json.loads(clean_response)
+        except Exception:
+            # Last resort: find the first { and last }
+            start = clean_response.find('{')
+            end = clean_response.rfind('}')
+            if start != -1 and end != -1:
+                try:
+                    analysis = json.loads(clean_response[start:end+1])
+                except:
+                    analysis = {}
+            else:
+                analysis = {}
+                
+        if isinstance(analysis, dict):
+            safe_print(f"[info] Đã xác định ngữ cảnh video: {analysis.get('theme', 'N/A')} ({analysis.get('tone', 'N/A')})", flush=True)
+            return analysis
+    except Exception as exc:
+        safe_print(f"[warn] Không thể phân tích ngữ cảnh toàn cục: {exc}", flush=True)
+        # Fallback: try one more time with a simpler prompt if JSON failed
+        try:
+             simple_response = run_ollama_prompt("Summarize the theme and character pronouns of this transcript as JSON: " + full_text[:2000], max_tokens=200)
+             return parse_json_response_payload(simple_response) or {}
+        except:
+             pass
+    return {}
 
 
 def should_review_machine_translation(item: dict[str, Any], translated_text: str) -> bool:
@@ -557,34 +667,107 @@ def _build_machine_review_prompt(
     items_payload: list[dict[str, Any]],
     *,
     source_language: str,
+    localization_mode: str = "creative",
 ) -> str:
+    mode_instructions = ""
+    if localization_mode == "creative":
+        mode_instructions = (
+            "- CREATIVE STORYTELLING: Rewrite the draft to be catchy, smooth, and emotionally engaging.\n"
+            "- NATURAL CADENCE: Sentences must sound like they are spoken by a native human narrator, not a machine.\n"
+        )
+    elif localization_mode == "vietnamese_slang":
+        mode_instructions = (
+            "- SLANG & VIBE: Use Gen Z slang and informal expressions naturally where it fits the tone.\n"
+        )
+    else: # literal
+        mode_instructions = (
+            "- ACCURATE & FORMAL: Ensure high fidelity to the original meaning with a professional tone.\n"
+        )
+
     return (
-        "You are an expert Vietnamese localization reviewer for short videos and storytelling content.\n"
+        "You are an expert Vietnamese Localization Editor and Video Content Strategist.\n"
+        "Your mission is to fix broken machine translations and turn them into professional, natural, and logical video scripts.\n"
         f"Source language: {source_language or 'auto-detected language'}.\n"
-        "Your job is to take Microsoft-translated drafts and rewrite them into exceptional, highly natural, and smooth spoken Vietnamese.\n"
+        f"Style: {localization_mode.replace('_', ' ').title()}\n"
         "\n"
-        "CRITICAL OUTPUT RULES:\n"
-        f"1. Return ONLY a valid JSON array with EXACTLY {len(items_payload)} items, same order as input.\n"
-        "2. Do NOT include markdown, notes, explanations, comments, or any text outside the JSON array.\n"
-        "3. Every translatedText MUST be in Vietnamese. Fix weird machine artifacts. Never echo the source language untranslated.\n"
-        "4. STRICT BAN ON CHINESE CHARACTERS: Absolutely ZERO Chinese hanzi (e.g., 堆积如山) must remain in the reviewed output. Rewrite everything into pure, spoken Vietnamese.\n"
+        "STRICT LOGIC & CONTEXT RULES:\n"
+        "1. THEME DOMINANCE: The GLOBAL VIDEO CONTEXT is absolute. If theme is 'Pet/Cat Care', any mention of 'singing', 'lyrics', 'song', 'stage' is 100% an ASR error. Replace 'singing' (唱) with 'long/hard to say' (长/难说).\n"
+        "2. PET CONTEXT SPECIAL REPAIR: \n"
+        "   - 'yazama' -> 'vấn đề nha chu/vôi răng'.\n"
+        "   - 'lời từ chối/phủ nhận' (denials) -> 'phản ứng/sự kháng cự' (reactions/resistance).\n"
+        "   - 'hát hay quá' -> 'câu này hơi dài/khó nói'.\n"
+        "3. NONSENSE ELIMINATION: Never output non-existent words. Use the theme to find the most likely intended meaning.\n"
+        "4. NATURAL STORYTELLING: Use professional, conversational Vietnamese. Ensure sentences connect logically.\n"
+        "5. PRONOUNS: Use natural Vietnamese narrating style. Default to 'Mình/Chúng mình' for a friendly narrator vibe.\n"
+        "6. NO HANZI: No Chinese characters allowed.\n"
+        "7. TIME CONSTRAINT & SUMMARIZATION (CRITICAL): Each segment has a fixed 'durationMs'. If 'durationMs' < 4000ms, keep translation under 8 words. Summarize heavily to fit a natural pace (3-4 words/sec).\n"
         "\n"
-        "Each output item must be a JSON object with exactly these keys:\n"
-        '- "translatedText": natural, smooth, highly engaging Vietnamese text.\n'
-        '- "delivery": exactly one of: calm, neutral, curious, excited, urgent, suspense.\n'
+        "OUTPUT REQUIREMENT:\n"
+        f"- Return ONLY a valid JSON array of exactly {len(items_payload)} items.\n"
+        "- Format: [{\"translatedText\": \"...\", \"delivery\": \"...\"}, ...]\n"
         "\n"
-        "LOCALIZATION & WRITING EXCELLENCE RULES:\n"
-        "- AVOID ROBOTIC TRANSLATIONS: Fix stiff machine translation artifacts. Rephrase word-for-word equivalents into natural Vietnamese expressions.\n"
-        "- STORYTELLING STYLE: Write with the smooth, emotional cadence of content creators and professional voice actors.\n"
-        "- DUBBING & VOICEOVER COMPATIBLE: Ensure the translation makes perfect sense when read aloud for voiceovers. Avoid robotic word-for-word translations, strange sentence breaks, and awkward wording. Prioritize conversational flow and immediate comprehensibility.\n"
-        "- COLLOQUIAL & TRENDY: Rephrase machine idioms, slang, jokes, and sarcasm into organic Vietnamese equivalents.\n"
-        "- EMOTIONAL RESONANCE: Choose relational pronouns naturally (tớ, cậu, anh, em, chú mèo, anh bạn nhỏ...) to engage viewers.\n"
-        "- COMPLETE MEANINGFUL SENTENCES: Ensure each reviewed sentence is complete, logical, and grammatically flawless in Vietnamese. Do not output incomplete fragments.\n"
-        "- PRONOUN CONSISTENCY: Keep pronouns strictly consistent for the same character across all dialogue lines in the video.\n"
-        "- CONTEXT AWARE: Connect broken transcript gaps into smooth, logical narrative threads without dropping final words.\n"
-        "\n"
+        "BATCH TO PROCESS:\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
+
+
+def _clean_filler_words(text: str) -> str:
+    """Remove common filler words and stutters from the source text before translation."""
+    # List of common fillers across languages (English, Vietnamese, Chinese, etc.)
+    fillers = [
+        r"\b(uhm|uh|ah|erm|um|well|you\s+know|like|actually|basically|i\s+mean)\b",
+        r"\b(ừm|ờ|hà|vâng|dạ|thì|là|mà|ấy|cái)\b",
+    ]
+    cleaned = text
+    for pattern in fillers:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    # Remove redundant whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # If cleaning made it empty but original had content, return original to be safe
+    return cleaned if (cleaned or not text) else text
+
+
+def review_machine_batch_via_ollama(
+    batch, source_language, timeout=150, global_context=None
+) -> list[dict[str, str]]:
+    items_payload = _build_machine_review_items_payload(batch)
+    
+    # Inject global context into the prompt
+    context_str = ""
+    if global_context:
+        context_str = (
+            "\nGLOBAL VIDEO CONTEXT:\n"
+            f"- Theme: {global_context.get('theme', 'N/A')}\n"
+            f"- Tone: {global_context.get('tone', 'N/A')}\n"
+            f"- Preferred Pronouns: {global_context.get('pronouns', 'N/A')}\n"
+            f"- Key Terms: {', '.join(global_context.get('glossary', []))}\n"
+        )
+
+    base_prompt = _build_machine_review_prompt(items_payload, source_language=source_language)
+    if context_str:
+        # Insert context after the first couple of lines of the prompt
+        lines = base_prompt.split("\n")
+        # Find where to insert (usually after "Localization Style: ...")
+        insert_idx = 4
+        for i, line in enumerate(lines):
+            if "Localization Style:" in line:
+                insert_idx = i + 1
+                break
+        lines.insert(insert_idx, context_str)
+        prompt = "\n".join(lines)
+    else:
+        prompt = base_prompt
+
+    reviewed = parse_json_response_payload(
+        run_ollama_prompt(
+            prompt,
+            max_tokens=_estimate_machine_review_max_tokens(items_payload),
+            temperature=0.35,
+            timeout=timeout,
+            json_schema=_ollama_translation_array_schema(len(items_payload)),
+        )
+    )
+    return _normalize_machine_review_items(batch, reviewed)
 
 
 def _normalize_machine_review_items(
@@ -595,15 +778,15 @@ def _normalize_machine_review_items(
         if len(batch) == 1 and "translatedText" in reviewed:
             reviewed = [reviewed]
         else:
-            raise RuntimeError("Gemma review response must be a JSON array.")
+            raise RuntimeError("Ollama review response must be a JSON array.")
     if not isinstance(reviewed, list) or len(reviewed) != len(batch):
         raise RuntimeError(
-            f"Gemma review trả về không khớp số lượng (nhận {len(reviewed) if isinstance(reviewed, list) else 0}, cần {len(batch)})."
+            f"Ollama review trả về không khớp số lượng (nhận {len(reviewed) if isinstance(reviewed, list) else 0}, cần {len(batch)})."
         )
     normalized_items: list[dict[str, str]] = []
     for item, source in zip(reviewed, batch):
         if not isinstance(item, dict):
-            raise RuntimeError("Gemma review item must be a JSON object.")
+            raise RuntimeError("Ollama review item must be a JSON object.")
         translated_text = normalize_text(
             item.get("translatedText")
             or source.get("translatedText")
@@ -621,26 +804,6 @@ def _normalize_machine_review_items(
             }
         )
     return normalized_items
-
-
-def review_machine_batch_via_ollama(
-    batch: list[dict[str, Any]],
-    source_language: str,
-    *,
-    timeout: int = OLLAMA_TIMEOUT,
-) -> list[dict[str, str]]:
-    items_payload = _build_machine_review_items_payload(batch)
-    prompt = _build_machine_review_prompt(items_payload, source_language=source_language)
-    reviewed = parse_json_response_payload(
-        run_ollama_prompt(
-            prompt,
-            max_tokens=_estimate_machine_review_max_tokens(items_payload),
-            temperature=max(0.08, min(OLLAMA_TEMP, 0.18)),
-            timeout=timeout,
-            json_schema=_ollama_translation_array_schema(len(items_payload)),
-        )
-    )
-    return _normalize_machine_review_items(batch, reviewed)
 
 
 def review_machine_batch_via_llama_cpp(
@@ -663,28 +826,33 @@ def review_machine_batch_via_llama_cpp(
 def apply_machine_review_result(
     item: dict[str, Any],
     *,
-    translated_text: str,
+    machine_translated_text: str,
     reviewed: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     source_text = item.get("sourceText") or ""
-    normalized_translated = pick_best_localized_text(
-        translated_text,
-        (reviewed or {}).get("translatedText") or "",
+    reviewed_text = (reviewed or {}).get("translatedText") or ""
+    
+    # Final result is chosen from machine draft vs AI refinement
+    final_text = pick_best_localized_text(
+        machine_translated_text,
+        reviewed_text,
         source_text,
     )
-    if reviewed is None:
-        return build_machine_fallback_localization(item, normalized_translated)
+    
     delivery = normalize_delivery_choice(
-        reviewed.get("delivery"),
-        default=infer_delivery_from_source(source_text, normalized_translated),
+        (reviewed or {}).get("delivery"),
+        default=infer_delivery_from_source(source_text, final_text),
     )
-    item["translatedText"] = normalized_translated
+    
+    item["translatedText"] = final_text
     item["delivery"] = delivery
+    item["machineTranslatedText"] = machine_translated_text
     item.pop("spoken" + "Text", None)
+    
     return {
-        "translatedText": item["translatedText"],
-        "delivery": item["delivery"],
-        "machineTranslatedText": normalized_translated,
+        "translatedText": final_text,
+        "delivery": delivery,
+        "machineTranslatedText": machine_translated_text,
     }
 
 
@@ -729,6 +897,7 @@ def localize_batch_via_ollama(
     target_language: str = "vi",
     *,
     timeout: int | None = None,
+    localization_mode: str = "creative",
 ) -> list[dict[str, str]]:
     """Translate a batch of segments using Ollama API."""
     items_payload = _build_localization_items_payload(batch)
@@ -736,6 +905,7 @@ def localize_batch_via_ollama(
         items_payload,
         source_language=source_language,
         target_language=target_language,
+        localization_mode=localization_mode,
     )
     localized = parse_json_response_payload(
         run_ollama_prompt(
@@ -790,6 +960,19 @@ def localize_batch_via_ollama(
                 "delivery": delivery,
             }
         )
+
+    for i in range(1, len(normalized_items)):
+        if normalize_text(normalized_items[i]["translatedText"]) == normalize_text(normalized_items[i-1]["translatedText"]):
+            s_prev = normalize_text(batch[i-1].get("sourceText") or "")
+            s_curr = normalize_text(batch[i].get("sourceText") or "")
+            if s_prev != s_curr:
+                try:
+                    new_t = translate_via_microsoft(batch[i].get("sourceText") or "", "auto", "vi")
+                    if normalize_text(new_t) != normalize_text(normalized_items[i-1]["translatedText"]):
+                        normalized_items[i]["translatedText"] = new_t
+                except Exception:
+                    pass
+
     return normalized_items
 
 
@@ -806,11 +989,11 @@ def _count_intro_sentences(text: str) -> int:
 
 
 def _intro_word_range(clip_duration_ms: int) -> tuple[int, int]:
-    clip_seconds = max(int(clip_duration_ms), 7000) / 1000.0
-    # Vietnamese narration averages 2.85-3.2 words per second.
-    # Increase word counts so audio aligns closely with video duration.
-    min_words = max(28, min(65, int(round(clip_seconds * 2.85))))
-    max_words = max(min_words + 12, min(92, int(round(clip_seconds * 4.15))))
+    clip_seconds = max(int(clip_duration_ms), 2000) / 1000.0
+    # Natural Vietnamese speaking rate is around 3.0 to 3.5 words per second.
+    # We calibrate exact boundaries to ensure TTS narration doesn't get slowed down or too fast.
+    min_words = max(12, min(65, int(round(clip_seconds * 2.8))))
+    max_words = max(min_words + 6, min(82, int(round(clip_seconds * 3.4))))
     return min_words, max_words
 
 
@@ -915,8 +1098,9 @@ def _build_intro_teaser_prompt(
         "- Every word must feel specific and real, not templated\n"
         "- Write like a natural excited narrator speaking, not like subtitles\n"
         "- Sound like a Vietnamese friend telling you something amazing they just saw\n"
-        f"- Total length requirement: EXACTLY {min_words}-{max_words} spoken Vietnamese words. "
-        "Expand the dialogue to cover the full timeframe appropriately so narration ends exactly as the teaser clip concludes.\n"
+        f"- Time allowance: The teaser clip is exactly {clip_duration_ms/1000:.1f} seconds long.\n"
+        f"- Exact word count limit: You MUST write exactly between {min_words} and {max_words} spoken Vietnamese words.\n"
+        "This is strictly enforced so the narration ends exactly as the teaser clip concludes and fits naturally with the speed of the video.\n"
         "- No hashtags, emojis, or markdown\n"
         '- Return ONLY: {"teaser":"<your teaser text>"}'
         f"{retry_block}\n"
@@ -964,12 +1148,14 @@ def localize_batch_via_llama_cpp(
     batch: list[dict[str, Any]],
     source_language: str,
     target_language: str = "vi",
+    localization_mode: str = "creative",
 ) -> list[dict[str, str]]:
     items_payload = _build_localization_items_payload(batch)
     prompt = _build_localization_prompt(
         items_payload,
         source_language=source_language,
         target_language=target_language,
+        localization_mode=localization_mode,
     )
     localized = parse_json_response_payload(
         run_llama_cpp_prompt(
@@ -1047,10 +1233,11 @@ def fallback_translate_items(
     texts: list[str],
     source_hint: str,
     use_llama_cpp: bool,
+    localization_mode: str = "creative",
 ) -> list[dict[str, str]]:
     if use_llama_cpp:
         try:
-            return localize_batch_via_llama_cpp(batch, source_hint, "vi")
+            return localize_batch_via_llama_cpp(batch, source_hint, "vi", localization_mode=localization_mode)
         except Exception:
             pass
     localized_items: list[dict[str, str]] = []
@@ -1093,10 +1280,11 @@ def localize_batch_via_ollama_resilient(
     label: str,
     phase: str,
     progress_hint: float,
+    localization_mode: str = "creative",
 ) -> list[dict[str, str]]:
     texts = [normalize_text(item.get("sourceText") or "") for item in batch]
     try:
-        return localize_batch_via_ollama(batch, source_hint, target_language)
+        return localize_batch_via_ollama(batch, source_hint, target_language, localization_mode=localization_mode)
     except Exception as exc:
         if len(batch) == 1:
             extended_timeout = min(
@@ -1116,6 +1304,7 @@ def localize_batch_via_ollama_resilient(
                         source_hint,
                         target_language,
                         timeout=extended_timeout,
+                        localization_mode=localization_mode,
                     )
                 except Exception as retry_exc:
                     exc = retry_exc
@@ -1158,6 +1347,7 @@ def localize_batch_via_ollama_resilient(
         texts=texts,
         source_hint=source_hint,
         use_llama_cpp=llama_cpp_available,
+        localization_mode=localization_mode,
     )
 
 
@@ -1169,9 +1359,10 @@ def review_machine_batch_via_ollama_resilient(
     label: str,
     phase: str,
     progress_hint: float,
+    global_context: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     try:
-        return review_machine_batch_via_ollama(batch, source_language)
+        return review_machine_batch_via_ollama(batch, source_language, global_context=global_context)
     except Exception as exc:
         if len(batch) == 1:
             extended_timeout = min(OLLAMA_MAX_TIMEOUT, OLLAMA_TIMEOUT + 90)
@@ -1180,13 +1371,14 @@ def review_machine_batch_via_ollama_resilient(
                     phase=phase,
                     step="translate",
                     progress=progress_hint,
-                    message=f"Gemma chậm ở cụm {label}, thử lại riêng cụm này với timeout={extended_timeout}s",
+                    message=f"Ollama chậm ở cụm {label}, thử lại riêng cụm này với timeout={extended_timeout}s",
                 )
                 try:
                     return review_machine_batch_via_ollama(
                         batch,
                         source_language,
                         timeout=extended_timeout,
+                        global_context=global_context,
                     )
                 except Exception as retry_exc:
                     exc = retry_exc
@@ -1205,6 +1397,7 @@ def review_machine_batch_via_ollama_resilient(
                 label=f"{label}.1",
                 phase=phase,
                 progress_hint=progress_hint,
+                global_context=global_context,
             )
             right = review_machine_batch_via_ollama_resilient(
                 batch[midpoint:],
@@ -1213,6 +1406,7 @@ def review_machine_batch_via_ollama_resilient(
                 label=f"{label}.2",
                 phase=phase,
                 progress_hint=progress_hint,
+                global_context=global_context,
             )
             return left + right
         emit_progress(
@@ -1312,6 +1506,7 @@ def translate_segments(
     *,
     target_language: str = "vi",
     phase: str = "render",
+    localization_mode: str = "creative",
 ) -> list[dict[str, Any]]:
     cache_key = hashlib.sha1(
         json.dumps(
@@ -1319,6 +1514,7 @@ def translate_segments(
                 "translationPromptVersion": TRANSLATION_PROMPT_VERSION,
                 "sourceLanguage": source_language,
                 "targetLanguage": target_language,
+                "localizationMode": localization_mode,
                 "texts": [item["sourceText"] for item in segments],
             },
             ensure_ascii=False,
@@ -1446,12 +1642,18 @@ def translate_segments(
     total = max(len(segments), 1)
     normalized_target_language = normalize_text(target_language).lower() or "vi"
     try:
-        use_ollama = normalized_target_language == "vi" and should_use_ollama("auto")
+        provider = str(os.getenv("DUB_TRANSLATE_PROVIDER") or DUB_TRANSLATE_PROVIDER).lower().strip()
+        if provider == "microsoft":
+            use_ollama = False
+            use_llama_cpp = False
+        elif provider == "google":
+            use_ollama = False
+            use_llama_cpp = False
+        else:
+            use_ollama = normalized_target_language == "vi" and should_use_ollama(provider if provider == "ollama" else "auto")
+            use_llama_cpp = normalized_target_language == "vi" and (not use_ollama) and should_use_llama_cpp("auto")
     except Exception:
         use_ollama = False
-    try:
-        use_llama_cpp = normalized_target_language == "vi" and (not use_ollama) and should_use_llama_cpp("auto")
-    except Exception:
         use_llama_cpp = False
     for index, item in enumerate(segments):
         item["previousText"] = normalize_text(segments[index - 1].get("sourceText") or "") if index > 0 else ""
@@ -1544,14 +1746,28 @@ def translate_segments(
     review_backend = "ollama" if use_ollama else ("llama_cpp" if use_llama_cpp else "")
 
     for position, item in pending_segments:
-        text = normalize_text(item["sourceText"])
-        emit_progress(
-            phase=phase,
-            step="translate",
-            progress=machine_progress(position),
-            message=f"Đang dịch Microsoft câu {position}/{len(segments)}",
-        )
-        translated = microsoft_translate_cached(text)
+        # Pre-process: Clean filler words from source text to improve MT quality
+        raw_source = item.get("sourceText") or ""
+        cleaned_source = _clean_filler_words(raw_source)
+        item["sourceText"] = cleaned_source
+        
+        text = normalize_text(cleaned_source)
+        provider = str(os.getenv("DUB_TRANSLATE_PROVIDER") or DUB_TRANSLATE_PROVIDER).lower().strip()
+        if provider in {"ollama", "auto"}:
+            translated = ""
+        elif provider == "google":
+            try:
+                translated = translate_via_google_free(text, source_hint, normalized_target_language)
+            except Exception:
+                translated = ""
+        else:
+            emit_progress(
+                phase=phase,
+                step="translate",
+                progress=machine_progress(position),
+                message=f"Đang dịch Microsoft câu {position}/{len(segments)}",
+            )
+            translated = microsoft_translate_cached(text)
         if not translated or _looks_like_source_language(translated, text):
             localized_items: list[dict[str, str]] = []
             if review_backend == "ollama":
@@ -1577,29 +1793,36 @@ def translate_segments(
                     use_llama_cpp=review_backend == "llama_cpp",
                 )
             translations[item["id"]] = apply_localized_result(item, localized_items[0], text)
-            translations[item["id"]]["machineTranslatedText"] = translations[item["id"]]["translatedText"]
+            translations[item["id"]]["machineTranslatedText"] = text if _looks_like_source_language(text, source_text) else text
             pending_updates += 1
             flush_translation_cache()
             continue
         item["translatedText"] = translated
-        item["machineTranslatedText"] = translated
+        # Do not overwrite machineTranslatedText here if it already exists
+        if not item.get("machineTranslatedText"):
+            item["machineTranslatedText"] = translated
 
     flush_machine_cache(force=True)
+    
+    review_candidates: list[tuple[int, dict[str, Any]]] = []
+    
+    # NEW: Global Context Analysis - understand the whole video before refining
+    global_context = None
+    if review_backend == "ollama":
+        global_context = analyze_global_context_via_ollama(segments, phase=phase)
+
     for index, item in enumerate(segments):
         item["previousTranslatedText"] = normalize_text(segments[index - 1].get("translatedText") or "") if index > 0 else ""
         item["nextTranslatedText"] = normalize_text(segments[index + 1].get("translatedText") or "") if index + 1 < len(segments) else ""
 
-    review_candidates: list[tuple[int, dict[str, Any]]] = []
     for position, item in pending_segments:
-        if item["id"] in translations and normalize_text(item.get("translatedText") or ""):
-            continue
         translated_text = normalize_text(item.get("translatedText") or item.get("machineTranslatedText") or "")
         if review_backend and should_review_machine_translation(item, translated_text):
             review_candidates.append((position, item))
             continue
         translations[item["id"]] = apply_machine_review_result(
             item,
-            translated_text=translated_text,
+            machine_translated_text=translated_text,
             reviewed=None,
         )
         pending_updates += 1
@@ -1613,7 +1836,7 @@ def translate_segments(
                 phase=phase,
                 step="translate",
                 progress=0.39,
-                message="Warm-up Gemma không hoàn tất, vẫn tiếp tục rewrite với retry tăng cường",
+                message="AI tối ưu hóa bản dịch không hoàn tất, vẫn tiếp tục với bản dịch máy",
                 extra={"warning": normalize_text(str(exc))[:180]},
             )
 
@@ -1629,7 +1852,7 @@ def translate_segments(
             step="translate",
             progress=review_progress(end_index),
             message=translation_progress_message(
-                provider_label="Gemma",
+                provider_label="AI",
                 start=start_position - 1,
                 end_index=end_index,
                 total=len(segments),
@@ -1643,6 +1866,7 @@ def translate_segments(
                 label=f"{start_position}-{end_index}",
                 phase=phase,
                 progress_hint=review_progress(end_index),
+                global_context=global_context,
             )
         elif review_backend == "llama_cpp":
             try:
@@ -1670,9 +1894,10 @@ def translate_segments(
                 for item in batch
                 ]
         for item, reviewed in zip(batch, reviewed_items):
+            raw_machine = item.get("machineTranslatedText") or item.get("translatedText") or ""
             translations[item["id"]] = apply_machine_review_result(
                 item,
-                translated_text=item.get("translatedText") or item.get("machineTranslatedText") or item.get("sourceText") or "",
+                machine_translated_text=raw_machine,
                 reviewed=reviewed,
             )
             pending_updates += 1

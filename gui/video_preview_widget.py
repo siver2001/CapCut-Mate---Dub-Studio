@@ -140,15 +140,22 @@ class _SubtitleOverlay(QGraphicsItem):
         rw_mapped = rw * scale_x
         rh_mapped = rh * scale_y
 
+        subtitle_preset = self._subtitle_data.get("subtitlePreset") or {}
+        opacity_pct = float(subtitle_preset.get("cleanupBlurStrength", 80))
+        alpha = int(max(0, min(255, (opacity_pct / 100.0) * 255)))
+
         rect_to_draw = QRectF(rx, ry, rw_mapped, rh_mapped)
+        # Use semi-transparent black for cleanup region (representative of the box mask)
         painter.save()
-        painter.setBrush(QColor(59, 130, 246, 75))
+        painter.setBrush(QColor(0, 0, 0, alpha))
         painter.setPen(QPen(QColor(239, 68, 68, 200), 1.5, Qt.PenStyle.DashLine))
         painter.drawRect(rect_to_draw)
         
+        # Label in top-left corner of the region to avoid overlapping with central sub text
         painter.setPen(QColor(255, 255, 255, 210))
-        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        painter.drawText(rect_to_draw, int(Qt.AlignmentFlag.AlignCenter), "[Vùng sub cũ]")
+        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        label_rect = rect_to_draw.adjusted(4, 4, -4, -4)
+        painter.drawText(label_rect, int(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft), "[Vùng che sub cũ]")
         painter.restore()
 
     def _paint_sticker(self, painter: QPainter) -> None:

@@ -523,15 +523,21 @@ def merge_short_subtitles(subtitles: list[SubtitleLine]) -> list[SubtitleLine]:
     return merged
 
 
-def split_long_clause(text: str, max_words: int = 4, max_chars: int = 20) -> list[str]:
+def split_long_clause(text: str, max_words: int = 5, max_chars: int = 25) -> list[str]:
     words = text.split()
+    if not words:
+        return []
     chunks: list[str] = []
     current: list[str] = []
-    for word in words:
+    for i, word in enumerate(words):
         candidate = " ".join(current + [word]).strip()
-        if current and (len(current) >= max_words or len(candidate) > max_chars):
-            chunks.append(" ".join(current))
-            current = [word]
+        is_last_word = (i == len(words) - 1)
+        if current and (len(candidate) > max_chars or (len(current) >= max_words and len(candidate) > max_chars * 0.85)):
+            if is_last_word and len(candidate) <= max_chars * 1.3:
+                current.append(word)
+            else:
+                chunks.append(" ".join(current))
+                current = [word]
         else:
             current.append(word)
     if current:

@@ -305,14 +305,14 @@ def clamp_rate_percent(percent: int, timing_mode: str = "balanced_natural", *, i
     ultra_tight = is_ultra_tight_mode(timing_mode)
     if intro:
         if ultra_tight:
-            min_rate, max_rate = (-2, 40)
+            min_rate, max_rate = (5, 45)
         else:
             min_rate, max_rate = (-6, 40) if timing_mode == "balanced_natural" else (-10, 48)
     else:
         if ultra_tight:
-            min_rate, max_rate = (-6, 50)
+            min_rate, max_rate = (-6, 45)
         else:
-            min_rate, max_rate = (-10, 38) if timing_mode == "balanced_natural" else (-14, 45)
+            min_rate, max_rate = (-10, 32) if timing_mode == "balanced_natural" else (-14, 38)
     return max(min_rate, min(percent, max_rate))
 
 
@@ -339,7 +339,7 @@ def estimate_intro_rate(text: str, target_ms: int, timing_mode: str = "balanced_
     profile = estimate_tts_text_profile(text)
     # Give intro slightly more breathing room (lower multiplier)
     pressure = profile["expectedSeconds"] / max(target_seconds, 0.1)
-    percent = int(round((pressure - 1.0) * (80 if is_ultra_tight_mode(timing_mode) else 70)))
+    percent = 12 + int(round((pressure - 1.0) * (90 if is_ultra_tight_mode(timing_mode) else 85)))
     return format_rate_percent(percent, timing_mode=timing_mode, intro=True)
 
 

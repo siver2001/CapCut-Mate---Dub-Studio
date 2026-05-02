@@ -344,8 +344,8 @@ class WindowHelpersMixin:
         card = QFrame()
         card.setObjectName("SurfaceCard")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
         title_label = QLabel(title)
         title_label.setObjectName("SectionTitle")
         hint_label = QLabel(hint)
@@ -384,7 +384,7 @@ class WindowHelpersMixin:
         button.setProperty("variant", variant)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setIconSize(QSize(15, 15))
-        button.setMinimumHeight(30)
+        button.setMinimumHeight(24)
         if qta:
             icon_map = {
                 "Chọn video": "fa5s.folder-open",

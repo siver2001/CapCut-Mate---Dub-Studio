@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import json
 from pathlib import Path
 
 try:  # Optional UI enhancement packages.
@@ -12,18 +14,26 @@ try:
 except Exception:  # pragma: no cover
     QLabeledSlider = None
 
+is_frozen = getattr(sys, 'frozen', False)
+if is_frozen:
+    ROOT = Path(sys.executable).parent
+    MEI_ROOT = Path(getattr(sys, '_MEIPASS', str(ROOT)))
+else:
+    ROOT = Path(__file__).resolve().parent.parent
+    MEI_ROOT = ROOT
 
-ROOT = Path(__file__).resolve().parent.parent
 PIPELINE_PATH = ROOT / "tools" / "dub_studio_pipeline.py"
 PIPELINE_PYTHON = (
     ROOT / ".venv" / "Scripts" / "python.exe"
     if (ROOT / ".venv" / "Scripts" / "python.exe").exists()
-    else Path(__import__("sys").executable)
+    else Path(sys.executable)
 )
+if is_frozen:
+    PIPELINE_PYTHON = Path(sys.executable)
+
 TEMP_DUB_DIR = ROOT / "temp" / "dub_studio"
 DEFAULT_OUTPUT_DIR = ROOT / "output"
 
-import json
 def _load_text_effect_options():
     try:
         data = json.loads((ROOT / "config" / "huazi.json").read_text(encoding="utf-8"))
@@ -36,7 +46,6 @@ def _load_text_effect_options():
         return [("none", "Không (Sử dụng Box cơ bản)")]
 
 TEXT_EFFECT_OPTIONS = _load_text_effect_options()
-
 
 def _format_text_effect_label_v2(item: dict[str, object]) -> str:
     raw_label = str(
@@ -372,9 +381,29 @@ VIDEO_CODEC_OPTIONS = [
 ]
 
 TRANSLATE_PROVIDER_OPTIONS = [
-    ("auto", "Tự động (ưu tiên Ollama → llama.cpp)"),
-    ("ollama", "Ollama (local API, Gemma 4 E2B)"),
-    ("llama.cpp", "llama.cpp (local CLI, Gemma 4 E2B)"),
+    ("auto", "Tự động (Ưu tiên Ollama → llama.cpp)"),
+    ("ollama", "Ollama (Local API, Gemma 4 E2B)"),
+    ("llama.cpp", "llama.cpp (Local CLI, Gemma 4 E2B)"),
+]
+
+SUBTITLE_STYLE_OPTIONS = [
+    ("classic", "Cổ điển (Dòng đơn/đôi)"),
+    ("karaoke", "Karaoke (Chạy từng từ)"),
+    ("highlight", "Nhấn mạnh (Tô đậm từ nói)"),
+]
+
+SUBTITLE_ANIMATION_OPTIONS = [
+    ("none", "Không hiệu ứng"),
+    ("fade_in", "Mờ dần (Fade In)"),
+    ("bounce", "Nhảy chữ (Bounce)"),
+    ("slide_up", "Trượt lên (Slide Up)"),
+    ("typewriter", "Đánh máy (Typewriter)"),
+]
+
+LOCALIZATION_MODE_OPTIONS = [
+    ("literal", "Dịch sát nghĩa"),
+    ("creative", "Viết lại sáng tạo (Creative Rewrite)"),
+    ("vietnamese_slang", "Phong cách Gen Z / Slang Việt"),
 ]
 
 VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
@@ -534,9 +563,29 @@ VIDEO_CODEC_OPTIONS = [
 ]
 
 TRANSLATE_PROVIDER_OPTIONS = [
-    ("auto", "Tự động (ưu tiên Ollama → llama.cpp)"),
-    ("ollama", "Ollama (local API, Gemma 4 E2B)"),
-    ("llama.cpp", "llama.cpp (local CLI, Gemma 4 E2B)"),
+    ("auto", "Tự động (Ưu tiên Ollama → llama.cpp)"),
+    ("ollama", "Ollama (Local API, Gemma 4 E2B)"),
+    ("llama.cpp", "llama.cpp (Local CLI, Gemma 4 E2B)"),
+]
+
+SUBTITLE_STYLE_OPTIONS = [
+    ("classic", "Cổ điển (Dòng đơn/đôi)"),
+    ("karaoke", "Karaoke (Chạy từng từ)"),
+    ("highlight", "Nhấn mạnh (Tô đậm từ nói)"),
+]
+
+SUBTITLE_ANIMATION_OPTIONS = [
+    ("none", "Không hiệu ứng"),
+    ("fade_in", "Mờ dần (Fade In)"),
+    ("bounce", "Nhảy chữ (Bounce)"),
+    ("slide_up", "Trượt lên (Slide Up)"),
+    ("typewriter", "Đánh máy (Typewriter)"),
+]
+
+LOCALIZATION_MODE_OPTIONS = [
+    ("literal", "Dịch sát nghĩa"),
+    ("creative", "Viết lại sáng tạo (Creative Rewrite)"),
+    ("vietnamese_slang", "Phong cách Gen Z / Slang Việt"),
 ]
 
 VOICE_OPTIONS = [

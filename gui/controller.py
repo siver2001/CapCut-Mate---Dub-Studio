@@ -17,7 +17,7 @@ except ImportError:
     except ImportError:
         _sip = None
 
-from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT
+from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, is_frozen
 from gui.utils import (
     append_job_log,
     build_effective_analysis,
@@ -270,14 +270,20 @@ class DubStudioJobController(QWidget):
         self, job_id: str, args: list[str], result_file: Path, mode: str
     ) -> None:
         job = self.jobs[job_id]
-        if not PIPELINE_PATH.exists():
+        if not is_frozen and not PIPELINE_PATH.exists():
             raise RuntimeError(f"Pipeline script not found: {PIPELINE_PATH}")
         process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))
-        process.setArguments(["-u", str(PIPELINE_PATH), *args])
+        
+        if is_frozen:
+            # When packaged, the entry point handles 'pipeline' as its first arg
+            process.setArguments(["pipeline", *args])
+        else:
+            process.setArguments(["-u", str(PIPELINE_PATH), *args])
+            
         process.setWorkingDirectory(str(ROOT))
         process.readyReadStandardOutput.connect(
             lambda: self._drain_output(job_id, "stdout")

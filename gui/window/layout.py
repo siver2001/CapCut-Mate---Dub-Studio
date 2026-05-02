@@ -48,6 +48,9 @@ from gui.config import (
     SUBTITLE_POSITION_OPTIONS,
     SUBTITLE_VISIBILITY_OPTIONS,
     TEXT_EFFECT_OPTIONS,
+    SUBTITLE_STYLE_OPTIONS,
+    SUBTITLE_ANIMATION_OPTIONS,
+    LOCALIZATION_MODE_OPTIONS,
     TARGET_LANGUAGE_OPTIONS,
     TIMING_MODE_OPTIONS,
     UI_THEME_OPTIONS,
@@ -152,9 +155,9 @@ class WindowLayoutMixin:
         self.input_path_edit = QLineEdit()
         self.input_path_edit.setReadOnly(True)
         self.input_path_edit.setPlaceholderText("Chưa chọn video nguồn")
-        browse_btn = self._make_button("Chọn video", "ghost")
+        browse_btn = self._make_button("Chọn video", "primary")
         browse_btn.clicked.connect(self.choose_video)
-        self.download_video_btn = self._make_button("Tải từ link", "ghost")
+        self.download_video_btn = self._make_button("Tải từ link", "primary")
         self.download_video_btn.clicked.connect(self.choose_video_from_url)
         self.ytdlp_cookies_btn = self._make_button("Chọn cookies", "ghost")
         self.ytdlp_cookies_btn.clicked.connect(self.choose_ytdlp_cookies_file)
@@ -164,7 +167,7 @@ class WindowLayoutMixin:
         analyze_btn.clicked.connect(self.start_analysis)
         render_btn = self._make_button("Render bản lồng tiếng", "success")
         render_btn.clicked.connect(self.start_render)
-        cancel_btn = self._make_button("Dừng tác vụ", "ghost")
+        cancel_btn = self._make_button("Dừng tác vụ", "danger")
         cancel_btn.clicked.connect(self.controller.cancel_active_job)
         self.analyze_btn = analyze_btn
         self.render_btn = render_btn
@@ -198,12 +201,12 @@ class WindowLayoutMixin:
         slider_grid.setVerticalSpacing(12)
         self.font_size_slider = self._make_slider(10, 72, 14, self.on_font_size_changed)
 
-        self.blur_slider = self._make_slider(2, 24, 10, self.on_blur_changed)
+        self.blur_slider = self._make_slider(0, 100, 80, self.on_blur_changed)
         self.bottom_offset_slider = self._make_slider(
             12, 180, 54, self.on_bottom_offset_changed
         )
         self.font_size_value = QLabel("14 px")
-        self.blur_value = QLabel("10 px")
+        self.blur_value = QLabel("80%")
         self.bottom_offset_value = QLabel("54 px")
         slider_grid.addWidget(self._field_label("Cỡ chữ vietsub"), 0, 0)
         slider_grid.addWidget(self.font_size_slider, 0, 1)
@@ -418,6 +421,15 @@ class WindowLayoutMixin:
         self.box_fill_color_btn.clicked.connect(lambda: self.pick_color("boxFillColor"))
         self.box_border_color_btn = QPushButton("Viền box")
         self.box_border_color_btn.clicked.connect(lambda: self.pick_color("boxBorderColor"))
+        self.subtitle_style_combo = self._make_combo(
+            SUBTITLE_STYLE_OPTIONS, self.on_basic_settings_changed
+        )
+        self.subtitle_animation_combo = self._make_combo(
+            SUBTITLE_ANIMATION_OPTIONS, self.on_basic_settings_changed
+        )
+        self.localization_mode_combo = self._make_combo(
+            LOCALIZATION_MODE_OPTIONS, self.on_basic_settings_changed
+        )
         self.intro_enabled_check = QCheckBox("Bật teaser")
         self.intro_enabled_check.stateChanged.connect(self.on_basic_settings_changed)
         self.intro_duration_spin = SafeDoubleSpinBox()
@@ -600,6 +612,18 @@ class WindowLayoutMixin:
                 "Do dam nen box",
                 self.box_fill_opacity_spin,
             ),
+            (
+                "Kiểu Vietsub",
+                self.subtitle_style_combo,
+                "Hiệu ứng chữ",
+                self.subtitle_animation_combo,
+            ),
+            (
+                "Chế độ dịch AI",
+                self.localization_mode_combo,
+                None,
+                None,
+            ),
         ]
         for row, (left_label, left_widget, right_label, right_widget) in enumerate(
             rows
@@ -735,7 +759,7 @@ class WindowLayoutMixin:
 
         # --- Page navigation buttons ---
         nav_bar = QHBoxLayout()
-        nav_bar.setSpacing(8)
+        nav_bar.setSpacing(4)
 
         self._nav_edit_btn = self._make_button("Trang chính", "ghost")
         self._nav_edit_btn.setObjectName("NavActive")
@@ -807,16 +831,16 @@ class WindowLayoutMixin:
         self.analyze_btn = analyze_btn
         self.render_btn = render_btn
         self.cancel_btn = cancel_btn
-        self.install_env_btn = self._make_button("Chuẩn bị model", "ghost")
+        self.install_env_btn = self._make_button("Tải Model", "ghost")
         self.install_env_btn.clicked.connect(self.install_environment)
-        self.download_video_btn = self._make_button("Tải từ link", "ghost")
+        self.download_video_btn = self._make_button("Tải Link", "ghost")
         self.download_video_btn.clicked.connect(self.choose_video_from_url)
-        self.ytdlp_cookies_btn = self._make_button("Chọn cookies", "ghost")
+        self.ytdlp_cookies_btn = self._make_button("Cookies", "ghost")
         self.ytdlp_cookies_btn.clicked.connect(self.choose_ytdlp_cookies_file)
-        self.update_ytdlp_btn = self._make_button("Cập nhật yt-dlp", "ghost")
+        self.update_ytdlp_btn = self._make_button("Cập nhật Tool", "ghost")
         self.update_ytdlp_btn.clicked.connect(self.update_ytdlp)
         action_row = QHBoxLayout()
-        action_row.setSpacing(5)
+        action_row.setSpacing(3)
         action_row.addWidget(browse_btn)
         action_row.addWidget(self.download_video_btn)
         action_row.addWidget(self.ytdlp_cookies_btn)
@@ -1161,18 +1185,18 @@ class WindowLayoutMixin:
 
         # Player controls
         render_controls = QHBoxLayout()
-        render_controls.setSpacing(5)
-        self.restart_preview_btn = self._make_button("Từ đầu", "ghost")
+        render_controls.setSpacing(3)
+        self.restart_preview_btn = self._make_button("Từ đầu", "primary")
         self.restart_preview_btn.clicked.connect(self.restart_render_preview)
         self.seek_back_preview_btn = self._make_button("-10s", "ghost")
         self.seek_back_preview_btn.clicked.connect(lambda: self.seek_render_preview_relative(-10000))
-        self.pause_preview_btn = self._make_button("Phát", "ghost")
+        self.pause_preview_btn = self._make_button("Phát", "success")
         self.pause_preview_btn.clicked.connect(self.pause_render_preview)
         self.seek_forward_preview_btn = self._make_button("+10s", "ghost")
         self.seek_forward_preview_btn.clicked.connect(lambda: self.seek_render_preview_relative(10000))
-        self.stop_preview_btn = self._make_button("Dừng", "ghost")
+        self.stop_preview_btn = self._make_button("Dừng", "danger")
         self.stop_preview_btn.clicked.connect(self.stop_render_preview)
-        self.fullscreen_preview_btn = self._make_button("Phóng To", "ghost")
+        self.fullscreen_preview_btn = self._make_button("Toàn màn", "ghost")
         self.fullscreen_preview_btn.setToolTip("Phóng to màn hình. Nhấn Esc, F11 hoặc double-click video để thoát.")
         self.fullscreen_preview_btn.clicked.connect(self.toggle_render_preview_fullscreen)
         render_controls.addWidget(self.restart_preview_btn)
@@ -1242,15 +1266,15 @@ class WindowLayoutMixin:
         self.preview_video_btn.clicked.connect(self.preview_rendered_video)
         self.export_file_btn = self._make_button("Xuất file", "success")
         self.export_file_btn.clicked.connect(self.export_rendered_video_file)
-        self.choose_output_folder_btn = self._make_button("Chọn thư mục xuất", "ghost")
+        self.choose_output_folder_btn = self._make_button("Thư mục xuất", "ghost")
         self.choose_output_folder_btn.clicked.connect(self.choose_output_directory)
-        self.export_thumbnail_btn = self._make_button("Xuất thumbnail", "ghost")
+        self.export_thumbnail_btn = self._make_button("Thumbnail", "ghost")
         self.export_thumbnail_btn.clicked.connect(self.export_video_thumbnail)
         output_actions_layout.addWidget(self.output_result_edit)
         output_actions_layout.addWidget(self.output_export_status_label)
         output_actions_layout.addWidget(self.output_folder_quick_edit)
         output_quick_actions = QHBoxLayout()
-        output_quick_actions.setSpacing(5)
+        output_quick_actions.setSpacing(3)
         output_quick_actions.addWidget(self.preview_video_btn)
         output_quick_actions.addWidget(self.export_file_btn)
         output_quick_actions.addWidget(self.choose_output_folder_btn)
@@ -1289,8 +1313,8 @@ class WindowLayoutMixin:
         self._video_preview_widget = VideoPreviewWidget()
         self._video_preview_widget.setMinimumHeight(320)
         pca_inner_layout.addWidget(self._video_preview_widget, 1)
-        self.blur_slider = self._make_slider(2, 24, 10, self.on_blur_changed)
-        self.blur_value = QLabel("10 px")
+        self.blur_slider = self._make_slider(0, 100, 80, self.on_blur_changed)
+        self.blur_value = QLabel("80%")
         self.blur_value.setFixedWidth(40)
         blur_row2 = QHBoxLayout()
         blur_row2.setSpacing(6)
@@ -1545,15 +1569,15 @@ class WindowLayoutMixin:
         batch_toolbar.setSpacing(5)
         self.batch_add_btn = self._make_button("Thêm video", "primary")
         self.batch_add_btn.clicked.connect(self.batch_add_videos)
-        self.batch_add_links_btn = self._make_button("Thêm link", "ghost")
+        self.batch_add_links_btn = self._make_button("Thêm link", "primary")
         self.batch_add_links_btn.clicked.connect(self.batch_add_video_links)
-        self.batch_remove_btn = self._make_button("Xóa chọn", "ghost")
+        self.batch_remove_btn = self._make_button("Xóa chọn", "danger")
         self.batch_remove_btn.clicked.connect(self.batch_remove_selected)
-        self.batch_clear_btn = self._make_button("Xóa tất cả", "ghost")
+        self.batch_clear_btn = self._make_button("Xóa tất cả", "danger")
         self.batch_clear_btn.clicked.connect(self.batch_clear_all)
         self.batch_start_btn = self._make_button("Bắt đầu batch", "success")
         self.batch_start_btn.clicked.connect(self.batch_start)
-        self.batch_stop_btn = self._make_button("Tạm dừng", "ghost")
+        self.batch_stop_btn = self._make_button("Tạm dừng", "danger")
         self.batch_stop_btn.clicked.connect(self.batch_stop)
         self.batch_stop_btn.setEnabled(False)
         batch_toolbar.addWidget(self.batch_add_btn)
@@ -1652,13 +1676,15 @@ class WindowLayoutMixin:
         config_grid.addWidget(self._field_label("Bộ nhận diện Sub (Transcribe):"), 0, 0)
         self.conf_transcribe_combo = QComboBox()
         self.conf_transcribe_combo.addItems(["auto", "whisperx"])
-        config_grid.addWidget(self.conf_transcribe_combo, 0, 1)
+        self.conf_transcribe_combo.setFixedWidth(280)
+        config_grid.addWidget(self.conf_transcribe_combo, 0, 1, Qt.AlignmentFlag.AlignLeft)
 
         # DUB_TRANSLATE_PROVIDER
         config_grid.addWidget(self._field_label("Bộ dịch thuật (Translate):"), 1, 0)
         self.conf_translate_combo = QComboBox()
-        self.conf_translate_combo.addItems(["auto", "ollama"])
-        config_grid.addWidget(self.conf_translate_combo, 1, 1)
+        self.conf_translate_combo.addItems(["ollama", "microsoft", "google"])
+        self.conf_translate_combo.setFixedWidth(280)
+        config_grid.addWidget(self.conf_translate_combo, 1, 1, Qt.AlignmentFlag.AlignLeft)
 
         # DUB_OLLAMA_BASE_URL
         config_grid.addWidget(self._field_label("Ollama Base URL:"), 2, 0)
@@ -1710,10 +1736,34 @@ class WindowLayoutMixin:
         self.conf_nvenc_preset_edit.setReadOnly(True)
         config_grid.addWidget(self.conf_nvenc_preset_edit, 9, 1)
 
+        # DUB_AI_MODE
+        config_grid.addWidget(self._field_label("Chế độ AI (AI Mode):"), 10, 0)
+        self.conf_ai_mode_combo = QComboBox()
+        self.conf_ai_mode_combo.addItems(["local", "cloud"])
+        self.conf_ai_mode_combo.setFixedWidth(280)
+        config_grid.addWidget(self.conf_ai_mode_combo, 10, 1, Qt.AlignmentFlag.AlignLeft)
+
+        # DUB_CLOUD_API_KEY
+        config_grid.addWidget(self._field_label("Cloud API Key:"), 11, 0)
+        cloud_api_row = QHBoxLayout()
+        self.conf_cloud_api_key_edit = QLineEdit()
+        self.conf_cloud_api_key_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        self.conf_cloud_api_check_btn = self._make_button("Kiểm tra Model", "ghost")
+        self.conf_cloud_api_check_btn.clicked.connect(self.check_cloud_models)
+        cloud_api_row.addWidget(self.conf_cloud_api_key_edit, 1)
+        cloud_api_row.addWidget(self.conf_cloud_api_check_btn)
+        config_grid.addLayout(cloud_api_row, 11, 1)
+
+        # DUB_CLOUD_MODEL
+        config_grid.addWidget(self._field_label("Cloud Model Name:"), 12, 0)
+        self.conf_cloud_model_edit = QLineEdit()
+        self.conf_cloud_model_edit.setPlaceholderText("Ví dụ: gemini-2.5-flash")
+        config_grid.addWidget(self.conf_cloud_model_edit, 12, 1)
+
         # Button Save
         self.conf_save_btn = self._make_button("Lưu cấu hình", "success")
         self.conf_save_btn.clicked.connect(self.save_system_config)
-        config_grid.addWidget(self.conf_save_btn, 10, 0, 1, 2)
+        config_grid.addWidget(self.conf_save_btn, 13, 0, 1, 2)
 
         config_inner_layout.addLayout(config_grid)
         config_inner_layout.addStretch(1)

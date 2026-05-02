@@ -1313,6 +1313,16 @@ class WindowWorkflowMixin:
         hf_cache = env_data.get("DUB_HF_CACHE_DIR") or os.getenv("DUB_HF_CACHE_DIR") or str(ROOT / "temp" / ".cache" / "huggingface" / "hub")
         self.conf_hf_cache_edit.setText(hf_cache)
 
+        # Cloud AI configurations
+        ai_mode = env_data.get("DUB_AI_MODE") or os.getenv("DUB_AI_MODE", "local")
+        self.conf_ai_mode_combo.setCurrentText(ai_mode)
+
+        cloud_api_key = env_data.get("DUB_CLOUD_API_KEY") or os.getenv("DUB_CLOUD_API_KEY", "")
+        self.conf_cloud_api_key_edit.setText(cloud_api_key)
+
+        cloud_model = env_data.get("DUB_CLOUD_MODEL") or os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash")
+        self.conf_cloud_model_edit.setText(cloud_model)
+
         # Read-only encoding parameters
         x264_crf = env_data.get("DUB_VIDEO_X264_CRF") or os.getenv("DUB_VIDEO_X264_CRF", "18")
         self.conf_x264_crf_edit.setText(x264_crf)
@@ -1330,6 +1340,45 @@ class WindowWorkflowMixin:
         import os
         env_file = Path(__file__).resolve().parent.parent.parent / ".env"
         
+        ai_mode = self.conf_ai_mode_combo.currentText().strip()
+        cloud_api_key = self.conf_cloud_api_key_edit.text().strip()
+        cloud_model = self.conf_cloud_model_edit.text().strip()
+
+        if ai_mode == "cloud":
+            if not cloud_api_key:
+                QMessageBox.warning(self, "Lỗi", "Vui lòng nhập API Key cho Cloud AI.")
+                return
+            if not cloud_model:
+                QMessageBox.warning(self, "Lỗi", "Vui lòng nhập tên Model Cloud.")
+                return
+
+            import requests
+            m_name = cloud_model if cloud_model.startswith("models/") else f"models/{cloud_model}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/{m_name}:generateContent?key={cloud_api_key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "contents": [{"parts": [{"text": "Hello, answer immediately in 1 word: OK"}]}],
+                "generationConfig": {"maxOutputTokens": 10}
+            }
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=15)
+                if resp.status_code == 429:
+                    QMessageBox.warning(self, "Lỗi", "Hết quota. Vui lòng kiểm tra lại quota của API Key này.")
+                    return
+                if resp.status_code != 200:
+                    try:
+                        err_msg = resp.json().get("error", {}).get("message", resp.text)
+                    except Exception:
+                        err_msg = resp.text
+                    QMessageBox.warning(self, "Lỗi", f"Model hoặc API Key không chính xác:\n{err_msg}")
+                    return
+            except Exception as e:
+                if "quota" in str(e).lower():
+                    QMessageBox.warning(self, "Lỗi", "Hết quota. Vui lòng kiểm tra lại quota của API Key này.")
+                    return
+                QMessageBox.warning(self, "Lỗi", f"Lỗi kiểm tra model Cloud AI:\n{e}")
+                return
+
         # Gather current lines from .env if it exists, to preserve unrelated configs
         lines = []
         if env_file.exists():
@@ -1345,6 +1394,9 @@ class WindowWorkflowMixin:
             "DUB_OLLAMA_MODEL": self.conf_ollama_model_edit.text().strip(),
             "HF_TOKEN": self.conf_hf_token_edit.text().strip(),
             "DUB_HF_CACHE_DIR": self.conf_hf_cache_edit.text().strip().replace("\\", "/"),
+            "DUB_AI_MODE": ai_mode,
+            "DUB_CLOUD_API_KEY": cloud_api_key,
+            "DUB_CLOUD_MODEL": cloud_model,
         }
 
         # Apply changes to lines
@@ -1376,6 +1428,45 @@ class WindowWorkflowMixin:
             QMessageBox.information(self, "Thành công", "Cấu hình đã được lưu vào file .env và áp dụng ngay lập tức.")
         except Exception as e:
             QMessageBox.warning(self, "Lỗi", f"Không thể ghi cấu hình ra file .env:\n{e}")
+
+    def check_cloud_models(self) -> None:
+        api_key = self.conf_cloud_api_key_edit.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "Lỗi", "Vui lòng nhập API Key trước khi kiểm tra.")
+            return
+        
+        import requests
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        try:
+            resp = requests.get(url, timeout=15)
+            if resp.status_code == 429:
+                QMessageBox.warning(self, "Lỗi", "Hết quota. Vui lòng kiểm tra lại API Key.")
+                return
+            if resp.status_code != 200:
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                QMessageBox.warning(self, "Lỗi", f"API Key không chính xác hoặc không thể truy cập:\n{err_msg}")
+                return
+            
+            data = resp.json()
+            models = [m.get("name", "").replace("models/", "") for m in data.get("models", []) if "generateContent" in m.get("supportedGenerationMethods", [])]
+            if not models:
+                models = [m.get("name", "").replace("models/", "") for m in data.get("models", [])]
+            
+            if models:
+                msg = "Các model có thể sử dụng với API Key này:\n\n" + "\n".join(models[:15])
+                if len(models) > 15:
+                    msg += f"\n...và {len(models)-15} model khác."
+                QMessageBox.information(self, "Các model khả dụng", msg)
+            else:
+                QMessageBox.warning(self, "Thông báo", "Không tìm thấy model khả dụng cho API Key này.")
+        except Exception as e:
+            if "quota" in str(e).lower():
+                QMessageBox.warning(self, "Lỗi", "Hết quota. Vui lòng kiểm tra lại quota của API Key này.")
+            else:
+                QMessageBox.warning(self, "Lỗi", f"Không thể kết nối hoặc kiểm tra API Key:\n{e}")
 
     def open_configured_output_directory(self) -> None:
         target = self.output_dir_edit.text().strip()
@@ -1664,7 +1755,7 @@ class WindowWorkflowMixin:
 
     def on_blur_changed(self, value: int) -> None:
         self.settings["subtitlePreset"]["cleanupBlurStrength"] = int(value)
-        self.blur_value.setText(f"{value}px")
+        self.blur_value.setText(f"{value}%")
         self.refresh_preview()
 
     def on_bottom_offset_changed(self, value: int) -> None:
@@ -1941,6 +2032,12 @@ class WindowWorkflowMixin:
             self.settings["subtitlePreset"]["textEffect"] = str(
                 self.text_effect_combo.currentData() or "none"
             )
+        if hasattr(self, "subtitle_style_combo"):
+            self.settings["subtitlePreset"]["subtitleStyle"] = str(self.subtitle_style_combo.currentData() or "Classic")
+        if hasattr(self, "subtitle_animation_combo"):
+            self.settings["subtitlePreset"]["subtitleAnimation"] = str(self.subtitle_animation_combo.currentData() or "None")
+        if hasattr(self, "localization_mode_combo"):
+            self.settings["localizationMode"] = str(self.localization_mode_combo.currentData() or "creative")
         sticker_id = str(self.sticker_combo.currentData() or "none")
         sticker_data = get_sticker_by_id(sticker_id) if sticker_id != "none" else {}
         sticker_transform_x = float(
@@ -2306,6 +2403,12 @@ class WindowWorkflowMixin:
             self.text_effect_combo,
             self.settings["subtitlePreset"].get("textEffect", "none"),
         )
+        if hasattr(self, "subtitle_style_combo"):
+            self._set_combo_value(self.subtitle_style_combo, self.settings["subtitlePreset"].get("subtitleStyle", "Classic"))
+        if hasattr(self, "subtitle_animation_combo"):
+            self._set_combo_value(self.subtitle_animation_combo, self.settings["subtitlePreset"].get("subtitleAnimation", "None"))
+        if hasattr(self, "localization_mode_combo"):
+            self._set_combo_value(self.localization_mode_combo, self.settings.get("localizationMode", "creative"))
         sticker_options = self.settings.get("stickerOptions") or {}
         self._set_combo_value(
             self.sticker_combo,

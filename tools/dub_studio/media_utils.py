@@ -3,10 +3,57 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
+import shutil
 from pathlib import Path
 from typing import Any
 
 from .process_utils import run, run_output
+
+def find_ffmpeg_ffprobe() -> tuple[str, str]:
+    # 1. Search in typical PATH first
+    ffm = shutil.which("ffmpeg")
+    ffp = shutil.which("ffprobe")
+    if ffm and ffp:
+        return ffm, ffp
+
+    # 2. Look in PyInstaller's extracted contents directory (internal/tools/bin)
+    mei = Path(getattr(sys, "_MEIPASS", ""))
+    if mei:
+        for candidate in [mei / "tools" / "bin", mei / "internal" / "tools" / "bin"]:
+            f1 = candidate / "ffmpeg.exe"
+            f2 = candidate / "ffprobe.exe"
+            if f1.exists() and f2.exists():
+                return str(f1), str(f2)
+
+    # 3. Look in sys.executable's parent (CapCutMate folder or internal folder)
+    exe_dir = Path(sys.executable).parent
+    for candidate in [
+        exe_dir / "tools" / "bin",
+        exe_dir / "internal" / "tools" / "bin",
+        exe_dir.parent / "tools" / "bin",
+        exe_dir.parent / "internal" / "tools" / "bin"
+    ]:
+        f1 = candidate / "ffmpeg.exe"
+        f2 = candidate / "ffprobe.exe"
+        if f1.exists() and f2.exists():
+            return str(f1), str(f2)
+
+    # 4. Fallback search typical folders
+    common_paths = [
+        Path("C:/ffmpeg/bin"),
+        Path("C:/Program Files/ffmpeg/bin"),
+        Path("C:/Program Files/ImageMagick/bin"),
+    ]
+    for p in common_paths:
+        f1 = p / "ffmpeg.exe"
+        f2 = p / "ffprobe.exe"
+        if f1.exists() and f2.exists():
+            return str(f1), str(f2)
+
+    return "ffmpeg", "ffprobe"
+
+FFMPEG_EXE, FFPROBE_EXE = find_ffmpeg_ffprobe()
 
 
 def resolve_ffprobe_timeout(default: float = 60.0) -> float:
@@ -38,7 +85,7 @@ def ffprobe_json(path: Path, timeout: float | None = None) -> dict[str, Any]:
     effective_timeout = resolve_ffprobe_timeout(timeout or 60.0)
     raw = run_ffprobe_output(
         [
-            "ffprobe",
+            FFPROBE_EXE,
             "-v",
             "error",
             "-print_format",
@@ -67,7 +114,7 @@ def ffprobe_audio_duration_ms(path: Path, timeout: float | None = None) -> int:
     effective_timeout = resolve_ffprobe_timeout(timeout or 30.0)
     raw = run_ffprobe_output(
         [
-            "ffprobe",
+            FFPROBE_EXE,
             "-v",
             "error",
             "-show_entries",
@@ -119,7 +166,7 @@ def get_video_meta(path: Path) -> dict[str, Any]:
 def extract_thumbnail(video_path: Path, thumbnail_path: Path) -> None:
     run(
         [
-            "ffmpeg",
+            FFMPEG_EXE,
             "-y",
             "-ss",
             "0.2",
@@ -142,7 +189,7 @@ def extract_audio_for_whisperx(video_path: Path, audio_path: Path) -> None:
         return
     run(
         [
-            "ffmpeg",
+            FFMPEG_EXE,
             "-y",
             "-i",
             str(video_path),
@@ -162,7 +209,7 @@ def extract_audio_for_whisperx(video_path: Path, audio_path: Path) -> None:
 def extract_gray_frame(video_path: Path, time_ms: int, sample_width: int, sample_height: int) -> bytes:
     completed = subprocess.run(
         [
-            "ffmpeg",
+            FFMPEG_EXE,
             "-hide_banner",
             "-loglevel",
             "error",

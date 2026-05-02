@@ -60,6 +60,10 @@ MODEL_CANDIDATES = [
     ROOT / "temp" / "models" / "ggml-small.bin",
     ROOT / "temp" / "models" / "ggml-base.bin",
 ]
+FFMPEG_BIN_DIR = ROOT / "tools" / "bin"
+if FFMPEG_BIN_DIR.exists():
+    os.environ["PATH"] = str(FFMPEG_BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
+
 WHISPER_CPP_MODEL_REPO = env_value("DUB_WHISPER_CPP_MODEL_REPO", default="ggerganov/whisper.cpp")
 WHISPER_CPP_MODEL_FILENAME = env_value("DUB_WHISPER_CPP_MODEL_FILENAME", default="ggml-small.bin")
 OLLAMA_BIN = env_value("DUB_OLLAMA_BIN", default="")
@@ -241,6 +245,7 @@ if CUSTOM_VALTEC_VOICES_FILE.exists():
     except Exception:
         pass
 
+VALTEC_CLONE_PRESET = "valtec:clone"
 VALTEC_REPO_URL = env_value("DUB_VALTEC_REPO_URL", default="https://github.com/tronghieuit/valtec-tts.git")
 VALTEC_ZEROSHOT_REPO = env_value("DUB_VALTEC_ZEROSHOT_REPO", default="valtecAI-team/valtec-zeroshot-voice-cloning")
 VIENEU_BACKBONE_REPO = env_value("DUB_VIENEU_BACKBONE_REPO", default="pnnbao-ump/VieNeu-TTS-v2-Turbo-GGUF")

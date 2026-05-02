@@ -9,6 +9,7 @@ from .audio_segment import AudioSegment
 from .video_segment import VideoSegment, StickerSegment, ClipSettings
 from .effect_segment import EffectSegment, FilterSegment
 from .text_segment import TextSegment, TextStyle, TextBorder, TextBackground, TextShadow
+from .animation import VideoAnimation, TextAnimation
 
 from .metadata import FontType
 from .metadata import MaskType
@@ -228,6 +229,8 @@ __all__ = [
     "TextBorder",
     "TextBackground",
     "TextShadow",
+    "VideoAnimation",
+    "TextAnimation",
     "TrackType",
     "ShrinkMode",
     "ExtendMode",

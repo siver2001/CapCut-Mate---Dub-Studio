@@ -49,6 +49,22 @@ def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[d
     import re
     import copy
     
+    # Deduplicate consecutive segments with identical text
+    cleaned_raw_segments = []
+    for item in raw_segments:
+        if not cleaned_raw_segments:
+            cleaned_raw_segments.append(copy.deepcopy(item))
+            continue
+        last = cleaned_raw_segments[-1]
+        t1 = normalize_text(item.get("text") or item.get("sourceText") or "")
+        t2 = normalize_text(last.get("text") or last.get("sourceText") or "")
+        if t1 == t2:
+            last["endMs"] = max(last.get("endMs", 0), item.get("endMs", 0))
+        else:
+            cleaned_raw_segments.append(copy.deepcopy(item))
+            
+    raw_segments = cleaned_raw_segments
+
     new_segments = []
     seg_index = 1
     
@@ -58,9 +74,19 @@ def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[d
             continue
         speaker_id = item.get("speakerId") or item.get("speaker") or "speaker_1"
         
-        # Split by sentence boundaries (. ! ? …)
-        sentences = re.findall(r'[^.!?…]*(?:[.!?…]|$)', subtitle_text)
+        # Split by sentence boundaries including English and Chinese punctuation
+        sentences = re.findall(r'[^.!?……。！？]*(?:[.!?……。！？]|$)', subtitle_text)
         sentences = [s.strip() for s in sentences if s.strip()]
+        
+        # Split further if any sentence is too long
+        refined = []
+        for s in sentences:
+            if len(s) > 40:
+                parts = re.findall(r'[^,，]*(?:[,，]|$)', s)
+                refined.extend([p.strip() for p in parts if p.strip()])
+            else:
+                refined.append(s)
+        sentences = refined
         
         if len(sentences) <= 1:
             new_segments.append(
@@ -116,7 +142,28 @@ def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[d
             seg_index += 1
             current_start = current_end
             
-    return new_segments
+    merged_segments = []
+    for seg in new_segments:
+        if not merged_segments:
+            merged_segments.append(seg)
+            continue
+        last = merged_segments[-1]
+        gap = seg["startMs"] - last["endMs"]
+        combined_text = (last["sourceText"] + " " + seg["sourceText"]).strip()
+        # Merge if they have the same speaker, the gap is small (< 500ms), and the text is not too long.
+        if seg["speakerId"] == last["speakerId"] and (gap < 500 or (last["endMs"] - last["startMs"] < 1500)) and len(combined_text) < 80:
+            last["endMs"] = seg["endMs"]
+            last["sourceText"] = combined_text
+            last["subtitleChunks"] = split_display_text(combined_text)
+        else:
+            merged_segments.append(seg)
+            
+    # Reindex the merged segments
+    for i, seg in enumerate(merged_segments):
+        seg["id"] = f"seg_{(i+1):04d}"
+        seg["index"] = i + 1
+
+    return merged_segments
 
 
 def _split_translated_segments_by_sentence(translated_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -176,7 +223,28 @@ def _split_translated_segments_by_sentence(translated_segments: list[dict[str, A
             seg_index += 1
             current_start = current_end
             
-    return new_segments
+    merged_segments = []
+    for seg in new_segments:
+        if not merged_segments:
+            merged_segments.append(seg)
+            continue
+        last = merged_segments[-1]
+        gap = seg["startMs"] - last["endMs"]
+        combined_text = (last["sourceText"] + " " + seg["sourceText"]).strip()
+        # Merge if they have the same speaker, the gap is small (< 500ms), and the text is not too long.
+        if seg["speakerId"] == last["speakerId"] and (gap < 500 or (last["endMs"] - last["startMs"] < 1500)) and len(combined_text) < 80:
+            last["endMs"] = seg["endMs"]
+            last["sourceText"] = combined_text
+            last["subtitleChunks"] = split_display_text(combined_text)
+        else:
+            merged_segments.append(seg)
+            
+    # Reindex the merged segments
+    for i, seg in enumerate(merged_segments):
+        seg["id"] = f"seg_{(i+1):04d}"
+        seg["index"] = i + 1
+
+    return merged_segments
 
 
 def stable_video_codec() -> tuple[str, list[str]]:
@@ -377,16 +445,15 @@ def burn_subtitles(
         subtitle_preset=subtitle_preset,
     )
     margin_v = effective_ass_margin_v(subtitle_preset, source_video_meta)
-    cleanup_blur_strength = max(
-        2,
-        min(
-            int(subtitle_preset.get("cleanupBlurStrength", subtitle_region.get("blurStrength", 10))),
-            24,
-        ),
-    )
+    cleanup_opacity_pct = float(subtitle_preset.get("cleanupBlurStrength", 80))
+    cleanup_alpha = max(0.0, min(1.0, cleanup_opacity_pct / 100.0))
+    
+    # Map percentage to blur radius (0-100% -> 1-25px)
+    blur_radius = max(1, min(25, int(cleanup_opacity_pct * 0.25)))
+
     blur_filter = (
-        f"boxblur=luma_radius={cleanup_blur_strength}:luma_power=1,"
-        "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.58:t=fill"
+        f"boxblur=luma_radius={blur_radius}:luma_power=1,"
+        f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{cleanup_alpha}:t=fill"
     )
     font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
     primary_color = subtitle_preset.get("assPrimaryColor") or "&H0038D8FF"
@@ -578,7 +645,7 @@ def burn_subtitles(
             filter_arg = "-filter_complex"
             video_map = "[vout]"
         elif cleanup_mode == "localized_mask" and subtitle_region.get("detected", False):
-            video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=black:t=fill,{subtitles_filter}"
+            video_filter = f"drawbox=x={region_x}:y={region_y}:w={region_w}:h={region_h}:color=black@{cleanup_alpha}:t=fill,{subtitles_filter}"
             filter_arg = "-vf"
             video_map = "0:v:0"
         elif cleanup_mode == "pixelate" and subtitle_region.get("detected", False):
@@ -756,9 +823,8 @@ def render_intro_hook(
     )
     actual_intro_duration_ms = min(
         max(
-            clip_window["durationMs"],
-            desired_intro_duration_ms,
-            int(intro_clip_ms) + 380,
+            int(intro_clip_ms) + 500, # Add 500ms buffer after speaking
+            1200
         ),
         remaining_source_ms,
     )
@@ -1250,7 +1316,12 @@ def create_capcut_draft(
     flattened_video_path: Path | None = None,
     sticker_options: dict[str, Any] | None = None,
     ) -> str:
-    from src.pyJianYingDraft import (
+    import sys
+    src_path = str(ROOT / "src")
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
+
+    from pyJianYingDraft import (
         AudioMaterial,
         AudioSegment as DraftAudioSegment,
         ClipSettings,
@@ -1267,7 +1338,7 @@ def create_capcut_draft(
         VideoSegment,
         trange,
     )
-    from src.pyJianYingDraft.metadata import FontType
+    from pyJianYingDraft.metadata import FontType
 
     if not draft_root:
         raise RuntimeError("Draft root is empty. Configure a CapCut draft directory before exporting draft output.")
@@ -1336,12 +1407,12 @@ def create_capcut_draft(
         transform_y=subtitle_region_to_transform_y(video_meta, subtitle_region, subtitle_preset),
     )
     style = TextStyle(
-        size=max(float(subtitle_preset.get("fontSize", 18)) * 0.52, 7.5),
+        size=min(max(float(subtitle_preset.get("fontSize", 18)) * 0.38, 6.0), 12.0),
         color=hex_to_rgb_float(subtitle_preset.get("fontColor", "#ffd200")),
         alpha=1.0,
         align=1,
         auto_wrapping=True,
-        max_line_width=0.82,
+        max_line_width=0.7,
     )
     border = TextBorder(alpha=1.0, color=hex_to_rgb_float(subtitle_preset.get("strokeColor", "#000000")), width=min(max(float(subtitle_preset.get("strokeWidth", 2)) * 18, 26.0), 64.0))
     shadow = TextShadow(alpha=0.9, color=(0.0, 0.0, 0.0), diffuse=12.0, distance=3.0, angle=-90.0)
@@ -1358,8 +1429,22 @@ def create_capcut_draft(
     draft_font = getattr(FontType, str(subtitle_preset.get("draftFontKey") or "").strip(), None)
     selected_text_effect = str(subtitle_preset.get("textEffect") or "").strip()
     if subtitle_enabled:
+        last_end_us = 0
         for item in subtitles:
-            timerange = Timerange(int(item.start_ms) * 1000, max(int(item.end_ms - item.start_ms), 120) * 1000)
+            start_us = int(item.start_ms) * 1000
+            duration_us = max(int(item.end_ms - item.start_ms), 120) * 1000
+            
+            # Ensure no overlap with previous segment on the same track
+            if start_us < last_end_us:
+                start_us = last_end_us
+            
+            # Minimum duration 120ms
+            if duration_us < 120000:
+                duration_us = 120000
+            
+            timerange = Timerange(start_us, duration_us)
+            last_end_us = start_us + duration_us
+            
             text_segment = TextSegment(
                 text=item.content,
                 timerange=timerange,
@@ -1372,6 +1457,36 @@ def create_capcut_draft(
             )
             if selected_text_effect and selected_text_effect != "none":
                 text_segment.add_effect(selected_text_effect)
+            
+            # Apply subtitle animation if selected
+            subtitle_anim_key = str(subtitle_preset.get("subtitleAnimation", "None")).strip()
+            added_anim = False
+            if subtitle_anim_key != "None":
+                from pyJianYingDraft.metadata import TextIntro
+                anim_meta = None
+                if subtitle_anim_key == "Fade In":
+                    anim_meta = TextIntro.FadeIn
+                elif subtitle_anim_key == "Bounce":
+                    anim_meta = TextIntro.BounceIn
+                elif subtitle_anim_key == "Slide Up":
+                    anim_meta = TextIntro.SlideUp
+                elif subtitle_anim_key == "Typewriter":
+                    anim_meta = TextIntro.Typewriter_I
+                
+                if anim_meta:
+                    # Use 0.5s or 15% of duration, whichever is smaller
+                    anim_duration = min(500000, int(timerange.duration * 0.15))
+                    text_segment.add_animation(anim_meta, anim_duration)
+                    added_anim = True
+
+            # Apply subtitle style as animation if needed (e.g. Karaoke)
+            # CapCut only allows one 'in' animation per segment. Karaoke is an 'in' animation.
+            subtitle_style_key = str(subtitle_preset.get("subtitleStyle", "Classic")).strip()
+            if subtitle_style_key == "Karaoke" and not added_anim:
+                from pyJianYingDraft.metadata import TextIntro
+                # Karaoke animation usually covers the whole duration or a large part
+                text_segment.add_animation(TextIntro.Karaoke, int(timerange.duration))
+
             script.add_segment(text_segment, "vietsub_track")
 
     sticker_id = (sticker_options or {}).get("stickerId", "")
@@ -1436,7 +1551,7 @@ def build_default_render_options(analysis: dict[str, Any]) -> dict[str, Any]:
             "boxPaddingX": 24,
             "boxPaddingY": 12,
             "bottomOffset": 420,
-            "cleanupBlurStrength": 14,
+            "cleanupBlurStrength": 80,
             "maxWordsPerChunk": 5,
             "maxCharsPerChunk": 22,
             "punctuationAwareSplit": True,
@@ -1588,9 +1703,10 @@ def do_analyze(
     output_json: Path,
     *,
     target_language: str = "vi",
+    localization_mode: str = "creative",
 ) -> dict[str, Any]:
     if whisperx_disabled():
-        return do_analyze_resilient(job_id, input_path, output_json)
+        return do_analyze_resilient(job_id, input_path, output_json, target_language=target_language, localization_mode=localization_mode)
     dirs = ensure_job_dirs(job_id)
     video_meta = get_video_meta(input_path)
     thumbnail_path = dirs["analysis"] / "thumbnail.jpg"
@@ -1664,6 +1780,7 @@ def do_analyze(
         translated_cache_path,
         target_language=target_language,
         phase="analyze",
+        localization_mode=localization_mode,
     )
     segments = _split_translated_segments_by_sentence(segments)
     subtitle_timeline = build_subtitle_timeline(segments)
@@ -1713,6 +1830,7 @@ def do_analyze_resilient(
     output_json: Path,
     *,
     target_language: str = "vi",
+    localization_mode: str = "creative",
 ) -> dict[str, Any]:
     emit_progress(
         phase="analyze",
@@ -1867,6 +1985,7 @@ def do_analyze_resilient(
         translated_cache_path,
         target_language=target_language,
         phase="analyze",
+        localization_mode=localization_mode,
     )
     segments = _split_translated_segments_by_sentence(segments)
     subtitle_timeline = build_subtitle_timeline(segments)
@@ -1963,6 +2082,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     )
     source_language = render_options.get("sourceLanguage") or analysis.get("sourceLanguage") or "zh"
     target_language = render_options.get("targetLanguage") or analysis.get("targetLanguage") or "vi"
+    localization_mode = str(render_options.get("localizationMode") or analysis.get("renderDefaults", {}).get("localizationMode") or "creative")
     output_targets = render_options.get("outputTargets") or {"mp4": True, "draft": False}
     output_ratio = render_options.get("outputRatio") or "9:16"
     subtitle_enabled = bool(subtitle_preset.get("enabled", True))
@@ -2030,6 +2150,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         translated_cache_path,
         target_language=target_language,
         phase="render",
+        localization_mode=localization_mode,
     )
     rebuilt_subtitle_timeline = build_subtitle_timeline(segments)
     timeline_text_by_segment = {
@@ -2449,6 +2570,7 @@ def parse_args() -> argparse.Namespace:
     analyze.add_argument("--input", required=True)
     analyze.add_argument("--output-json", required=True)
     analyze.add_argument("--target-language", default="vi")
+    analyze.add_argument("--localization-mode", default="creative")
 
     render = subparsers.add_parser("render")
     render.add_argument("--analysis-json", required=True)
@@ -2482,6 +2604,7 @@ def main() -> int:
             input_path=Path(args.input).resolve(),
             output_json=Path(args.output_json).resolve(),
             target_language=str(getattr(args, "target_language", "vi") or "vi"),
+            localization_mode=str(getattr(args, "localization_mode", "creative") or "creative"),
         )
     elif args.command == "render":
         do_render(

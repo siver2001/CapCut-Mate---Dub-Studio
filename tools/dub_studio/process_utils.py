@@ -96,9 +96,37 @@ def run(cmd: list[str], cwd: Path | None = None, capture_output: bool = False, t
 
 
 def extract_audio_clip(input_path: Path, output_path: Path, start_ms: int, duration_ms: int) -> None:
+    import shutil
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        mei = Path(getattr(sys, "_MEIPASS", ""))
+        if mei:
+            for cand in [mei / "tools" / "bin", mei / "internal" / "tools" / "bin"]:
+                if (cand / "ffmpeg.exe").exists():
+                    ffmpeg_exe = str(cand / "ffmpeg.exe")
+                    break
+    if not ffmpeg_exe:
+        exe_dir = Path(sys.executable).parent
+        for cand in [
+            exe_dir / "tools" / "bin",
+            exe_dir / "internal" / "tools" / "bin",
+            exe_dir.parent / "tools" / "bin",
+            exe_dir.parent / "internal" / "tools" / "bin"
+        ]:
+            if (cand / "ffmpeg.exe").exists():
+                ffmpeg_exe = str(cand / "ffmpeg.exe")
+                break
+    if not ffmpeg_exe:
+        for p in [Path("C:/ffmpeg/bin/ffmpeg.exe"), Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe")]:
+            if p.exists():
+                ffmpeg_exe = str(p)
+                break
+    if not ffmpeg_exe:
+        ffmpeg_exe = "ffmpeg"
+
     run(
         [
-            "ffmpeg",
+            ffmpeg_exe,
             "-y",
             "-ss",
             f"{max(start_ms, 0) / 1000:.3f}",
