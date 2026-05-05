@@ -255,9 +255,17 @@ class _SubtitleOverlay(QGraphicsItem):
 
     def _paint_subtitle(self, painter: QPainter) -> None:
         subtitle_preset = self._subtitle_data.get("subtitlePreset") or {}
+        if not subtitle_preset.get("enabled", True):
+            return
+
         current_text = self._subtitle_data.get("current_text") or ""
-        if not current_text:
+        
+        # Only fallback to preview text if explicitly requested or if paused/stopped
+        is_playing = bool(self._subtitle_data.get("is_playing", False))
+            
+        if not current_text and not is_playing:
             current_text = self._subtitle_data.get("preview_text") or ""
+            
         if not current_text:
             return
 
@@ -794,6 +802,7 @@ class VideoPreviewWidget(QWidget):
         self._fullscreen_btn.setText("Thu nhỏ" if self._is_fullscreen() else "Phóng To")
 
     def _update_overlay(self) -> None:
+        is_playing = self.is_playing()
         self._overlay.update_overlay(
             {
                 "subtitlePreset": self._subtitle_preset,
@@ -801,6 +810,7 @@ class VideoPreviewWidget(QWidget):
                 "current_text": self._current_text,
                 "preview_text": self._preview_text,
                 "subtitleRegion": getattr(self, "_subtitle_region", {}),
+                "is_playing": is_playing,
             },
             self._sticker_opts,
             self._sticker_pixmap,

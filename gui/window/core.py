@@ -103,6 +103,7 @@ class DubStudioWindow(
         self._voice_preview_result_path = None
         self._voice_preview_active_speaker_id = ""
         self._voice_preview_audio_path = ""
+        self._voice_preview_mci_alias = ""
         self._voice_preview_timed_out = False
         self.voice_test_button_map: dict[str, Any] = {}
         self.voice_status_label_map: dict[str, Any] = {}
@@ -184,6 +185,10 @@ class DubStudioWindow(
         """Ensure running processes are killed before the window is destroyed."""
         try:
             self.controller.cleanup()
+        except Exception:
+            pass
+        try:
+            self._close_voice_preview_mci_alias()
         except Exception:
             pass
         super().closeEvent(event)

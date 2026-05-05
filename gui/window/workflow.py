@@ -25,7 +25,8 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
 )
 
-from gui.config import BOX_STYLE_PRESETS, DEFAULT_OUTPUT_DIR, FONT_OPTIONS, get_sticker_by_id, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS
+from gui.config import BOX_STYLE_PRESETS, DEFAULT_OUTPUT_DIR, FONT_OPTIONS, get_sticker_by_id, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS, is_frozen
+
 from gui.utils import (
     default_settings,
     ensure_dir,
@@ -324,7 +325,7 @@ class WindowWorkflowMixin:
             "Cập nhật yt-dlp",
             repair_mojibake_text(
                 f"Phiên bản hiện tại: {before_version}\n\n"
-                "App sẽ chạy lệnh trong đúng môi trường .venv:\n"
+                "App sẽ chạy lệnh trong đúng môi trường Python hiện tại:\n"
                 "python -m pip install -U yt-dlp\n\n"
                 "Bạn muốn tiếp tục?"
             ),
@@ -396,9 +397,37 @@ class WindowWorkflowMixin:
             )
             if before_version == after_version:
                 message += "\n\nKhông có phiên bản mới hơn trong nguồn pip hiện tại."
+
+            # Đồng thời cập nhật cả trình tải douyin
+            try:
+                import subprocess
+                from pathlib import Path
+                # Try pulling specific file from origin main via git
+                p1 = subprocess.run(["git", "fetch", "origin"], cwd=str(ROOT), capture_output=True, text=True)
+                p2 = subprocess.run(["git", "checkout", "origin/main", "--", "tools/douyin_api_downloader.py"], cwd=str(ROOT), capture_output=True, text=True)
+                if p2.returncode == 0:
+                    message += "\n\n✓ Đã cập nhật xong Douyin Downloader qua Git."
+                else:
+                    raise RuntimeError(p2.stderr or p1.stderr or "Lỗi Git checkout")
+            except Exception as e:
+                # Fallback to direct HTTP request with user agent
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        "https://raw.githubusercontent.com/siver2001/CapCut-Mate---Dub-Studio/main/tools/douyin_api_downloader.py",
+                        headers={"User-Agent": "Mozilla/5.0"}
+                    )
+                    with urllib.request.urlopen(req) as response:
+                        content = response.read()
+                    douyin_file = Path(ROOT) / "tools" / "douyin_api_downloader.py"
+                    douyin_file.write_bytes(content)
+                    message += "\n\n✓ Đã cập nhật xong Douyin Downloader qua HTTP."
+                except Exception as e2:
+                    message += f"\n\n⚠ Không thể tải Douyin Downloader mới nhất: {e2}"
+
             if hasattr(self, "batch_log_box"):
                 self._update_batch_log(f"✓ Cập nhật yt-dlp xong: {before_version} → {after_version}")
-            QMessageBox.information(self, "Cập nhật yt-dlp hoàn tất", repair_mojibake_text(message))
+            QMessageBox.information(self, "Cập nhật trình tải video hoàn tất", repair_mojibake_text(message))
             return
 
         detail = output or "pip không trả về thông tin lỗi."
@@ -482,9 +511,8 @@ class WindowWorkflowMixin:
         return "douyin.com/" in lowered or "iesdouyin.com/" in lowered
 
     def _common_ytdlp_download_args(self, url: str, run_dir: Path) -> list[str]:
-        return [
-            "-m",
-            "yt_dlp",
+        base = ["yt_dlp"] if is_frozen else ["-m", "yt_dlp"]
+        return base + [
             "--proxy=",
             "--newline",
             "--no-playlist",
@@ -501,6 +529,7 @@ class WindowWorkflowMixin:
             url,
         ]
 
+
     def _build_video_download_attempts(self, url: str, run_dir: Path) -> list[dict[str, object]]:
         base_args = self._common_ytdlp_download_args(url, run_dir)
         if not self._is_douyin_url(url):
@@ -516,17 +545,13 @@ class WindowWorkflowMixin:
             {"label": "Douyin headers", "args": base_args[:-1] + douyin_headers + [url]},
             {
                 "label": "Douyin_TikTok_Download_API",
-                "args": [
-                    "-u",
-                    str(ROOT / "tools" / "douyin_api_downloader.py"),
-                    "--url",
-                    url,
-                    "--output-dir",
-                    str(run_dir),
-                    "--timeout",
-                    "20",
-                ],
+                "args": (
+                    ["douyin", "--url", url, "--output-dir", str(run_dir), "--timeout", "20"]
+                    if is_frozen
+                    else ["-u", str(ROOT / "tools" / "douyin_api_downloader.py"), "--url", url, "--output-dir", str(run_dir), "--timeout", "20"]
+                ),
             },
+
         ]
         cookies_file = self._ytdlp_cookies_path()
         if cookies_file.exists():
@@ -1281,8 +1306,11 @@ class WindowWorkflowMixin:
             self.conf_hf_cache_edit.setText(dir_path)
 
     def load_system_config_into_ui(self) -> None:
-        import os
-        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+        import os, sys
+        if getattr(sys, "frozen", False):
+            env_file = Path(sys.executable).resolve().parent / ".env"
+        else:
+            env_file = Path(__file__).resolve().parent.parent.parent / ".env"
         env_data = {}
         if env_file.exists():
             try:
@@ -1337,8 +1365,11 @@ class WindowWorkflowMixin:
         self.conf_nvenc_preset_edit.setText(nvenc_preset)
 
     def save_system_config(self) -> None:
-        import os
-        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+        import os, sys
+        if getattr(sys, "frozen", False):
+            env_file = Path(sys.executable).resolve().parent / ".env"
+        else:
+            env_file = Path(__file__).resolve().parent.parent.parent / ".env"
         
         ai_mode = self.conf_ai_mode_combo.currentText().strip()
         cloud_api_key = self.conf_cloud_api_key_edit.text().strip()
@@ -1428,6 +1459,17 @@ class WindowWorkflowMixin:
             QMessageBox.information(self, "Thành công", "Cấu hình đã được lưu vào file .env và áp dụng ngay lập tức.")
         except Exception as e:
             QMessageBox.warning(self, "Lỗi", f"Không thể ghi cấu hình ra file .env:\n{e}")
+
+    def check_and_update_application(self) -> None:
+        import sys
+        from pathlib import Path
+        from gui.updater import trigger_update
+        is_frozen = getattr(sys, "frozen", False)
+        if is_frozen:
+            root = Path(sys.executable).resolve().parent
+        else:
+            root = Path(__file__).resolve().parent.parent.parent
+        trigger_update(self, is_frozen, root)
 
     def check_cloud_models(self) -> None:
         api_key = self.conf_cloud_api_key_edit.text().strip()

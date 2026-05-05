@@ -18,18 +18,19 @@ is_frozen = getattr(sys, 'frozen', False)
 if is_frozen:
     ROOT = Path(sys.executable).parent
     MEI_ROOT = Path(getattr(sys, '_MEIPASS', str(ROOT)))
+    PIPELINE_PYTHON = Path(sys.executable)
 else:
     ROOT = Path(__file__).resolve().parent.parent
     MEI_ROOT = ROOT
+    import platform
+    if platform.system() == "Windows":
+        pythonw_cand = Path(sys.executable).parent / "pythonw.exe"
+        PIPELINE_PYTHON = pythonw_cand if pythonw_cand.exists() else Path(sys.executable)
+    else:
+        PIPELINE_PYTHON = Path(sys.executable)
 
 PIPELINE_PATH = ROOT / "tools" / "dub_studio_pipeline.py"
-PIPELINE_PYTHON = (
-    ROOT / ".venv" / "Scripts" / "python.exe"
-    if (ROOT / ".venv" / "Scripts" / "python.exe").exists()
-    else Path(sys.executable)
-)
-if is_frozen:
-    PIPELINE_PYTHON = Path(sys.executable)
+
 
 TEMP_DUB_DIR = ROOT / "temp" / "dub_studio"
 DEFAULT_OUTPUT_DIR = ROOT / "output"
@@ -189,7 +190,7 @@ if CUSTOM_VALTEC_VOICES_FILE.exists():
     except Exception:
         pass
 
-VALTEC_ZEROSHOT_CODE_PATH = ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
+VALTEC_ZEROSHOT_CODE_PATH = MEI_ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
 VALTEC_ZEROSHOT_AVAILABLE = VALTEC_ZEROSHOT_CODE_PATH.exists()
 if not VALTEC_ZEROSHOT_AVAILABLE:
     VALTEC_REFERENCE_OPTIONS = []

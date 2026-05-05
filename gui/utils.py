@@ -561,6 +561,10 @@ def ensure_qt_readable_sticker_preview(sticker_options: dict[str, Any]) -> Path 
             if not QImage(str(converted)).isNull():
                 return converted
         import subprocess
+        import sys
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
         subprocess.run(
             ["ffmpeg", "-y", "-i", str(source), "-frames:v", "1", str(converted)],
@@ -569,6 +573,7 @@ def ensure_qt_readable_sticker_preview(sticker_options: dict[str, Any]) -> Path 
             stderr=subprocess.DEVNULL,
             timeout=8,
             check=False,
+            creationflags=creationflags,
         )
         if converted.exists() and converted.stat().st_size > 0:
             if not QImage(str(converted)).isNull():

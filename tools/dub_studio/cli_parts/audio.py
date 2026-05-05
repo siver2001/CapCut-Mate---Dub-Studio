@@ -385,7 +385,7 @@ def _safe_unlink(path: Path, *, retries: int = 5, delay: float = 0.3) -> None:
             # will use a different temp path anyway.
 
 
-_EDGE_TTS_MIN_REQUEST_GAP_SECONDS = 4.2
+_EDGE_TTS_MIN_REQUEST_GAP_SECONDS = 0.4
 _EDGE_TTS_RATE_LIMITER = TtsRateLimiter(min_gap_seconds=_EDGE_TTS_MIN_REQUEST_GAP_SECONDS)
 
 
@@ -439,22 +439,30 @@ def _save_edge_tts_audio(
 
     def _request() -> None:
         try:
-            try:
-                asyncio.run(
-                    _generate_tts_async(
-                        request_text,
-                        voice,
-                        rate,
-                        output_path,
-                        pitch=pitch,
-                        volume=volume,
-                        use_boundary=use_boundary,
+            last_exc = None
+            for inner_attempt in range(3):
+                try:
+                    asyncio.run(
+                        _generate_tts_async(
+                            request_text,
+                            voice,
+                            rate,
+                            output_path,
+                            pitch=pitch,
+                            volume=volume,
+                            use_boundary=use_boundary,
+                        )
                     )
-                )
-            except Exception as exc:
-                _safe_unlink(output_path)
-                if not _should_retry_edge_tts_with_cli(exc):
-                    raise
+                    return  # Success
+                except Exception as exc:
+                    last_exc = exc
+                    _safe_unlink(output_path)
+                    if inner_attempt < 2:
+                        time.sleep(2.0 * (inner_attempt + 1))
+                    
+            if last_exc is not None:
+                if not _should_retry_edge_tts_with_cli(last_exc):
+                    raise last_exc
                 safe_print(
                     "Edge TTS library call returned no audio; retrying once in a fresh edge-tts CLI process.",
                     flush=True,
@@ -769,18 +777,26 @@ def synthesize_tts(
         try:
             from tools.valtec_wrapper import get_valtec_provider
             
-            # Convert Edge rate (+0%, -10%, etc) to speed factor (1.0, 0.9, etc) for Valtec
+            import unicodedata, re
+            clean_valtec_text = unicodedata.normalize("NFC", str(edge_text).strip())
+            clean_valtec_text = re.sub(r"\.{2,}", ".", clean_valtec_text)
+            clean_valtec_text = re.sub(r"\s+", " ", clean_valtec_text)
+            if clean_valtec_text and not clean_valtec_text[-1] in (".", "!", "?", ",", ";", ":"):
+                clean_valtec_text += "."
+
+            # Convert Edge rate (+0%, -10%, etc) to speed factor (length_scale) for Valtec
             speed_val = 1.0
             try:
                 if rate and rate.endswith("%"):
-                    speed_val = 1.0 + (float(rate[:-1]) / 100.0)
-                speed_val = max(0.5, min(2.0, speed_val))
+                    speed_factor = 1.0 + (float(rate[:-1]) / 100.0)
+                    speed_val = 1.0 / max(0.4, speed_factor)
+                speed_val = max(0.4, min(2.5, speed_val))
             except Exception:
                 speed_val = 1.0
 
             provider = get_valtec_provider()
             success = provider.synthesize(
-                text=edge_text,
+                text=clean_valtec_text,
                 output_path=output_path,
                 voice_name=selected_voice,
                 prompt_audio=valtec_prompt_audio or valtec_reference_audio,
@@ -799,10 +815,17 @@ def synthesize_tts(
 
     if is_vieneu_voice_preset(selected_voice):
         try:
+            import unicodedata, re
+            clean_vieneu_text = unicodedata.normalize("NFC", str(edge_text).strip())
+            clean_vieneu_text = re.sub(r"\.{2,}", ".", clean_vieneu_text)
+            clean_vieneu_text = re.sub(r"\s+", " ", clean_vieneu_text)
+            if clean_vieneu_text and not clean_vieneu_text[-1] in (".", "!", "?", ",", ";", ":"):
+                clean_vieneu_text += "."
+
             from tools.vieneu_wrapper import get_vieneu_provider
             provider = get_vieneu_provider()
             success = provider.synthesize(
-                text=edge_text,
+                text=clean_vieneu_text,
                 output_path=output_path,
                 voice_name=selected_voice,
             )
@@ -912,9 +935,9 @@ def synthesize_tts(
                             return
                     except Exception as chunk_exc:
                         last_error = f"{last_error} | chunked_retry={chunk_exc}"
-                if no_audio_error and EDGE_VOICE_HEALTH.transient_failure_count(edge_voice) >= 2:
+                if no_audio_error and EDGE_VOICE_HEALTH.transient_failure_count(edge_voice) >= 20:
                     safe_print(
-                        f"Edge TTS voice {edge_voice} đang bị cooldown do trả về rỗng liên tiếp; "
+                        f"Edge TTS voice {edge_voice} đang bị cooldown do trả về rỗng liên tiếp quá nhiều lần; "
                         f"kích hoạt global backoff 2 phút cho toàn bộ dịch vụ Edge.",
                         flush=True,
                     )
@@ -950,7 +973,26 @@ def synthesize_tts(
 
 def build_atempo_filter(speed_factor: float) -> str:
     factor = max(speed_factor, 0.1)
-    return f"rubberband=tempo={factor:.4f}"
+    if 0.5 <= factor <= 2.0:
+        return f"atempo={factor:.4f}"
+    if factor < 0.5:
+        parts = []
+        current = factor
+        while current < 0.5:
+            parts.append("atempo=0.5")
+            current /= 0.5
+        if current != 1.0:
+            parts.append(f"atempo={current:.4f}")
+        return ",".join(parts)
+    else:
+        parts = []
+        current = factor
+        while current > 2.0:
+            parts.append("atempo=2.0")
+            current /= 2.0
+        if current != 1.0:
+            parts.append(f"atempo={current:.4f}")
+        return ",".join(parts)
 
 
 def fit_audio_length(source_path: Path, output_path: Path, target_ms: int) -> int:

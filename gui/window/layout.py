@@ -324,24 +324,6 @@ class WindowLayoutMixin:
         settings_grid.setHorizontalSpacing(14)
         settings_grid.setVerticalSpacing(12)
         settings_layout.addLayout(settings_grid)
-        self.source_language_combo = self._make_combo(
-            LANGUAGE_OPTIONS, self.on_basic_settings_changed
-        )
-        self.speaker_detection_combo = self._make_combo(
-            SPEAKER_DETECTION_OPTIONS, self.on_speaker_detection_changed
-        )
-        self.speaker_count_spin = SafeSpinBox()
-        self.speaker_count_spin.setRange(1, 4)
-        self.speaker_count_spin.valueChanged.connect(self.on_basic_settings_changed)
-        self.timing_mode_combo = self._make_combo(
-            TIMING_MODE_OPTIONS, self.on_basic_settings_changed
-        )
-        self.video_codec_combo = self._make_combo(
-            VIDEO_CODEC_OPTIONS, self.on_basic_settings_changed
-        )
-        self.cleanup_combo = self._make_combo(
-            CLEANUP_OPTIONS, self.on_basic_settings_changed
-        )
         self.subtitle_enabled_combo = self._make_combo(
             SUBTITLE_VISIBILITY_OPTIONS, self.on_basic_settings_changed
         )
@@ -551,24 +533,6 @@ class WindowLayoutMixin:
                 self.video_codec_combo,
                 None,
                 None,
-            ),
-            (
-                "Ngôn ngữ nguồn",
-                self.source_language_combo,
-                "Ngôn ngữ subtitle",
-                self.target_language_combo,
-            ),
-            (
-                "Nhận diện speaker",
-                self.speaker_detection_combo,
-                "Số speaker",
-                self.speaker_count_spin,
-            ),
-            (
-                "Chế độ timing",
-                self.timing_mode_combo,
-                "Xử lý sub cũ",
-                self.cleanup_combo,
             ),
             (
                 "Bật/Tắt vietsub",
@@ -837,7 +801,7 @@ class WindowLayoutMixin:
         self.download_video_btn.clicked.connect(self.choose_video_from_url)
         self.ytdlp_cookies_btn = self._make_button("Cookies", "ghost")
         self.ytdlp_cookies_btn.clicked.connect(self.choose_ytdlp_cookies_file)
-        self.update_ytdlp_btn = self._make_button("Cập nhật Tool", "ghost")
+        self.update_ytdlp_btn = self._make_button("Cập nhật Trình tải", "ghost")
         self.update_ytdlp_btn.clicked.connect(self.update_ytdlp)
         action_row = QHBoxLayout()
         action_row.setSpacing(3)
@@ -1764,6 +1728,11 @@ class WindowLayoutMixin:
         self.conf_save_btn = self._make_button("Lưu cấu hình", "success")
         self.conf_save_btn.clicked.connect(self.save_system_config)
         config_grid.addWidget(self.conf_save_btn, 13, 0, 1, 2)
+
+        # Button Update
+        self.conf_update_btn = self._make_button("Kiểm tra & Cập nhật ứng dụng", "ghost")
+        self.conf_update_btn.clicked.connect(self.check_and_update_application)
+        config_grid.addWidget(self.conf_update_btn, 14, 0, 1, 2)
 
         config_inner_layout.addLayout(config_grid)
         config_inner_layout.addStretch(1)

@@ -13,6 +13,21 @@ VIENEU_REPO_SRC = TOOLS_ROOT / "vieneu_repo" / "src"
 if VIENEU_REPO_SRC.exists() and str(VIENEU_REPO_SRC) not in sys.path:
     sys.path.insert(0, str(VIENEU_REPO_SRC))
 
+if getattr(sys, 'frozen', False):
+    import os
+    meipass = getattr(sys, '_MEIPASS', os.path.abspath(os.path.dirname(sys.executable)))
+    capi_dir = os.path.join(meipass, "onnxruntime", "capi")
+    os.environ["PATH"] = meipass + os.pathsep + capi_dir + os.pathsep + os.environ.get("PATH", "")
+    if hasattr(os, "add_dll_directory"):
+        try:
+            os.add_dll_directory(meipass)
+        except Exception:
+            pass
+        try:
+            os.add_dll_directory(capi_dir)
+        except Exception:
+            pass
+
 
 class VieneuProvider:
     _instance: "VieneuProvider | None" = None

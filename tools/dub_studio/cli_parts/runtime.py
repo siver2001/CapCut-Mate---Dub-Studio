@@ -1170,6 +1170,27 @@ def resolve_hf_token() -> str:
 
 
 def ensure_whisperx_runtime(*, phase: str, step: str, progress: float) -> None:
+    # Auto-upgrade to PyTorch with CUDA if an NVIDIA GPU is available but PyTorch is CPU-only
+    torch_mod = whisperx_torch_runtime()
+    if torch_mod is not None and not torch_mod.cuda.is_available():
+        import shutil, subprocess
+        if shutil.which("nvidia-smi"):
+            emit_progress(
+                phase=phase,
+                step=step,
+                progress=progress,
+                message="Đang tự động nâng cấp PyTorch lên phiên bản hỗ trợ GPU (CUDA)...",
+            )
+            try:
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install", "torch", "torchvision", "torchaudio",
+                    "--index-url", "https://download.pytorch.org/whl/cu124", "--force-reinstall"
+                ], check=False)
+            except Exception:
+                pass
+            import importlib
+            importlib.invalidate_caches()
+
     ensure_python_packages(
         [
             ("whisperx", "whisperx"),
@@ -1315,13 +1336,16 @@ def prune_valtec_repo(repo_dir: Path) -> None:
 
 
 def ensure_valtec_source_runtime(*, phase: str, step: str, progress: float) -> Path:
+    bundled_repo_dir = CODE_ROOT / "tools" / "valtec_repo"
     repo_dir = ROOT / "tools" / "valtec_repo"
     required_paths = [
-        repo_dir / "valtec_tts" / "tts.py",
-        repo_dir / "src" / "models" / "synthesizer.py",
-        repo_dir / "infer.py",
+        "valtec_tts/tts.py",
+        "src/models/synthesizer.py",
+        "infer.py",
     ]
-    if all(path.exists() for path in required_paths):
+    if all((bundled_repo_dir / path).exists() for path in required_paths):
+        return bundled_repo_dir
+    if all((repo_dir / path).exists() for path in required_paths):
         prune_valtec_repo(repo_dir)
         return repo_dir
     if repo_dir.exists():

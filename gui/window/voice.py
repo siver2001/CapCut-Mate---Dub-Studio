@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
-from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS
+from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS, is_frozen
 from gui.utils import decode_process_bytes, ensure_dir, repair_mojibake_text
 from .helpers import SafeComboBox
 
@@ -187,65 +188,44 @@ class WindowVoiceMixin:
                 f"{provider_label} local sẽ phát bằng preset đã chọn."
             )
             status_label = self.voice_status_label_map.get(speaker_id)
-            if getattr(self, "_voice_preview_timed_out", False):
-                message = "Nghe thử bị quá thời gian 120 giây. Kiểm tra lại runtime/model TTS rồi thử lại."
             if status_label is not None:
                 status_label.setText(repair_mojibake_text(status_message))
+        
         preview_text = self._speaker_preview_text(
             speaker_id,
             str(speaker.get("displayName") or speaker_id),
         )
         preview_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "voice_preview")
         result_path = preview_dir / f"{speaker_id}_preview.json"
+        
         if self.voice_preview_process is not None:
             try:
-                self.voice_preview_process.readyReadStandardOutput.disconnect(
-                    self._drain_voice_preview_output
-                )
-            except Exception:
-                pass
+                self.voice_preview_process.readyReadStandardOutput.disconnect(self._drain_voice_preview_output)
+            except Exception: pass
             try:
-                self.voice_preview_process.readyReadStandardError.disconnect(
-                    self._drain_voice_preview_output
-                )
-            except Exception:
-                pass
+                self.voice_preview_process.readyReadStandardError.disconnect(self._drain_voice_preview_output)
+            except Exception: pass
             try:
-                self.voice_preview_process.finished.disconnect(
-                    self._handle_voice_preview_finished
-                )
-            except Exception:
-                pass
+                self.voice_preview_process.finished.disconnect(self._handle_voice_preview_finished)
+            except Exception: pass
             try:
                 self.voice_preview_process.kill()
-            except Exception:
-                pass
+            except Exception: pass
+
         process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))
-        process.setArguments(
-            [
-                "-u",
-                str(PIPELINE_PATH),
-                "preview-voice",
-                "--voice",
-                selected_voice,
-                "--text",
-                preview_text,
-                "--speaker-id",
-                speaker_id,
-                "--job-id",
-                str(self.job_id or ""),
-                "--output-json",
-                str(result_path),
-            ]
-        )
+        if is_frozen:
+            process.setArguments(["pipeline", "preview-voice", "--voice", selected_voice, "--text", preview_text, "--speaker-id", speaker_id, "--job-id", str(self.job_id or ""), "--output-json", str(result_path)])
+        else:
+            process.setArguments(["-u", str(PIPELINE_PATH), "preview-voice", "--voice", selected_voice, "--text", preview_text, "--speaker-id", speaker_id, "--job-id", str(self.job_id or ""), "--output-json", str(result_path)])
         process.setWorkingDirectory(str(ROOT))
         process.readyReadStandardOutput.connect(self._drain_voice_preview_output)
         process.readyReadStandardError.connect(self._drain_voice_preview_output)
         process.finished.connect(self._handle_voice_preview_finished)
+        
         self.voice_preview_process = process
         self._voice_preview_stdout = ""
         self._voice_preview_stderr = ""
@@ -354,16 +334,8 @@ class WindowVoiceMixin:
         if status_label is not None:
             status_label.setText(f"Đang phát: {repair_mojibake_text(voice_label)}")
             
-        try:
-            import subprocess
-            if audio_file.suffix.lower() == '.wav':
-                safe_path = str(audio_file).replace("'", "''")
-                cmd = f"powershell -Command \"(New-Object Media.SoundPlayer '{safe_path}').PlaySync()\""
-                # PlaySync in a background detached process is extremely stable
-                subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return
-        except Exception:
-            pass
+        if self._play_voice_preview_with_windows_mci(audio_file):
+            return
 
         if self.voice_player is not None:
             self.voice_player.stop()
@@ -379,6 +351,42 @@ class WindowVoiceMixin:
                 f"Không mở được file audio: {audio_file}",
             )
 
+    def _close_voice_preview_mci_alias(self) -> None:
+        alias = str(getattr(self, "_voice_preview_mci_alias", "") or "")
+        if not alias or os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, None)
+        except Exception:
+            pass
+        self._voice_preview_mci_alias = ""
+
+    def _play_voice_preview_with_windows_mci(self, audio_file: Path) -> bool:
+        if os.name != "nt" or audio_file.suffix.lower() not in {".mp3", ".wav"}:
+            return False
+        try:
+            import ctypes
+
+            self._close_voice_preview_mci_alias()
+            alias = f"voice_preview_{id(self)}"
+            path = str(audio_file.resolve()).replace('"', "")
+            send = ctypes.windll.winmm.mciSendStringW
+            error_buffer = ctypes.create_unicode_buffer(256)
+
+            result = send(f'open "{path}" alias {alias}', error_buffer, len(error_buffer), None)
+            if result != 0:
+                return False
+            result = send(f"play {alias}", error_buffer, len(error_buffer), None)
+            if result != 0:
+                send(f"close {alias}", None, 0, None)
+                return False
+            self._voice_preview_mci_alias = alias
+            return True
+        except Exception:
+            return False
+
     def _handle_voice_player_error(self, _error, error_string: str) -> None:
         message = repair_mojibake_text(error_string or "Khong the phat audio nghe thu.")
         speaker_id = self._voice_preview_active_speaker_id
@@ -386,5 +394,3 @@ class WindowVoiceMixin:
         if status_label is not None:
             status_label.setText("Phat audio that bai")
         QMessageBox.warning(self, "Khong the nghe thu", message)
-
-

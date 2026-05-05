@@ -27,12 +27,18 @@ def get_media_duration(file_path: str) -> Optional[int]:
             file_path
         ]
         
+        import sys
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        
         result = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=30
+            timeout=30,
+            creationflags=creationflags,
         )
 
         if result.returncode != 0:

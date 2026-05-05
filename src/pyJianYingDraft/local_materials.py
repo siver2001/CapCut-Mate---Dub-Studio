@@ -42,6 +42,10 @@ def _duration_us_from_seconds(value: Any) -> int:
 
 
 def _ffprobe_json(path: str) -> Dict[str, Any]:
+    import sys
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     completed = subprocess.run(
         [
             "ffprobe",
@@ -56,6 +60,7 @@ def _ffprobe_json(path: str) -> Dict[str, Any]:
         check=True,
         capture_output=True,
         text=True,
+        creationflags=creationflags,
     )
     return json.loads(completed.stdout or "{}")
 

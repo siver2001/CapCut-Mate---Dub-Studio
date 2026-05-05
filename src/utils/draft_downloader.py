@@ -124,8 +124,12 @@ def trigger_directory_scan(path: str):
     """Trick OS/App into scanning directory using a temp copy operation."""
     if os.name == 'nt' and os.path.exists(path):
         tmp = path + ".tmp"
+        import sys
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            subprocess.run(["robocopy", path, tmp, "/E", "/R:0", "/W:0", "/NP", "/NJH", "/NJS"], capture_output=True)
+            subprocess.run(["robocopy", path, tmp, "/E", "/R:0", "/W:0", "/NP", "/NJH", "/NJS"], capture_output=True, creationflags=creationflags)
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
         except Exception:

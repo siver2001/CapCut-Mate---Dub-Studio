@@ -265,9 +265,12 @@ def analyze_with_whisperx(
         warnings.append("WhisperX đang chạy CPU vì torch trong môi trường hiện tại chưa bật CUDA.")
     whisperx_repo_id = WHISPERX_ASR_REPO or whisperx_asr_repo_id(WHISPERX_MODEL)
     if whisperx_repo_id and not hf_repo_cached(whisperx_repo_id):
-        raise RuntimeError(
-            f"WhisperX model {WHISPERX_MODEL} chua co local cache. Hay chay prepare de tai model ve may."
-        )
+        try:
+            emit_progress(phase="analysis", step="transcribe", progress=0.25, message=f"Đang tải model WhisperX {WHISPERX_MODEL} do chưa có cache local...")
+            from tools.dub_studio.cli_parts.runtime import ensure_whisperx_model_cache
+            ensure_whisperx_model_cache(phase="analysis", step="transcribe", progress=0.28)
+        except Exception as e:
+            warnings.append(f"Không thể tự động tải model WhisperX: {e}")
     model = whisperx.load_model(
         WHISPERX_MODEL,
         device,
@@ -275,7 +278,7 @@ def analyze_with_whisperx(
         language=language,
         asr_options={"condition_on_previous_text": False},
         download_root=str(HUGGINGFACE_HUB_CACHE),
-        local_files_only=bool(whisperx_repo_id),
+        local_files_only=False,
         threads=WHISPERX_THREADS,
     )
     result = model.transcribe(audio, batch_size=WHISPERX_BATCH_SIZE, language=language)
@@ -296,7 +299,7 @@ def analyze_with_whisperx(
         align_kwargs = {
             "model_name": align_repo_id,
             "model_dir": str(HUGGINGFACE_HUB_CACHE),
-            "model_cache_only": True,
+            "model_cache_only": False,
         }
     model_align, metadata = whisperx.load_align_model(
         language_code=detected_language,
@@ -788,9 +791,12 @@ def assign_speakers(subtitles: list[SubtitleLine], speaker_count: int) -> tuple[
     return remapped_assignments, remapped_stats, "speaker_1"
 
 
+VIENEU_CLONE_PRESET = "vieneu:clone"
+VALTEC_CLONE_PRESET = "valtec:clone"
+
+
 def is_vieneu_voice_preset(candidate: str) -> bool:
     value = str(candidate or "").strip()
-    VIENEU_CLONE_PRESET = "vieneu:clone"
     return value == VIENEU_CLONE_PRESET or value in VIENEU_PRESET_VOICE_IDS
 
 
@@ -801,7 +807,6 @@ def is_valtec_reference_voice(candidate: str) -> bool:
 
 def is_valtec_voice_preset(candidate: str) -> bool:
     value = str(candidate or "").strip()
-    VALTEC_CLONE_PRESET = "valtec:clone"
     return (
         value == VALTEC_CLONE_PRESET
         or value in VALTEC_PRESET_SPEAKER_IDS

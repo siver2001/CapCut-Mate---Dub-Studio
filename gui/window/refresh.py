@@ -6,7 +6,8 @@ import time
 from PyQt6.QtCore import QProcess, QProcessEnvironment
 from PyQt6.QtWidgets import QMessageBox
 
-from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, UI_THEME_OPTIONS
+from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, UI_THEME_OPTIONS, is_frozen
+
 from gui.utils import (
     decode_process_bytes,
     find_font_option,
@@ -530,6 +531,31 @@ class WindowRefreshMixin:
         self.install_env_btn.setEnabled(True)
         self.install_env_btn.setText("Chuẩn bị model")
         if code == 0:
+            # Tự động chuẩn bị cả trình tải video Douyin
+            try:
+                import subprocess
+                from pathlib import Path
+                from gui.config import ROOT
+                p1 = subprocess.run(["git", "fetch", "origin"], cwd=str(ROOT), capture_output=True, text=True)
+                p2 = subprocess.run(["git", "checkout", "origin/main", "--", "tools/douyin_api_downloader.py"], cwd=str(ROOT), capture_output=True, text=True)
+                if p2.returncode != 0:
+                    raise RuntimeError(p2.stderr or p1.stderr or "Lỗi Git checkout")
+            except Exception:
+                try:
+                    import urllib.request
+                    from pathlib import Path
+                    from gui.config import ROOT
+                    req = urllib.request.Request(
+                        "https://raw.githubusercontent.com/siver2001/CapCut-Mate---Dub-Studio/main/tools/douyin_api_downloader.py",
+                        headers={"User-Agent": "Mozilla/5.0"}
+                    )
+                    with urllib.request.urlopen(req) as response:
+                        content = response.read()
+                    douyin_file = Path(ROOT) / "tools" / "douyin_api_downloader.py"
+                    douyin_file.write_bytes(content)
+                except Exception:
+                    pass
+
             QMessageBox.information(
                 self,
                 "Chuẩn bị hoàn tất",
@@ -560,7 +586,11 @@ class WindowRefreshMixin:
         env.insert("PYTHONIOENCODING", "utf-8")
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))
-        process.setArguments(["-u", str(PIPELINE_PATH), "prepare", "--target", "all"])
+        if is_frozen:
+            process.setArguments(["pipeline", "prepare", "--target", "all"])
+        else:
+            process.setArguments(["-u", str(PIPELINE_PATH), "prepare", "--target", "all"])
+
         process.setWorkingDirectory(str(ROOT))
         process.readyReadStandardOutput.connect(
             lambda: self._drain_install_output("stdout")

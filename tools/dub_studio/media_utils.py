@@ -207,6 +207,9 @@ def extract_audio_for_whisperx(video_path: Path, audio_path: Path) -> None:
 
 
 def extract_gray_frame(video_path: Path, time_ms: int, sample_width: int, sample_height: int) -> bytes:
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     completed = subprocess.run(
         [
             FFMPEG_EXE,
@@ -230,6 +233,7 @@ def extract_gray_frame(video_path: Path, time_ms: int, sample_width: int, sample
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=5.0
+        timeout=5.0,
+        creationflags=creationflags,
     )
     return completed.stdout

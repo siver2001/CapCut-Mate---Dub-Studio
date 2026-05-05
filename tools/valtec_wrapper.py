@@ -131,7 +131,10 @@ class ValtecProvider:
         except Exception:
             system_temp = tempfile.gettempdir()
 
-        temp_root = Path(os.environ.get("CAPCUT_VALTEC_TEMP_ROOT") or system_temp) / "capcut_auto_edit_valtec"
+        temp_root = Path(
+            os.environ.get("CAPCUT_VALTEC_TEMP_ROOT")
+            or (self.model_dir / "runtime_tmp")
+        )
         temp_root.mkdir(parents=True, exist_ok=True)
         self.temp_dir = Path(tempfile.mkdtemp(prefix="valtec_", dir=str(temp_root)))
         self.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -141,6 +144,8 @@ class ValtecProvider:
         os.environ["TEMP"] = str(self.temp_dir)
         os.environ["TMP"] = str(self.temp_dir)
         os.environ["TMPDIR"] = str(self.temp_dir)
+        os.environ["VIPHONEME_TEMP_ROOT"] = str(self.temp_dir)
+        os.environ.setdefault("VIPHONEME_ISOLATE_VINORM", "0")
         tempfile.tempdir = str(self.temp_dir)
         os.environ["VIPHONEME_LOCK_PATH"] = str(self.temp_dir / "viphoneme.lock")
 

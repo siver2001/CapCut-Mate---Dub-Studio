@@ -409,8 +409,8 @@ def expand_cleanup_region_for_render(
 
     # Expand width and height "surgically" just enough to cover text + anti-aliasing
     # Increased padding to ensure full coverage of original subtitles
-    padding_w = max(int(region_w * 0.15), 32)
-    padding_h = max(int(region_h * 0.22), 12)
+    padding_w = max(int(region_w * 0.05), 12)
+    padding_h = max(int(region_h * 0.08), 4)
     
     expanded_w = min(width, region_w + padding_w)
     expanded_h = min(height, region_h + padding_h)
@@ -1912,6 +1912,13 @@ def do_analyze_resilient(
             if any("fallback heuristic speaker" in item for item in transcription.get("warnings") or []):
                 diarization_provider = "heuristic_fallback"
         except Exception as exc:
+            import traceback
+            try:
+                with open(ROOT / "whisperx_error.log", "a", encoding="utf-8") as f:
+                    f.write(f"--- WhisperX error: {exc} ---\n")
+                    traceback.print_exc(file=f)
+            except Exception:
+                pass
             fallback_reason = normalize_text(str(exc)) or exc.__class__.__name__
             emit_progress(
                 phase="analyze",
@@ -2561,6 +2568,118 @@ def do_preview_voice(
     return result
 
 
+def do_health_check(*, output_json: Path | None = None) -> dict[str, Any]:
+    from ..media_utils import FFMPEG_EXE, FFPROBE_EXE
+
+    def _file_check(label: str, path: Path, *, required: bool = True) -> dict[str, Any]:
+        exists = path.exists()
+        size = path.stat().st_size if exists and path.is_file() else None
+        return {
+            "label": label,
+            "path": str(path),
+            "exists": exists,
+            "required": required,
+            "sizeBytes": size,
+            "ok": exists or not required,
+        }
+
+    def _module_check(module_name: str, *, required: bool = True) -> dict[str, Any]:
+        try:
+            available = importlib.util.find_spec(module_name) is not None
+        except Exception:
+            available = False
+        return {
+            "module": module_name,
+            "available": available,
+            "required": required,
+            "ok": available or not required,
+        }
+
+    file_checks = [
+        _file_check("CapCutMate executable", Path(sys.executable), required=getattr(sys, "frozen", False)),
+        _file_check("Valtec source", CODE_ROOT / "tools" / "valtec_repo" / "valtec_tts" / "tts.py"),
+        _file_check("Valtec infer", CODE_ROOT / "tools" / "valtec_repo" / "infer.py"),
+        _file_check("Valtec preset model config", VALTEC_MODEL_DIR / "models" / "vits-vietnamese" / "config.json"),
+        _file_check("Valtec preset model checkpoint", VALTEC_MODEL_DIR / "models" / "vits-vietnamese" / "G.pth"),
+        _file_check("Valtec Thu Ha reference", VALTEC_REFERENCE_DIR / "thu_ha.wav", required=False),
+        _file_check("Valtec zero-shot code", VALTEC_ZEROSHOT_CODE_PATH, required=False),
+        _file_check("Valtec zero-shot checkpoint", VALTEC_ZEROSHOT_MODEL_DIR / "G_175000.pth", required=False),
+        _file_check("VieNeu voices", VIENEU_MODEL_DIR / "voices.json", required=False),
+        _file_check("VieNeu backbone", VIENEU_MODEL_DIR / VIENEU_BACKBONE_FILENAME, required=False),
+        _file_check("FFmpeg", Path(FFMPEG_EXE), required=False) if Path(FFMPEG_EXE).is_absolute() else {
+            "label": "FFmpeg",
+            "path": FFMPEG_EXE,
+            "exists": shutil.which(FFMPEG_EXE) is not None,
+            "required": False,
+            "sizeBytes": None,
+            "ok": True,
+        },
+        _file_check("FFprobe", Path(FFPROBE_EXE), required=False) if Path(FFPROBE_EXE).is_absolute() else {
+            "label": "FFprobe",
+            "path": FFPROBE_EXE,
+            "exists": shutil.which(FFPROBE_EXE) is not None,
+            "required": False,
+            "sizeBytes": None,
+            "ok": True,
+        },
+    ]
+    module_checks = [
+        _module_check("PyQt6"),
+        _module_check("edge_tts"),
+        _module_check("yt_dlp"),
+        _module_check("requests"),
+        _module_check("numpy"),
+        _module_check("soundfile"),
+        _module_check("torch"),
+        _module_check("torchaudio"),
+        _module_check("viphoneme"),
+        _module_check("vinorm"),
+        _module_check("underthesea"),
+        _module_check("onnxruntime", required=False),
+        _module_check("llama_cpp", required=False),
+    ]
+
+    errors = [
+        f"Missing required file: {item['label']} -> {item['path']}"
+        for item in file_checks
+        if item.get("required") and not item.get("exists")
+    ]
+    errors += [
+        f"Missing required module: {item['module']}"
+        for item in module_checks
+        if item.get("required") and not item.get("available")
+    ]
+    warnings = [
+        f"Optional file missing: {item['label']} -> {item['path']}"
+        for item in file_checks
+        if not item.get("required") and not item.get("exists")
+    ]
+    warnings += [
+        f"Optional module missing: {item['module']}"
+        for item in module_checks
+        if not item.get("required") and not item.get("available")
+    ]
+
+    result = {
+        "ok": not errors,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "executable": str(Path(sys.executable)),
+        "root": str(ROOT),
+        "codeRoot": str(CODE_ROOT),
+        "dubStudioDir": str(DUB_STUDIO_DIR),
+        "valtecModelDir": str(VALTEC_MODEL_DIR),
+        "vieneuModelDir": str(VIENEU_MODEL_DIR),
+        "fileChecks": file_checks,
+        "moduleChecks": module_checks,
+        "warnings": warnings,
+        "errors": errors,
+    }
+    if output_json is not None:
+        write_json(output_json, result)
+    emit("RESULT", result)
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze and render Dub Studio jobs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2590,6 +2709,9 @@ def parse_args() -> argparse.Namespace:
     preview_voice.add_argument("--speaker-id", default="speaker_1")
     preview_voice.add_argument("--job-id", default="")
     preview_voice.add_argument("--output-json", required=True)
+
+    health_check = subparsers.add_parser("health-check")
+    health_check.add_argument("--output-json", default="")
 
     return parser.parse_args()
 
@@ -2622,6 +2744,9 @@ def main() -> int:
             job_id=args.job_id,
             output_json=Path(args.output_json).resolve(),
         )
+    elif args.command == "health-check":
+        output_json = str(getattr(args, "output_json", "") or "").strip()
+        do_health_check(output_json=Path(output_json).resolve() if output_json else None)
     return 0
 
 

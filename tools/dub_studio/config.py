@@ -12,9 +12,16 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if getattr(sys, "frozen", False):
+    ROOT = Path(sys.executable).resolve().parent
+    CODE_ROOT = Path(getattr(sys, "_MEIPASS", ROOT)).resolve()
+else:
+    ROOT = Path(__file__).resolve().parents[2]
+    CODE_ROOT = ROOT
+
+for _path in (CODE_ROOT, ROOT):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 
 def load_local_env(env_path: Path) -> None:
@@ -61,8 +68,10 @@ MODEL_CANDIDATES = [
     ROOT / "temp" / "models" / "ggml-base.bin",
 ]
 FFMPEG_BIN_DIR = ROOT / "tools" / "bin"
-if FFMPEG_BIN_DIR.exists():
-    os.environ["PATH"] = str(FFMPEG_BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
+BUNDLED_FFMPEG_BIN_DIR = CODE_ROOT / "tools" / "bin"
+for _ffmpeg_dir in (FFMPEG_BIN_DIR, BUNDLED_FFMPEG_BIN_DIR):
+    if _ffmpeg_dir.exists():
+        os.environ["PATH"] = str(_ffmpeg_dir) + os.pathsep + os.environ.get("PATH", "")
 
 WHISPER_CPP_MODEL_REPO = env_value("DUB_WHISPER_CPP_MODEL_REPO", default="ggerganov/whisper.cpp")
 WHISPER_CPP_MODEL_FILENAME = env_value("DUB_WHISPER_CPP_MODEL_FILENAME", default="ggml-small.bin")
@@ -246,6 +255,7 @@ if CUSTOM_VALTEC_VOICES_FILE.exists():
         pass
 
 VALTEC_CLONE_PRESET = "valtec:clone"
+VIENEU_CLONE_PRESET = "vieneu:clone"
 VALTEC_REPO_URL = env_value("DUB_VALTEC_REPO_URL", default="https://github.com/tronghieuit/valtec-tts.git")
 VALTEC_ZEROSHOT_REPO = env_value("DUB_VALTEC_ZEROSHOT_REPO", default="valtecAI-team/valtec-zeroshot-voice-cloning")
 VIENEU_BACKBONE_REPO = env_value("DUB_VIENEU_BACKBONE_REPO", default="pnnbao-ump/VieNeu-TTS-v2-Turbo-GGUF")
@@ -263,7 +273,7 @@ VALTEC_MODEL_DIR = ROOT / "temp" / "models" / "valtec"
 VALTEC_ZEROSHOT_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "zeroshot-vietnamese"
 VALTEC_HASP_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "hasp"
 VALTEC_REFERENCE_DIR = VALTEC_MODEL_DIR / "references"
-VALTEC_ZEROSHOT_CODE_PATH = ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
+VALTEC_ZEROSHOT_CODE_PATH = CODE_ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
 VALTEC_ZEROSHOT_AVAILABLE = VALTEC_ZEROSHOT_CODE_PATH.exists()
 if not VALTEC_ZEROSHOT_AVAILABLE:
     VALTEC_REFERENCE_VOICES = {}

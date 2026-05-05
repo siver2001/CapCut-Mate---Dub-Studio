@@ -12,12 +12,20 @@ from .models import ClipManifest
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
+    import sys
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     print(">", " ".join(str(part) for part in cmd))
-    subprocess.run(cmd, check=True, cwd=str(cwd) if cwd else None)
+    subprocess.run(cmd, check=True, cwd=str(cwd) if cwd else None, creationflags=creationflags)
 
 
 def run_output(cmd: list[str]) -> str:
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    import sys
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True, creationflags=creationflags)
     return result.stdout.strip()
 
 

@@ -83,6 +83,9 @@ def ensure_job_dirs(job_id: str) -> dict[str, Path]:
 
 
 def run(cmd: list[str], cwd: Path | None = None, capture_output: bool = False, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NO_WINDOW
     return subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
@@ -92,6 +95,7 @@ def run(cmd: list[str], cwd: Path | None = None, capture_output: bool = False, t
         encoding="utf-8",
         errors="ignore",
         timeout=timeout,
+        creationflags=creationflags,
     )
 
 
@@ -175,6 +179,19 @@ def ensure_python_packages(
             seen_packages.add(package_name)
     if not missing_packages:
         return
+
+    # If frozen, we cannot use pip install to modify the bundled environment.
+    # Everything MUST be included during the build process.
+    from gui.config import is_frozen
+    if is_frozen:
+        emit_progress(
+            phase=phase,
+            step=step,
+            progress=progress,
+            message=f"CẢNH BÁO: Thiếu thư viện {', '.join(missing_packages)}. Bản build này cần được tạo lại với đầy đủ thư viện.",
+        )
+        return
+
     emit_progress(
         phase=phase,
         step=step,
@@ -191,4 +208,5 @@ def ensure_python_packages(
             *missing_packages,
         ]
     )
+
     importlib.invalidate_caches()

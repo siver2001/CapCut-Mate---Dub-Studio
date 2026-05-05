@@ -45,7 +45,7 @@ class EdgeVoiceHealthRegistry:
         with self._lock:
             failures = self._transient_failures.get(voice, 0) + 1
             self._transient_failures[voice] = failures
-            if failures >= 2:
+            if failures >= 20:
                 self._healthy.discard(voice)
                 self._unhealthy[voice] = "Repeated Edge TTS no-audio responses"
                 self._blocked_until[voice] = max(
