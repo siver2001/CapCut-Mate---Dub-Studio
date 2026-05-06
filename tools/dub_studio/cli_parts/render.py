@@ -445,16 +445,14 @@ def burn_subtitles(
         subtitle_preset=subtitle_preset,
     )
     margin_v = effective_ass_margin_v(subtitle_preset, source_video_meta)
-    cleanup_opacity_pct = float(subtitle_preset.get("cleanupBlurStrength", 80))
+    cleanup_opacity_pct = float(subtitle_preset.get("cleanupBlurStrength", 20))
     cleanup_alpha = max(0.0, min(1.0, cleanup_opacity_pct / 100.0))
     
-    # Map percentage to blur radius (0-100% -> 1-25px)
-    blur_radius = max(1, min(25, int(cleanup_opacity_pct * 0.25)))
+    # Map UI value directly to blur radius (1:1 mapping as requested by UI 'px' label)
+    blur_radius = max(1, min(50, int(cleanup_opacity_pct)))
 
-    blur_filter = (
-        f"boxblur=luma_radius={blur_radius}:luma_power=1,"
-        f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{cleanup_alpha}:t=fill"
-    )
+    blur_filter = f"boxblur=luma_radius={blur_radius}:luma_power=1"
+
     font_name = subtitle_preset.get("assFontName") or subtitle_preset.get("fontFamilyName") or "Arial"
     primary_color = subtitle_preset.get("assPrimaryColor") or "&H0038D8FF"
     outline_color = subtitle_preset.get("assOutlineColor") or "&H00000000"
@@ -1391,6 +1389,49 @@ def create_capcut_draft(
         source_timerange=Timerange(0, min(duration_us, video_material.duration)),
         volume=0.0,
     )
+
+    # Handle localized blurring of original subtitles in the draft
+    cleanup_mode = str(subtitle_region.get("cleanupMode") or "none").strip().lower()
+    if cleanup_mode == "localized_blur" and subtitle_region.get("detected", False):
+        from pyJianYingDraft.metadata import VideoSceneEffectType, MaskType
+        
+        # Add a dedicated track for the blur cover
+        script.add_track(TrackType.video, "blur_cover_track", relative_index=5)
+        
+        # Add the same video as a cover
+        blur_segment = VideoSegment(
+            material=video_material,
+            target_timerange=Timerange(0, duration_us),
+            source_timerange=Timerange(0, min(duration_us, video_material.duration)),
+            volume=0.0
+        )
+        
+        # Apply Gaussian Blur effect
+        blur_strength = float(subtitle_preset.get("cleanupBlurStrength") or subtitle_region.get("blurStrength") or 20) / 100.0
+        blur_segment.add_effect(VideoSceneEffectType.Blur, params=[blur_strength])
+        
+        # Apply Rectangle Mask
+        region_w = int(subtitle_region.get("w", 0))
+        region_h = int(subtitle_region.get("h", 0))
+        region_x = int(subtitle_region.get("x", 0))
+        region_y = int(subtitle_region.get("y", 0))
+        
+        # Convert absolute coordinates to normalized mask parameters
+        # CapCut mask center is relative to segment center (0,0), range -1 to 1
+        # pyJianYingDraft's add_mask takes center_x, center_y in pixels
+        center_x = region_x + region_w // 2 - int(video_meta["width"]) // 2
+        center_y = int(video_meta["height"]) // 2 - (region_y + region_h // 2)
+        
+        blur_segment.add_mask(
+            mask_type=MaskType.Rectangle,
+            center_x=float(center_x),
+            center_y=float(center_y),
+            size=region_h / float(video_meta["height"]), # Height ratio
+            rect_width=region_w / float(video_meta["width"]), # Width ratio
+            feather=10.0
+        )
+        
+        script.add_segment(blur_segment, "blur_cover_track")
     script.add_segment(video_segment, "main_track")
 
     audio_material = AudioMaterial(str(dub_audio_path))
