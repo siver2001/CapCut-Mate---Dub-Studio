@@ -357,10 +357,12 @@ def _estimate_translation_char_limit(
     clean = normalize_text(source_text)
     source_len = max(len(clean), 1)
     duration_seconds = max(duration_ms, 400) / 1000.0
-    timing_cap = 28 + int(duration_seconds * (16 if spoken else 12))
-    source_cap = int(source_len * (1.34 if spoken else 1.14)) + (8 if spoken else 4)
-    floor = 26 if spoken else 18
-    ceiling = 104 if spoken else 78
+    # Proportional scaling: target ~13.5 chars/sec for spoken, ~11.0 for subtitles.
+    # We add a small constant for short segments to allow at least 2-3 words.
+    timing_cap = int(duration_seconds * (13.8 if spoken else 11.5)) + (12 if spoken else 8)
+    source_cap = int(source_len * (1.2 if spoken else 1.05)) + (6 if spoken else 4)
+    floor = 22 if spoken else 16
+    ceiling = 110 if spoken else 84
     return max(floor, min(max(timing_cap, source_cap), ceiling))
 
 
@@ -489,7 +491,7 @@ def _build_localization_prompt(
         "6. STRICT BAN ON CHINESE CHARACTERS: Absolutely ZERO Chinese hanzi (e.g., 堆积如山) must remain in the output. Translate EVERY single word into standard, natural Vietnamese.\n"
         "\n"
         "Each item must be a JSON object with exactly these keys:\n"
-        '- "translatedText": natural, concise, captivating Vietnamese subtitle text.\n'
+        '- "translatedText": natural, concise, captivating Vietnamese subtitle text. It MUST fit within the provided "maxSubtitleChars" or "maxSpokenChars" limits.\n'
         '- "delivery": exactly one of: calm, neutral, curious, excited, urgent, suspense.\n'
         "\n"
         "LOCALIZATION & WRITING EXCELLENCE RULES:\n"
@@ -497,10 +499,11 @@ def _build_localization_prompt(
                 "- IDIOMATIC & COHERENT: Do NOT translate word-for-word. Do not use direct literal meanings. Translate the complete contextual meaning to make sense in Vietnamese. For example, do not translate '打' as 'đánh' unless it makes sense, and do not use 'vừa gió vừa sưng' for 'gout/arthritis' or 'red and swollen'.\n"
         "- CLARITY & CONTEXT: The translation must be instantly comprehensible to native Vietnamese speakers. Avoid weird or robotic phrases. All sentences must sound natural for a product review, vlog, or voiceover.\n"
         "- NO NONSENSE & GIBBERISH: Completely eliminate gibberish sentences and Whisper hallucinations (e.g., weird phrases about 'microphones', 'esports', or 'American team' when the topic is cat toothpaste). Avoid translating out-of-context terms literally. Instead, rewrite them smoothly to match the product topic (e.g., 'theo công nghệ Mỹ', 'đạt chuẩn quốc tế').\n" 
-        "- EMOTIONAL RESONANCE: Choose Vietnamese pronouns naturally based on relationship, age, and tone: mình/cậu, anh/em, tao/mày, chú mèo, cô mèo, anh bạn nhỏ...\n"
-        "- COMPLETE MEANINGFUL SENTENCES: Every translation must be a complete, grammatically sound, and fully logical sentence in Vietnamese. Never leave a sentence hanging, cut off, or incomplete.\n"
-        "- PRONOUN CONSISTENCY: Keep pronouns and names strictly consistent across all items for the same speaker/subject throughout the video.\n"
-        "- CONTEXT AWARE: Connect fragmented or noisy transcripts into coherent spoken stories using nearby context conservatively.\n"
+        "- EMOTIONAL RESONANCE & PRONOUN CONSISTENCY: You MUST consistently refer to yourself as 'mình' across ALL segments when speaking as the narrator or main host. This is a strict requirement for a friendly, modern Vietnamese persona. Avoid 'tôi', 'tớ', 'chúng tôi', or 'chúng mình' unless it's a specific dialogue between characters. Use natural, warm Vietnamese pronouns for others (e.g., 'mình/bạn', 'mình/các bạn').\n"
+        "- SMART ADAPTIVE LENGTH: Do NOT make every translation the same length. Short, punchy sentences are better for excitement; longer, smooth sentences are better for calm parts. You MUST summarize or condense the text if it exceeds the 'maxSpokenChars' or 'maxSubtitleChars' limits to ensure the narrator doesn't have to speak unnaturally fast.\n"
+        "- CLARITY & FLOW: The translation must sound like a human, not a machine. Use natural Vietnamese discourse markers (nhé, nha, nè, hén) to make it sound friendly and alive.\n"
+        "- NO HALLUCINATIONS: Completely eliminate nonsensical phrases or Whisper hallucinations. If a segment is clearly background noise or gibberish, provide a very short, neutral Vietnamese filler or skip it.\n"
+        "- CONTEXTUAL COHERENCE: Ensure that the story flows logically from one segment to the next. Use the provided context to resolve ambiguities.\n"
         "- GLOBAL THEME ALIGNMENT: Ensure the vocabulary and style match the overall topic of the video (e.g., technical for tech reviews, playful for vlogs).\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
@@ -518,13 +521,13 @@ def _build_global_analysis_prompt(full_transcript: str) -> str:
         "2. AUDIENCE & TONE: Describe the target audience and the required emotional tone (e.g., 'Friendly advice for pet owners', 'Urgent news update', 'Playful children vlog').\n"
         "3. CHARACTER ROLES: Identify who is speaking and their relationship (e.g., 'An expert host talking to viewers', 'A person talking to their pet cat').\n"
         "4. DOMAIN GLOSSARY: List specific technical terms, brand names, or recurring nouns that must be translated correctly and consistently (e.g., 'nha chu', 'cao răng', 'kem đánh răng dành cho mèo').\n"
-        "5. VIETNAMESE PRONOUNS: Choose the most natural and professional Vietnamese pronouns based on the roles (e.g., use 'mình' for host, 'bé' for pets, 'bạn' for viewers).\n"
+        "5. VIETNAMESE PRONOUNS: Choose the most natural and professional Vietnamese pronouns. Mandatory: Use 'mình' for the host/narrator self-reference unless the context is extremely formal or very specific (like child to parent).\n"
         "\n"
         "OUTPUT FORMAT: Return ONLY a valid JSON object with these keys:\n"
         '- "theme": string\n'
         '- "audience": string\n'
         '- "tone": string\n'
-        '- "pronouns": string (preferred Vietnamese pronouns for dialogue)\n'
+        '- "pronouns": string (preferred Vietnamese pronouns, mandatory: narrator self-reference = "mình")\n'
         '- "glossary": array of strings (the specific terminology to use)\n'
         "\n"
         "TRANSCRIPT FOR ANALYSIS:\n"
@@ -698,9 +701,9 @@ def _build_machine_review_prompt(
         "   - 'hát hay quá' -> 'câu này hơi dài/khó nói'.\n"
         "3. NONSENSE ELIMINATION: Never output non-existent words. Use the theme to find the most likely intended meaning.\n"
         "4. NATURAL STORYTELLING: Use professional, conversational Vietnamese. Ensure sentences connect logically.\n"
-        "5. PRONOUNS: Use natural Vietnamese narrating style. Default to 'Mình/Chúng mình' for a friendly narrator vibe.\n"
+        "5. PRONOUNS: Use a natural, consistent Vietnamese narrating style. MANDATORY: Use 'mình' as the primary first-person pronoun for the host/narrator throughout the entire video. Do NOT switch to 'tôi' or 'tớ'.\n"
         "6. NO HANZI: No Chinese characters allowed.\n"
-        "7. TIME CONSTRAINT & SUMMARIZATION (CRITICAL): Each segment has a fixed 'durationMs'. If 'durationMs' < 4000ms, keep translation under 8 words. Summarize heavily to fit a natural pace (3-4 words/sec).\n"
+        "7. TIME CONSTRAINT & SUMMARIZATION (CRITICAL): Each segment has a 'durationMs' and a 'maxSpokenChars' limit. Your translation MUST be concise enough to be read naturally within that time. If the draft is too long, SUMMARIZE it while keeping the essential meaning. Aim for a natural pace (approx. 3 words per second).\n"
         "\n"
         "OUTPUT REQUIREMENT:\n"
         f"- Return ONLY a valid JSON array of exactly {len(items_payload)} items.\n"

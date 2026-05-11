@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, pyqtSignal
+from PyQt6.QtCore import QProcess, QProcessEnvironment, pyqtSignal, QTimer
 from PyQt6.QtWidgets import QWidget
 
 try:
@@ -45,6 +45,12 @@ class DubStudioJobController(QWidget):
         self.active_job_id: str | None = None
         self._destroyed = False
         self._last_status_emit_at: dict[str, float] = {}
+        self._last_activity_at: dict[str, float] = {}
+        
+        self.watchdog_timer = QTimer(self)
+        self.watchdog_timer.setInterval(30000) # 30 seconds
+        self.watchdog_timer.timeout.connect(self._check_watchdog)
+        self.watchdog_timer.start()
 
     def _is_alive(self) -> bool:
         """Return True if the underlying C++ QWidget has not been deleted."""
@@ -110,14 +116,45 @@ class DubStudioJobController(QWidget):
         if emit_signal:
             self._safe_emit(self.job_failed, job_id, message)
 
+    def _check_watchdog(self) -> None:
+        active_id = self._get_running_job_id()
+        if not active_id:
+            return
+        
+        job = self.jobs.get(active_id)
+        if not job or job.get("status") != "running":
+            return
+            
+        now = time.monotonic()
+        last_activity = self._last_activity_at.get(active_id, now)
+        idle_time = now - last_activity
+        
+        # 7 minutes timeout for silent hang
+        if idle_time > 420:
+            append_job_log(job, f"Pipeline stalled for {int(idle_time)}s. Forcing termination.", "error")
+            self._fail_job(active_id, "Tiến trình bị treo quá lâu (Watchdog timeout). Vui lòng kiểm tra lại cấu hình hoặc thử lại.")
+            process = job.get("process")
+            if process:
+                process.kill()
+
     def analyze_video(
         self, input_path: str, options: dict[str, Any] | None = None
     ) -> str:
         if self._get_running_job_id():
             raise RuntimeError("A pipeline task is already running.")
+            
+        # Pre-flight: Check HF Token if WhisperX is used (default)
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        provider = (os.environ.get("DUB_TRANSCRIBE_PROVIDER") or "auto").lower()
+        if provider == "auto" or provider == "whisperx":
+            if not hf_token:
+                append_job_log(None, "Cảnh báo: Chưa có HF_TOKEN trong .env. Diarization có thể không hoạt động.", "warn")
+
         job_id = str(uuid.uuid4())
         job = create_base_job(job_id, input_path)
         self.jobs[job_id] = job
+        self._last_activity_at[job_id] = time.monotonic()
+        
         if options:
             job["overrides"] = copy.deepcopy(options)
         target_language = ""
@@ -367,6 +404,8 @@ class DubStudioJobController(QWidget):
             if not should_capture_process_log_line(line, stream):
                 return
             append_job_log(job, line, classify_process_log_line(line, stream))
+            
+        self._last_activity_at[job_id] = time.monotonic()
         self._emit_status_changed(job_id)
 
     def _handle_process_error(self, job_id: str, error: QProcess.ProcessError) -> None:

@@ -28,7 +28,7 @@ class TtsRateLimiter:
             # Adaptive gap: increase gap if we've had recent errors
             effective_gap = self.min_gap_seconds
             if hasattr(self, "_backoff_until") and self._backoff_until > current_time:
-                effective_gap *= 2.5
+                effective_gap *= 4.0
 
             if elapsed < effective_gap:
                 # Add a bit of random jitter (0-800ms) to avoid perfectly regular patterns

@@ -385,7 +385,7 @@ def _safe_unlink(path: Path, *, retries: int = 5, delay: float = 0.3) -> None:
             # will use a different temp path anyway.
 
 
-_EDGE_TTS_MIN_REQUEST_GAP_SECONDS = 0.4
+_EDGE_TTS_MIN_REQUEST_GAP_SECONDS = 0.75
 _EDGE_TTS_RATE_LIMITER = TtsRateLimiter(min_gap_seconds=_EDGE_TTS_MIN_REQUEST_GAP_SECONDS)
 
 
@@ -966,8 +966,10 @@ def synthesize_tts(
             )
             time.sleep(3.5)
 
+    text_snippet = (text[:60] + "...") if len(text) > 60 else text
     raise RuntimeError(
-        f"Edge TTS synthesis failed after trying voices {', '.join(edge_voice_candidates)}: {last_error}"
+        f"Edge TTS synthesis failed for {speaker_id} (text: \"{text_snippet}\") "
+        f"after trying voices {', '.join(edge_voice_candidates)}: {last_error}"
     )
 
 

@@ -55,6 +55,31 @@ from ..render_utils import (
     hex_to_ass_color,
     resolve_subtitle_region_for_position,
 )
+
+def cli_log(message: str) -> None:
+    try:
+        log_path = ROOT / "temp" / "dub_studio_cli.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except Exception:
+        pass
+
+def cli_log_error(message: str, exc: Exception | None = None) -> None:
+    import traceback
+    msg = f"ERROR: {message}"
+    if exc:
+        msg += f" ({exc})"
+    cli_log(msg)
+    if exc:
+        try:
+            log_path = ROOT / "temp" / "dub_studio_cli.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+
 from ..subtitle_utils import (
     apply_subtitle_timeline_to_segments,
     build_subtitle_timeline,

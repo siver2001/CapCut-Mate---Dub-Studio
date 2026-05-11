@@ -254,8 +254,11 @@ def analyze_with_whisperx(
     merged_srt_path: Path,
     language: str | None = None,
 ) -> dict[str, Any]:
+    cli_log("analyze_with_whisperx: Importing whisperx module")
     whisperx = import_whisperx_module()
+    cli_log("analyze_with_whisperx: Extracting audio for whisperx")
     extract_audio_for_whisperx(video_path, audio_path)
+    cli_log(f"analyze_with_whisperx: Audio extracted to {audio_path}")
     device = preferred_whisperx_device()
     compute_type = preferred_whisperx_compute_type(device)
     audio = whisperx.load_audio(str(audio_path))
@@ -271,6 +274,7 @@ def analyze_with_whisperx(
             ensure_whisperx_model_cache(phase="analysis", step="transcribe", progress=0.28)
         except Exception as e:
             warnings.append(f"Không thể tự động tải model WhisperX: {e}")
+    cli_log(f"analyze_with_whisperx: Loading WhisperX model {WHISPERX_MODEL} on {device}")
     model = whisperx.load_model(
         WHISPERX_MODEL,
         device,
@@ -281,7 +285,9 @@ def analyze_with_whisperx(
         local_files_only=False,
         threads=WHISPERX_THREADS,
     )
+    cli_log("analyze_with_whisperx: Starting transcription")
     result = model.transcribe(audio, batch_size=WHISPERX_BATCH_SIZE, language=language)
+    cli_log("analyze_with_whisperx: Transcription finished")
     detected_language = normalize_text(result.get("language") or "") or "zh"
     raw_segments = result.get("segments") or []
 
@@ -299,13 +305,14 @@ def analyze_with_whisperx(
         align_kwargs = {
             "model_name": align_repo_id,
             "model_dir": str(HUGGINGFACE_HUB_CACHE),
-            "model_cache_only": False,
         }
+    cli_log(f"analyze_with_whisperx: Loading alignment model for {detected_language}")
     model_align, metadata = whisperx.load_align_model(
         language_code=detected_language,
         device=device,
         **align_kwargs,
     )
+    cli_log("analyze_with_whisperx: Starting alignment")
     emit_progress(phase="analysis", step="align", progress=0.45, message="Đang căn chỉnh thời gian từ vựng (word-level alignment)...")
     aligned_result = whisperx.align(
         raw_segments,
@@ -323,6 +330,7 @@ def analyze_with_whisperx(
         try:
             if not diarization_repo_id or not hf_repo_cached(diarization_repo_id):
                 raise RuntimeError("model diarization local chua san sang")
+            cli_log("analyze_with_whisperx: Loading diarization model (PyAnnote)")
             emit_progress(phase="analysis", step="diarize", progress=0.55, message="Đang tải mô hình nhận diện người nói (PyAnnote Diarization)...")
             diarize_model = whisperx.DiarizationPipeline(
                 model_name=diarization_repo_id,
@@ -330,12 +338,14 @@ def analyze_with_whisperx(
                 device=device,
                 cache_dir=str(HUGGINGFACE_HUB_CACHE),
             )
+            cli_log("analyze_with_whisperx: Starting diarization")
             emit_progress(phase="analysis", step="diarize", progress=0.65, message="Đang phân tích và phân biệt giọng người nói...")
             diarize_segments = diarize_model(
                 waveform,
                 min_speakers=1,
                 max_speakers=WHISPERX_DIARIZATION_MAX_SPEAKERS,
             )
+            cli_log("analyze_with_whisperx: Assigning word speakers")
             aligned_result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
             aligned_segments = aligned_result.get("segments") or []
             diarization_used = True

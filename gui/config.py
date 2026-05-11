@@ -377,7 +377,8 @@ UI_THEME_OPTIONS = [
     ("pastel", "Pastel"),
 ]
 VIDEO_CODEC_OPTIONS = [
-    ("gpu_preferred", "GPU tăng tốc (mặc định)"),
+    ("auto", "Tự động (Ưu tiên GPU)"),
+    ("gpu_preferred", "GPU tăng tốc (NVENC)"),
     ("cpu_stable", "CPU ổn định"),
 ]
 
@@ -559,7 +560,8 @@ UI_THEME_OPTIONS = [
 ]
 
 VIDEO_CODEC_OPTIONS = [
-    ("gpu_preferred", "GPU tăng tốc (mặc định)"),
+    ("auto", "Tự động (Ưu tiên GPU)"),
+    ("gpu_preferred", "GPU tăng tốc (NVENC)"),
     ("cpu_stable", "CPU ổn định"),
 ]
 

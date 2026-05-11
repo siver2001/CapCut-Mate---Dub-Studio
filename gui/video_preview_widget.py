@@ -243,7 +243,10 @@ class _SubtitleOverlay(QGraphicsItem):
                 wm_y = frame_rect.bottom() - wm_h - margin
                 
             if wm_pm_scaled:
+                painter.save()
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPixmap(int(wm_x), int(wm_y), wm_pm_scaled)
+                painter.restore()
             else:
                 rect = QRectF(wm_x, wm_y, wm_w, wm_h)
                 painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
@@ -281,7 +284,7 @@ class _SubtitleOverlay(QGraphicsItem):
             if preload_font(font_family):
                 _loaded_fonts.add(font_family)
         base_font = QFont(font_family)
-        base_font.setPixelSize(max(int(subtitle_preset.get("fontSize", 14)), 8))
+        base_font.setPixelSize(max(int(subtitle_preset.get("fontSize", 20)), 8))
         base_font.setBold(True)
         painter.setFont(base_font)
         metrics = painter.fontMetrics()
@@ -294,7 +297,7 @@ class _SubtitleOverlay(QGraphicsItem):
         box_padding_y = max(int(subtitle_preset.get("boxPaddingY", 12)), 0)
         box_radius = max(int(subtitle_preset.get("boxRadius", 16)), 0)
         box_border_width = max(int(subtitle_preset.get("boxBorderWidth", 2)), 0)
-        box_fill_opacity = max(min(float(subtitle_preset.get("boxFillOpacity", 0.86)), 1.0), 0.0)
+        box_fill_opacity = max(min(float(subtitle_preset.get("boxFillOpacity", 0.8)), 1.0), 0.0)
         box_border_opacity = max(min(float(subtitle_preset.get("boxBorderOpacity", 1.0)), 1.0), 0.0)
         max_text_width = frame_rect.width() * 0.76
         text_width = min(

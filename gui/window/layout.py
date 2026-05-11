@@ -199,13 +199,13 @@ class WindowLayoutMixin:
         slider_grid = QGridLayout()
         slider_grid.setHorizontalSpacing(16)
         slider_grid.setVerticalSpacing(12)
-        self.font_size_slider = self._make_slider(10, 72, 14, self.on_font_size_changed)
+        self.font_size_slider = self._make_slider(10, 72, 20, self.on_font_size_changed)
 
         self.blur_slider = self._make_slider(0, 100, 80, self.on_blur_changed)
         self.bottom_offset_slider = self._make_slider(
             12, 180, 54, self.on_bottom_offset_changed
         )
-        self.font_size_value = QLabel("14 px")
+        self.font_size_value = QLabel("20 px")
         self.blur_value = QLabel("80%")
         self.bottom_offset_value = QLabel("54 px")
         slider_grid.addWidget(self._field_label("Cỡ chữ vietsub"), 0, 0)
@@ -264,7 +264,6 @@ class WindowLayoutMixin:
         for idx, (title, key) in enumerate(
             [
                 ("Ngôn ngữ nguồn", "sourceLanguage"),
-                ("Số speaker", "speakers"),
                 ("Bố cục audio", "voiceLayout"),
                 ("Kiểu cleanup", "cleanupMode"),
             ]
@@ -340,7 +339,7 @@ class WindowLayoutMixin:
         self.font_size_spin = SafeSpinBox()
         self.font_size_spin.setRange(10, 72)
         self.font_size_spin.setSuffix(" px")
-        self.font_size_spin.setValue(14)
+        self.font_size_spin.setValue(20)
         self.font_size_spin.setToolTip(
             "Cỡ chữ subtitle. Số càng lớn thì chữ càng to."
         )
@@ -394,7 +393,7 @@ class WindowLayoutMixin:
         self.box_fill_opacity_spin.setRange(0.15, 1.0)
         self.box_fill_opacity_spin.setDecimals(2)
         self.box_fill_opacity_spin.setSingleStep(0.05)
-        self.box_fill_opacity_spin.setValue(0.86)
+        self.box_fill_opacity_spin.setValue(0.8)
         self.box_fill_opacity_spin.setToolTip(
             "Độ đậm của nền box. Số càng lớn thì nền càng rõ."
         )
@@ -861,16 +860,16 @@ class WindowLayoutMixin:
         lang_grid.addWidget(self.main_source_language_combo, 0, 1)
         lang_grid.addWidget(self._field_label("Ngôn ngữ sub"), 0, 2)
         lang_grid.addWidget(self.main_target_language_combo, 0, 3)
+
         lang_grid.addWidget(self._field_label("Nhận diện speaker"), 1, 0)
         lang_grid.addWidget(self.main_speaker_detection_combo, 1, 1)
-        lang_grid.addWidget(self._field_label("Số speaker"), 1, 2)
-        lang_grid.addWidget(self.main_speaker_count_spin, 1, 3)
-        lang_grid.addWidget(self._field_label("Chế độ timing"), 2, 0)
-        lang_grid.addWidget(self.main_timing_mode_combo, 2, 1)
-        lang_grid.addWidget(self._field_label("Xử lý sub cũ"), 2, 2)
-        lang_grid.addWidget(self.main_cleanup_combo, 2, 3)
-        lang_grid.addWidget(self._field_label("Chế độ encode"), 3, 0)
-        lang_grid.addWidget(self.video_codec_combo, 3, 1)
+        lang_grid.addWidget(self._field_label("Chế độ timing"), 1, 2)
+        lang_grid.addWidget(self.main_timing_mode_combo, 1, 3)
+
+        lang_grid.addWidget(self._field_label("Xử lý sub cũ"), 2, 0)
+        lang_grid.addWidget(self.main_cleanup_combo, 2, 1)
+        lang_grid.addWidget(self._field_label("Chế độ encode"), 2, 2)
+        lang_grid.addWidget(self.video_codec_combo, 2, 3)
         lang_section.content_layout.addLayout(lang_grid)
 
         # Audio & Teaser
@@ -1330,13 +1329,13 @@ class WindowLayoutMixin:
         self.font_size_spin = SafeSpinBox()
         self.font_size_spin.setRange(10, 72)
         self.font_size_spin.setSuffix(" px")
-        self.font_size_spin.setValue(14)
+        self.font_size_spin.setValue(20)
         self.font_size_spin.setToolTip("Cỡ chữ subtitle.")
         self.font_size_spin.valueChanged.connect(self.on_font_size_changed)
-        self.font_size_slider = self._make_slider(10, 72, 14, self.on_font_size_changed)
+        self.font_size_slider = self._make_slider(10, 72, 20, self.on_font_size_changed)
         self.font_size_slider.valueChanged.connect(
             lambda v: self.font_size_spin.setValue(v) if not self.font_size_spin.hasFocus() else None)
-        self.font_size_value = QLabel("14 px")
+        self.font_size_value = QLabel("20 px")
         self.font_size_value.setFixedWidth(40)
         self.stroke_width_spin = SafeSpinBox()
         self.stroke_width_spin.setRange(0, 6)

@@ -106,7 +106,8 @@ def fetch_stickers(keyword: str) -> list[dict]:
 
 
 def main():
-    sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     all_stickers: list[dict] = []

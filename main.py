@@ -86,7 +86,11 @@ if len(sys.argv) > 1:
             # Try running the __main__ of the module
             mod = importlib.import_module(f"{module_name}.__main__")
             if hasattr(mod, "main"):
-                sys.exit(mod.main())
+                try:
+                    sys.exit(mod.main())
+                except Exception as e:
+                    print(f"Error executing {module_name}.main(): {e}")
+                    sys.exit(1)
             else:
                 print(f"No main function found in {module_name}.__main__")
                 sys.exit(1)
@@ -94,7 +98,11 @@ if len(sys.argv) > 1:
             try:
                 mod = importlib.import_module(module_name)
                 if hasattr(mod, "main"):
-                    sys.exit(mod.main())
+                    try:
+                        sys.exit(mod.main())
+                    except Exception as e:
+                        print(f"Error executing {module_name}.main(): {e}")
+                        sys.exit(1)
                 else:
                     print(f"No main function found in {module_name}")
                     sys.exit(1)

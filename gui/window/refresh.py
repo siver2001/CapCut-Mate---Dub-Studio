@@ -155,7 +155,7 @@ class WindowRefreshMixin:
         font_family = str(
             subtitle_preset.get("fontFamilyName") or font_option["fontFamilyName"]
         )
-        font_size = max(13, min(int(subtitle_preset.get("fontSize", 14)), 28))
+        font_size = max(13, min(int(subtitle_preset.get("fontSize", 20)), 28))
         font_color = str(subtitle_preset.get("fontColor") or "#ffffff")
         box_enabled = bool(subtitle_preset.get("boxEnabled", False))
         background = (
@@ -308,9 +308,6 @@ class WindowRefreshMixin:
         if hasattr(self, "summary_labels"):
             self.summary_labels["sourceLanguage"].setText(
                 str(analysis.get("sourceLanguage") or "--")
-            )
-            self.summary_labels["speakers"].setText(
-                str(len(analysis.get("speakers") or []))
             )
             self.summary_labels["voiceLayout"].setText(
                 repair_mojibake_text(

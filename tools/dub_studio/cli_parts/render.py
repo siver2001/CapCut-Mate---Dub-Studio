@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import inspect
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .common import *
 from .analysis import (
@@ -273,11 +276,11 @@ def env_flag(name: str) -> bool:
 
 def requested_video_codec_mode() -> str:
     mode = os.environ.get("CAPCUT_VIDEO_CODEC_MODE", "").strip().lower()
-    if mode in {"gpu_preferred", "cpu_stable"}:
+    if mode in {"auto", "gpu_preferred", "cpu_stable"}:
         return mode
-    if env_flag("CAPCUT_ENABLE_NVENC"):
-        return "gpu_preferred"
-    return "gpu_preferred"
+    if env_flag("CAPCUT_ENABLE_NVENC") or env_flag("CAPCUT_ENABLE_AMF"):
+        return "auto"
+    return "auto"
 
 
 @lru_cache(maxsize=1)
@@ -302,6 +305,39 @@ def can_use_nvenc() -> bool:
                 "-an",
                 "-c:v",
                 "h264_nvenc",
+                "-f",
+                "null",
+                "-",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=1)
+def can_use_amf() -> bool:
+    if "h264_amf" not in ffmpeg_encoders():
+        return False
+    try:
+        # Tiny smoke test for AMD AMF
+        run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=256x256:r=1",
+                "-frames:v",
+                "1",
+                "-an",
+                "-c:v",
+                "h264_amf",
                 "-f",
                 "null",
                 "-",
@@ -380,6 +416,9 @@ def choose_video_codec() -> tuple[str, list[str]]:
     mode = requested_video_codec_mode()
     if mode == "cpu_stable":
         return stable_video_codec()
+    
+    # In both 'auto' and 'gpu_preferred' modes, we prioritize GPU encoders.
+    # NVIDIA NVENC first, then AMD AMF.
     if can_use_nvenc():
         return "h264_nvenc", [
             "-preset",
@@ -391,6 +430,16 @@ def choose_video_codec() -> tuple[str, list[str]]:
             "-pix_fmt",
             "yuv420p",
         ]
+    if can_use_amf():
+        return "h264_amf", [
+            "-rc",
+            "vbr",
+            "-quality",
+            VIDEO_AMF_QUALITY,
+            "-pix_fmt",
+            "yuv420p",
+        ]
+        
     return stable_video_codec()
 
 
@@ -731,7 +780,7 @@ def invoke_create_final_audio_compat(
     background_music_path: Path | None = None,
     background_music_volume: float = 0.0,
 ) -> None:
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "audio_mix_mode": audio_mix_mode,
         "keep_original_audio": keep_original_audio,
         "background_audio_path": background_audio_path,
@@ -1010,6 +1059,9 @@ def apply_watermark_to_ffmpeg_command(
     # Actually, command input index calculation is safer if we just count '-i'
     input_count = command.count("-i")
     watermark_idx = input_count
+    # Add -loop 1 to ensure the watermark image doesn't "run out" of frames
+    command.insert(command.index("-map"), "-loop")
+    command.insert(command.index("-map"), "1")
     command.insert(command.index("-map"), "-i")
     command.insert(command.index("-map"), str(watermark_path))
     
@@ -1028,7 +1080,8 @@ def apply_watermark_to_ffmpeg_command(
     else: # bottom-right
         overlay_pos = f"W-w-{margin}:H-h-{margin}"
 
-    wm_filter = f"[{watermark_idx}:v]format=rgba,scale={wm_w}:-1[wm];"
+    # Use yuva420p for the watermark input to ensure alpha is preserved when overlaying on YUV video
+    wm_filter = f"[{watermark_idx}:v]scale={wm_w}:-1,format=yuva420p[wm];"
     
     if filter_arg == "-vf":
         # Convert -vf to -filter_complex
@@ -1280,7 +1333,8 @@ def hex_to_rgb_float(hex_color: str) -> tuple[float, float, float]:
     value = hex_color.strip().lstrip("#")
     if len(value) != 6:
         return (1.0, 1.0, 1.0)
-    return tuple(int(value[index : index + 2], 16) / 255.0 for index in (0, 2, 4))
+    r, g, b = (int(value[index : index + 2], 16) / 255.0 for index in (0, 2, 4))
+    return (r, g, b)
 
 
 def bottom_offset_to_transform_y(height: int, bottom_offset: int) -> float:
@@ -1569,7 +1623,7 @@ def build_default_render_options(analysis: dict[str, Any]) -> dict[str, Any]:
         "subtitlePreset": {
             "enabled": True,
             "positionPreset": "bottom",
-            "fontSize": 14,
+            "fontSize": 20,
             "fontFamily": "arial-bold",
             "fontFamilyLabel": "Arial Bold",
             "fontFamilyName": "Arial",
@@ -1584,7 +1638,7 @@ def build_default_render_options(analysis: dict[str, Any]) -> dict[str, Any]:
             "textEffect": "none",
             "boxLayoutMode": "line",
             "boxFillColor": "#77b8ee",
-            "boxFillOpacity": 0.86,
+            "boxFillOpacity": 0.8,
             "boxBorderColor": "#3b82f6",
             "boxBorderOpacity": 1.0,
             "boxBorderWidth": 2,
@@ -1766,8 +1820,6 @@ def do_analyze(
         language=None,
     )
     
-    sample_paths: dict[str, Path] = {}
-
     raw_subtitles = whisperx_analysis["rawSubtitles"]
     if not raw_subtitles:
         raise RuntimeError("No speech segments were detected from the input video.")
@@ -1786,6 +1838,7 @@ def do_analyze(
 
     refinement = {}
 
+    sample_paths: Any = {}
     if segments:
         emit_progress(phase="analysis", step="samples", progress=0.68, message="Đang tách mẫu giọng từng nhân vật")
         sample_paths = extract_speaker_samples(input_path, segments, dirs["analysis"] / "speakers")
@@ -1804,7 +1857,7 @@ def do_analyze(
     if language_confidence < 0.58:
         warnings.append("Độ tự tin ngôn ngữ nguồn đang thấp. Nên kiểm tra và sửa tay trước khi render.")
     if voice_layout == "single_voice":
-        warnings.append("Audio goc hien tai giong mot giọng chung. He thong se uu tien dung mot giọng de tranh nham nhan vat.")
+        warnings.append("Audio gốc hiện tại giống một giọng chung. Hệ thống sẽ ưu tiên dùng một giọng để tránh nhầm nhân vật.")
     elif speaker_confidence < 0.52:
         warnings.append("Số speaker được ước lượng theo heuristic. Nếu video là hội thoại, nên kiểm tra lại mapping giọng.")
 
@@ -1873,6 +1926,7 @@ def do_analyze_resilient(
     target_language: str = "vi",
     localization_mode: str = "creative",
 ) -> dict[str, Any]:
+    cli_log(f"Starting do_analyze_resilient for job {job_id}, input: {input_path}")
     emit_progress(
         phase="analyze",
         step="prepare",
@@ -1917,15 +1971,16 @@ def do_analyze_resilient(
     merged_srt_path = dirs["analysis"] / "transcript_merged.srt"
     whisperx_audio_path = dirs["analysis"] / "transcript_whisperx.wav"
 
+    cli_log("Extracting video metadata and thumbnail")
     emit_progress(phase="analyze", step="metadata", progress=0.05, message="Đang đọc thông tin video")
     extract_thumbnail(input_path, thumbnail_path)
+    cli_log("Thumbnail extracted successfully")
 
     transcribe_provider = DUB_TRANSCRIBE_PROVIDER or "auto"
     transcription_provider = f"whisperx:{WHISPERX_MODEL}"
     alignment_provider = "whisperx"
     diarization_provider = "whisperx"
-    sample_paths: dict[str, Path] = {}
-
+    sample_paths: Any = {}
     use_local_transcriber = transcribe_provider in LOCAL_TRANSCRIBE_PROVIDERS
     if use_local_transcriber:
         emit_progress(phase="analyze", step="transcribe", progress=0.24, message="Đang nhận diện lời nói bằng ffmpeg-whisper local")
@@ -1940,6 +1995,7 @@ def do_analyze_resilient(
         alignment_provider = "none"
         diarization_provider = "heuristic_fallback"
     else:
+        cli_log(f"Starting analyze_with_whisperx for {input_path}")
         emit_progress(phase="analyze", step="transcribe", progress=0.15, message=f"Đang nhận diện lời nói bằng WhisperX {WHISPERX_MODEL}")
         try:
             transcription = analyze_with_whisperx(
@@ -1953,6 +2009,7 @@ def do_analyze_resilient(
             if any("fallback heuristic speaker" in item for item in transcription.get("warnings") or []):
                 diarization_provider = "heuristic_fallback"
         except Exception as exc:
+            cli_log_error("analyze_with_whisperx failed", exc)
             import traceback
             try:
                 with open(ROOT / "whisperx_error.log", "a", encoding="utf-8") as f:

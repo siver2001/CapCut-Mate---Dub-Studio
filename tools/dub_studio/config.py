@@ -7,8 +7,10 @@ from pathlib import Path
 
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding="utf-8", write_through=True)
-        sys.stderr.reconfigure(encoding="utf-8", write_through=True)
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", write_through=True)
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", write_through=True)
     except Exception:
         pass
 
@@ -167,9 +169,11 @@ VIENEU_TTS_CONCURRENCY = max(
 )
 TTS_FIT_CACHE_ENABLED = env_bool("DUB_TTS_FIT_CACHE_ENABLED", default=True)
 VIDEO_X264_PRESET = env_value("DUB_VIDEO_X264_PRESET", default="veryfast") or "veryfast"
-VIDEO_X264_CRF = max(int(env_value("DUB_VIDEO_X264_CRF", default="28")), 18)
+VIDEO_X264_CRF = max(int(env_value("DUB_VIDEO_X264_CRF", default="23")), 18)
 VIDEO_NVENC_PRESET = env_value("DUB_VIDEO_NVENC_PRESET", default="p4") or "p4"
-VIDEO_NVENC_CQ = max(int(env_value("DUB_VIDEO_NVENC_CQ", default="28")), 18)
+VIDEO_NVENC_CQ = max(int(env_value("DUB_VIDEO_NVENC_CQ", default="23")), 18)
+VIDEO_AMF_PRESET = env_value("DUB_VIDEO_AMF_PRESET", default="speed") or "speed"
+VIDEO_AMF_QUALITY = env_value("DUB_VIDEO_AMF_QUALITY", default="speed") or "speed"
 TRANSLATE_BATCH_SIZE = max(int(env_value("DUB_TRANSLATE_BATCH_SIZE", default="4")), 1)
 TRANSLATE_FIRST_BATCH_SIZE = max(
     int(env_value("DUB_TRANSLATE_FIRST_BATCH_SIZE", default=str(min(TRANSLATE_BATCH_SIZE, 4)))),

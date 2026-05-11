@@ -153,7 +153,7 @@ def restore_vietnamese_diacritics(text: str) -> str:
         "ve": "về", "an": "ăn", "uong": "uống", "ngu": "ngủ", "noi": "nói",
         "thay": "thấy", "nghi": "nghĩ", "muon": "muốn", "can": "cần", "phai": "phải",
         "nen": "nên", "roi": "rồi", "va": "và", "voi": "với", "nhu": "như",
-        "the": "thế", "la": "là", "mot": "một", "bon": "bốn", "sau": "sáu",
+        "the": "thế", "la": "là", "mot": "một", "bon": "bốn",
         "bay": "bảy", "tam": "tám", "chin": "chín", "muoi": "mười",
         "khi": "khi", "nhung": "nhưng", "ma": "mà", "de": "để", "den": "đến",
         "tu": "từ", "vao": "vào", "ra": "ra", "len": "lên", "xuong": "xuống",
@@ -545,43 +545,6 @@ def ensure_sticker_preview_cache(sticker_options: dict[str, Any]) -> Path | None
     if not image_url:
         return None
 
-
-def ensure_qt_readable_sticker_preview(sticker_options: dict[str, Any]) -> Path | None:
-    """Return a sticker image path that QImage can read, converting with ffmpeg if needed."""
-    source = ensure_sticker_preview_cache(sticker_options)
-    if source is None:
-        return None
-    try:
-        from PyQt6.QtGui import QImage
-
-        if not QImage(str(source)).isNull():
-            return source
-        converted = source.with_name(f"{source.stem}_preview.png")
-        if converted.exists() and converted.stat().st_size > 0:
-            if not QImage(str(converted)).isNull():
-                return converted
-        import subprocess
-        import sys
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(source), "-frames:v", "1", str(converted)],
-            cwd=str(ROOT),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
-            check=False,
-            creationflags=creationflags,
-        )
-        if converted.exists() and converted.stat().st_size > 0:
-            if not QImage(str(converted)).isNull():
-                return converted
-    except Exception:
-        pass
-    return source
-
     local_candidate = Path(image_url).expanduser()
     if local_candidate.exists() and local_candidate.is_file():
         return local_candidate
@@ -640,6 +603,44 @@ def ensure_qt_readable_sticker_preview(sticker_options: dict[str, Any]) -> Path 
         return None
 
 
+def ensure_qt_readable_sticker_preview(sticker_options: dict[str, Any]) -> Path | None:
+    """Return a sticker image path that QImage can read, converting with ffmpeg if needed."""
+    source = ensure_sticker_preview_cache(sticker_options)
+    if source is None:
+        return None
+    try:
+        from PyQt6.QtGui import QImage
+
+        if not QImage(str(source)).isNull():
+            return source
+        converted = source.with_name(f"{source.stem}_preview.png")
+        if converted.exists() and converted.stat().st_size > 0:
+            if not QImage(str(converted)).isNull():
+                return converted
+        import subprocess
+        import sys
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(source), "-frames:v", "1", str(converted)],
+            cwd=str(ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+            creationflags=creationflags,
+        )
+        if converted.exists() and converted.stat().st_size > 0:
+            if not QImage(str(converted)).isNull():
+                return converted
+    except Exception:
+        pass
+    return source
+
+
+
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -692,7 +693,7 @@ def default_settings() -> dict[str, Any]:
         "subtitlePreset": {
             "enabled": True,
             "positionPreset": "bottom",
-            "fontSize": 14,
+            "fontSize": 20,
             "fontFamily": "arial-bold",
             "fontFamilyLabel": "Arial Bold",
             "fontFamilyName": "Arial",
@@ -708,7 +709,7 @@ def default_settings() -> dict[str, Any]:
             "textEffect": "none",
             "boxLayoutMode": "line",
             "boxFillColor": "#77b8ee",
-            "boxFillOpacity": 0.86,
+            "boxFillOpacity": 0.8,
             "boxBorderColor": "#3b82f6",
             "boxBorderOpacity": 1.0,
             "boxBorderWidth": 2,
@@ -716,7 +717,7 @@ def default_settings() -> dict[str, Any]:
             "boxPaddingX": 24,
             "boxPaddingY": 12,
             "bottomOffset": 54,
-            "cleanupBlurStrength": 14,
+            "cleanupBlurStrength": 80,
             "maxWordsPerChunk": 5,
             "maxCharsPerChunk": 22,
             "punctuationAwareSplit": True,

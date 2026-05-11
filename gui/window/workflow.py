@@ -2155,7 +2155,7 @@ class WindowWorkflowMixin:
 
         self.settings["outputTargets"]["mp4"] = self.output_mp4_check.isChecked()
         self.settings["outputTargets"]["draft"] = self.output_draft_check.isChecked()
-        self.settings["outputRatio"] = get_combo_val(getattr(self, "main_output_ratio_combo", None), getattr(self, "output_ratio_combo", None)) or "9:16"
+        self.settings["outputRatio"] = get_combo_val(getattr(self, "main_output_ratio_combo", None), getattr(self, "output_ratio_combo", None)) or "original"
         output_directory = self.output_dir_edit.text().strip()
         if not output_directory and hasattr(self, "output_folder_quick_edit"):
             output_directory = self.output_folder_quick_edit.text().strip()
@@ -2205,7 +2205,7 @@ class WindowWorkflowMixin:
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
             "sourceSubtitleCleanupMode": self.settings["sourceSubtitleCleanupMode"],
             "outputTargets": copy.deepcopy(self.settings["outputTargets"]),
-            "outputRatio": self.settings.get("outputRatio", "9:16"),
+            "outputRatio": self.settings.get("outputRatio", "original"),
             "timingMode": self.settings["timingMode"],
             "videoCodecMode": self.settings.get("videoCodecMode", "gpu_preferred"),
             "keepOriginalAudio": self.settings["keepOriginalAudio"],
@@ -2439,7 +2439,7 @@ class WindowWorkflowMixin:
             int(self.settings["subtitlePreset"].get("boxBorderWidth", 2))
         )
         self.box_fill_opacity_spin.setValue(
-            float(self.settings["subtitlePreset"].get("boxFillOpacity", 0.86))
+            float(self.settings["subtitlePreset"].get("boxFillOpacity", 0.8))
         )
         self._set_combo_value(
             self.text_effect_combo,
@@ -2506,9 +2506,9 @@ class WindowWorkflowMixin:
             bool(self.settings["outputTargets"]["draft"])
         )
         if hasattr(self, "output_ratio_combo"):
-            self._set_combo_value(self.output_ratio_combo, self.settings.get("outputRatio", "9:16"))
+            self._set_combo_value(self.output_ratio_combo, self.settings.get("outputRatio", "original"))
         if hasattr(self, "main_output_ratio_combo"):
-            self._set_combo_value(self.main_output_ratio_combo, self.settings.get("outputRatio", "9:16"))
+            self._set_combo_value(self.main_output_ratio_combo, self.settings.get("outputRatio", "original"))
         
         bg_music = self.settings.get("backgroundMusic", {})
         bg_enabled = bool(bg_music.get("enabled", False))
@@ -2568,7 +2568,7 @@ class WindowWorkflowMixin:
                 widget.blockSignals(False)
         self.font_size_value.setText(f"{self.settings['subtitlePreset']['fontSize']}px")
         self.blur_value.setText(
-            f"{self.settings['subtitlePreset']['cleanupBlurStrength']}px"
+            f"{self.settings['subtitlePreset']['cleanupBlurStrength']}%"
         )
         self.bottom_offset_value.setText(
             f"{self.settings['subtitlePreset']['bottomOffset']}px"
