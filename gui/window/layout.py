@@ -1497,6 +1497,17 @@ class WindowLayoutMixin:
         self.watermark_scale_slider = self._make_slider(5, 50, 15, self.on_watermark_size_changed)
         self.watermark_scale_value = QLabel("15%")
         self.watermark_scale_value.setFixedWidth(40)
+        
+        self.watermark_opacity_slider = self._make_slider(0, 100, 100, self.on_watermark_opacity_changed)
+        self.watermark_opacity_value = QLabel("100%")
+        self.watermark_opacity_value.setFixedWidth(40)
+        
+        self.watermark_remove_bg_check = QCheckBox("Xóa nền (Chroma Key)")
+        self.watermark_remove_bg_check.stateChanged.connect(self.on_basic_settings_changed)
+        self.watermark_bg_color_btn = QPushButton("Chọn màu")
+        self.watermark_bg_color_btn.setObjectName("ColorButton")
+        self.watermark_bg_color_btn.clicked.connect(self.pick_watermark_bg_color)
+        
         wm_grid.addWidget(self.watermark_enabled_check, 0, 0, 1, 4)
         wm_grid.addWidget(self._field_label("Ảnh"), 1, 0)
         wm_grid.addLayout(wm_path_row, 1, 1, 1, 3)
@@ -1505,6 +1516,14 @@ class WindowLayoutMixin:
         wm_grid.addWidget(self._field_label("Kích thước"), 3, 0)
         wm_grid.addWidget(self.watermark_scale_slider, 3, 1, 1, 2)
         wm_grid.addWidget(self.watermark_scale_value, 3, 3)
+        
+        wm_grid.addWidget(self._field_label("Độ mờ"), 4, 0)
+        wm_grid.addWidget(self.watermark_opacity_slider, 4, 1, 1, 2)
+        wm_grid.addWidget(self.watermark_opacity_value, 4, 3)
+        
+        wm_grid.addWidget(self.watermark_remove_bg_check, 5, 0, 1, 2)
+        wm_grid.addWidget(self.watermark_bg_color_btn, 5, 2, 1, 2)
+        
         wm_section.content_layout.addLayout(wm_grid)
 
         pr_col.addWidget(font_section)

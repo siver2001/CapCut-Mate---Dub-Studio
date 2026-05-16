@@ -12,10 +12,6 @@ __version__ = "1.0.0"
 __author__ = "Valtec Team"
 
 from .tts import TTS
-
-try:
-    from .zeroshot import ZeroShotTTS
-except ImportError:
-    ZeroShotTTS = None
+from .zeroshot import ZeroShotTTS
 
 __all__ = ["TTS", "ZeroShotTTS", "__version__"]

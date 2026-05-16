@@ -1436,6 +1436,26 @@ def ensure_valtec_zeroshot_assets(*, phase: str, step: str, progress: float) -> 
     shutil.copy2(source, VALTEC_HASP_MODEL_DIR / "pytorch_model.bin")
 
 
+def ensure_valtec_vits_assets(*, phase: str, step: str, progress: float) -> None:
+    local_dir = VALTEC_MODEL_DIR / "models" / "vits-vietnamese"
+    if (local_dir / "config.json").exists() and list(local_dir.glob("G*.pth")):
+        return
+
+    emit_progress(
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang tải model Valtec-TTS VITS (khoảng 150MB)...",
+    )
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(
+        repo_id="valtecAI-team/valtec-tts-pretrained",
+        local_dir=str(local_dir),
+        local_dir_use_symlinks=False,
+    )
+
+
 def ensure_valtec_runtime(
     *,
     phase: str,
@@ -1446,7 +1466,12 @@ def ensure_valtec_runtime(
     valtec_repo_dir = ensure_valtec_source_runtime(
         phase=phase,
         step=step,
-        progress=max(progress - 0.025, 0.0),
+        progress=max(progress - 0.03, 0.0),
+    )
+    ensure_valtec_vits_assets(
+        phase=phase,
+        step=step,
+        progress=max(progress - 0.02, 0.0),
     )
     ensure_valtec_python_runtime(
         phase=phase,

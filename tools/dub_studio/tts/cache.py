@@ -25,8 +25,9 @@ def tts_cache_key(
     pitch: str,
     volume: str,
     text: str,
+    global_speed: float = 1.0,
 ) -> str:
-    payload = f"{speaker_id}|{voice}|{voice_cache_salt}|{rate}|{pitch}|{volume}|{text}"
+    payload = f"{speaker_id}|{voice}|{voice_cache_salt}|{rate}|{pitch}|{volume}|{text}|{global_speed}"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -48,6 +49,7 @@ def build_tts_cache_paths(
     raw_extension: str,
     target_ms: int,
     timing_mode: str,
+    global_speed: float = 1.0,
 ) -> TtsCachePaths:
     cache_key = tts_cache_key(
         speaker_id=speaker_id,
@@ -57,6 +59,7 @@ def build_tts_cache_paths(
         pitch=pitch,
         volume=volume,
         text=text,
+        global_speed=global_speed,
     )
     raw_stem = f"{index:04d}_{cache_key}"
     if raw_extension == ".wav":

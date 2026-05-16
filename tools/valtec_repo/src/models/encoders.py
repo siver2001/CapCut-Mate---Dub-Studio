@@ -295,10 +295,7 @@ class SpeakerEncoder(nn.Module):
     def _load_pretrained(self):
         # Local cache directory within the project
         project_root = os.getcwd()
-        cache_dir = os.environ.get(
-            "VALTEC_HASP_MODEL_DIR",
-            os.path.join(project_root, "pretrained", "hasp"),
-        )
+        cache_dir = os.path.join(project_root, "pretrained", "hasp")
         os.makedirs(cache_dir, exist_ok=True)
         model_path = os.path.join(cache_dir, "pytorch_model.bin")
 

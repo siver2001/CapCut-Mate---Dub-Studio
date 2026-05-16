@@ -21,17 +21,10 @@ _VIPHONEME_WORKDIR = None
 _VINORM_ISOLATED_PARENT = None
 
 
-def _viphoneme_temp_root() -> str:
-    root = os.environ.get("VIPHONEME_TEMP_ROOT") or tempfile.gettempdir()
-    os.makedirs(root, exist_ok=True)
-    return root
-
-
 def _get_viphoneme_workdir() -> str:
     global _VIPHONEME_WORKDIR
     if _VIPHONEME_WORKDIR is None:
-        _VIPHONEME_WORKDIR = os.path.join(_viphoneme_temp_root(), f"viphoneme_{os.getpid()}")
-        os.makedirs(_VIPHONEME_WORKDIR, exist_ok=True)
+        _VIPHONEME_WORKDIR = tempfile.mkdtemp(prefix="viphoneme_")
         atexit.register(shutil.rmtree, _VIPHONEME_WORKDIR, ignore_errors=True)
     return _VIPHONEME_WORKDIR
 
@@ -51,7 +44,7 @@ def _ensure_vinorm_isolated() -> None:
     if not os.path.isfile(os.path.join(src_dir, "__init__.py")):
         return
 
-    parent = os.path.join(_viphoneme_temp_root(), f"vinorm_{os.getpid()}")
+    parent = tempfile.mkdtemp(prefix="vinorm_")
     dst_dir = os.path.join(parent, "vinorm")
     os.makedirs(dst_dir, exist_ok=True)
 
@@ -288,7 +281,11 @@ def text_to_phonemes_viphoneme(text: str) -> Tuple[List[str], List[int], List[in
     """
     import warnings
 
-    # Removed frozen check - viphoneme now works perfectly in PyInstaller thanks to the new imp.py shim and valtec_wrapper patch.
+    # In frozen/PyInstaller mode, use char-based phonemizer directly
+    # to avoid vinorm dependency issues
+    is_frozen = getattr(sys, 'frozen', False)
+    if is_frozen:
+        return text_to_phonemes_charbased(text)
     
     # Normal mode: use full viphoneme with isolation
     try:

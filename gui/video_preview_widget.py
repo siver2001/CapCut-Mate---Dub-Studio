@@ -215,6 +215,7 @@ class _SubtitleOverlay(QGraphicsItem):
             path = watermark.get("path")
             wm_pm = QPixmap(path) if path else QPixmap()
             scale_factor = float(watermark.get("scale", 0.15))
+            opacity = float(watermark.get("opacity", 1.0))
             wm_w = max(10.0, frame_rect.width() * scale_factor)
             
             if not wm_pm.isNull():
@@ -227,7 +228,7 @@ class _SubtitleOverlay(QGraphicsItem):
                 wm_pm_scaled = None
                 
             pos = watermark.get("position", "top-right")
-            margin = 10
+            margin = 15
             
             if pos == "top-left":
                 wm_x = frame_rect.left() + margin
@@ -242,19 +243,21 @@ class _SubtitleOverlay(QGraphicsItem):
                 wm_x = frame_rect.right() - wm_w - margin
                 wm_y = frame_rect.bottom() - wm_h - margin
                 
+            painter.save()
             if wm_pm_scaled:
-                painter.save()
+                painter.setOpacity(opacity)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPixmap(int(wm_x), int(wm_y), wm_pm_scaled)
-                painter.restore()
             else:
                 rect = QRectF(wm_x, wm_y, wm_w, wm_h)
+                painter.setOpacity(max(0.3, opacity))
                 painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
                 painter.setBrush(QColor(8, 15, 29, 180))
                 painter.drawRoundedRect(rect, 4, 4)
                 painter.setPen(QColor("#ffffff"))
                 painter.setFont(QFont("Segoe UI", max(6, int(wm_h * 0.4))))
                 painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "[Watermark]")
+            painter.restore()
 
     def _paint_subtitle(self, painter: QPainter) -> None:
         subtitle_preset = self._subtitle_data.get("subtitlePreset") or {}

@@ -233,9 +233,9 @@ def estimate_tts_text_profile(text: str) -> dict[str, float]:
         + uppercase_runs * 1.8
     )
     expected_seconds = max(
-        len(words) / 2.72 if words else 0.0,
-        spoken_units / 11.8 if spoken_units else 0.0,
-        0.78 if chars <= 16 else 1.02,
+        len(words) / 2.35 if words else 0.0,
+        spoken_units / 9.8 if spoken_units else 0.0,
+        0.82 if chars <= 16 else 1.05,
     )
     return {
         "chars": float(chars),
@@ -325,9 +325,9 @@ def estimate_rate(text: str, target_ms: int, timing_mode: str = "balanced_natura
     target_seconds = target_ms / 1000
     profile = estimate_tts_text_profile(text)
     pressure = profile["expectedSeconds"] / max(target_seconds, 0.1)
-    percent = int(round((pressure - 1.0) * (96 if is_ultra_tight_mode(timing_mode) else 84)))
+    percent = int(round((pressure - 1.0) * (78 if is_ultra_tight_mode(timing_mode) else 62)))
     if target_seconds < 1.35:
-        percent += 7 if is_ultra_tight_mode(timing_mode) else 4
+        percent += 4 if is_ultra_tight_mode(timing_mode) else 2
     elif target_seconds > 3.1:
         percent -= 1 if is_ultra_tight_mode(timing_mode) else 2
     return format_rate_percent(percent, timing_mode=timing_mode)
@@ -362,11 +362,11 @@ def smooth_rate_transition(
         return rate
     current_percent = parse_rate_percent(rate)
     previous_percent = parse_rate_percent(previous_rate)
-    max_delta = 10 if target_ms >= 1700 else 12
+    max_delta = 6 if target_ms >= 1700 else 8
     if str(delivery or "").strip().lower() in {"excited", "urgent"}:
-        max_delta += 3
-    if abs(current_percent - previous_percent) <= 4:
-        current_percent = int(round((current_percent * 2 + previous_percent) / 3))
+        max_delta += 2
+    if abs(current_percent - previous_percent) <= 3:
+        current_percent = int(round((current_percent * 3 + previous_percent) / 4))
     else:
         current_percent = previous_percent + max(min(current_percent - previous_percent, max_delta), -max_delta)
     return format_rate_percent(current_percent, timing_mode=timing_mode, intro=intro)
@@ -758,6 +758,7 @@ def synthesize_tts(
     volume: str = "+0%",
     speaker_id: str = "speaker_1",
     job_id: str = "",
+    global_speed: float = 1.0,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists() and output_path.stat().st_size <= 0:
@@ -790,6 +791,11 @@ def synthesize_tts(
                 if rate and rate.endswith("%"):
                     speed_factor = 1.0 + (float(rate[:-1]) / 100.0)
                     speed_val = 1.0 / max(0.4, speed_factor)
+                
+                # Apply global speed adjustment (e.g. 0.9 for slower, 1.1 for faster)
+                if global_speed != 1.0:
+                    speed_val = speed_val / max(0.1, global_speed)
+                    
                 speed_val = max(0.4, min(2.5, speed_val))
             except Exception:
                 speed_val = 1.0
@@ -1019,6 +1025,23 @@ def fit_audio_length_with_mode(
         return ffprobe_audio_duration_ms(output_path)
 
     if preserve_voice:
+        ratio = clip_ms / max(target_fill_ms, 1)
+        # Allow subtle time-stretching (within 8%) even for high-fidelity voices
+        # as it sounds more natural than silence padding or abrupt truncation.
+        if 0.92 <= ratio <= 1.08:
+            run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(source_path),
+                    "-filter:a",
+                    build_atempo_filter(ratio),
+                    str(output_path),
+                ]
+            )
+            return ffprobe_audio_duration_ms(output_path)
+            
         if clip_ms < target_fill_ms:
             run(
                 [
@@ -1162,8 +1185,8 @@ def resolve_segment_target_ms(
     gap_before = max(start_ms - previous_end, 0)
     gap_after = max(next_start - end_ms, 0)
     ultra_tight = is_ultra_tight_mode(timing_mode)
-    lead_guard = min(36 if ultra_tight else 60, gap_before // (4 if ultra_tight else 3))
-    tail_allowance = min(int(gap_after * (0.25 if ultra_tight else 0.65)), 250 if ultra_tight else 650)
+    lead_guard = min(36 if ultra_tight else 50, gap_before // (4 if ultra_tight else 3))
+    tail_allowance = min(int(gap_after * (0.35 if ultra_tight else 0.75)), 300 if ultra_tight else 850)
     target_ms = base_duration - lead_guard - (30 if ultra_tight else 50) + tail_allowance
     max_available = max(next_start - start_ms - (40 if ultra_tight else 70), 520)
     profile = estimate_tts_text_profile(text or segment.get("translatedText") or segment.get("sourceText") or "")
@@ -1188,11 +1211,11 @@ def refine_tts_rate(
     ultra_tight = is_ultra_tight_mode(timing_mode)
     if (0.96 <= ratio <= 1.06) if ultra_tight else (0.9 <= ratio <= 1.12):
         return current_rate
-    adjustment = int(round((ratio - 1.0) * (96 if ultra_tight else 78)))
+    adjustment = int(round((ratio - 1.0) * (80 if ultra_tight else 65)))
     if ratio > (1.22 if ultra_tight else 1.35):
-        adjustment += 6 if ultra_tight else 4
+        adjustment += 4 if ultra_tight else 2
     elif ratio < (0.84 if ultra_tight else 0.75):
-        adjustment -= 6 if ultra_tight else 4
+        adjustment -= 4 if ultra_tight else 2
     next_percent = parse_rate_percent(current_rate) + adjustment
     return format_rate_percent(next_percent, timing_mode=timing_mode, intro=intro)
 
@@ -1221,6 +1244,7 @@ def synthesize_timed_tts_clip(
     rate_delta_percent: int = 0,
     previous_rate: str | None = None,
     job_id: str = "",
+    global_speed: float = 1.0,
 ) -> tuple[Path, int, str, str, str, str]:
     delivery_profile = build_tts_delivery_profile(
         text=translated,
@@ -1274,6 +1298,7 @@ def synthesize_timed_tts_clip(
                 raw_extension=raw_extension,
                 target_ms=target_ms,
                 timing_mode=timing_mode,
+                global_speed=global_speed,
             )
             raw_clip = cache_paths.raw_clip
             prepared_clip = cache_paths.prepared_clip
@@ -1289,7 +1314,17 @@ def synthesize_timed_tts_clip(
                     raw_clip.unlink(missing_ok=True)
             if not raw_clip.exists():
                 try:
-                    synthesize_tts(candidate_text, voice, rate, raw_clip, pitch=pitch, volume=volume, speaker_id=speaker_id, job_id=job_id)
+                    synthesize_tts(
+                        tts_text,
+                        voice,
+                        rate,
+                        raw_clip,
+                        pitch=pitch,
+                        volume=volume,
+                        speaker_id=speaker_id,
+                        job_id=job_id,
+                        global_speed=global_speed,
+                    )
                 except Exception as exc:
                     last_synthesis_error = exc
                     if intro:
@@ -1370,6 +1405,7 @@ def synthesize_timed_tts_clip(
                     voice=voice,
                     speaker_id=speaker_id,
                     job_id=job_id,
+                    global_speed=global_speed,
                 )
                 cache_paths = build_tts_cache_paths(
                     tts_dir=tts_dir,
@@ -1397,6 +1433,7 @@ def synthesize_timed_tts_clip(
                     volume="+0%",
                     speaker_id=speaker_id,
                     job_id=job_id,
+                    global_speed=global_speed,
                 )
                 prepare_tts_clip_for_timeline(raw_clip, prepared_clip)
                 clip_ms = fit_audio_length_with_mode(
@@ -1513,6 +1550,7 @@ def _run_tts_chain(
     timing_mode: str,
     tts_dir: Path,
     job_id: str,
+    global_speed: float = 1.0,
 ) -> list[dict[str, Any]]:
     chain_results: list[dict[str, Any]] = []
 
@@ -1591,6 +1629,7 @@ def _run_tts_chain(
                     tts_dir=tts_dir,
                     previous_rate=previous_rate,
                     job_id=job_id,
+                    global_speed=global_speed,
                 )
                 previous_rate = rate
 
@@ -1658,6 +1697,7 @@ def _run_tts_chain(
                     tts_dir=tts_dir,
                     previous_rate=previous_rate,
                     job_id=job_id,
+                    global_speed=global_speed,
                 )
             except Exception as exc:
                 if not DUB_TTS_ALLOW_SILENT_FALLBACK:
@@ -1882,6 +1922,7 @@ def create_dub_audio(
     timing_mode: str,
     tts_dir: Path,
     dub_audio_path: Path,
+    global_speed: float = 1.0,
 ) -> list[ClipManifest]:
     manifests: list[ClipManifest] = []
     duration_seconds = max(video_meta["durationMs"] / 1000, 0.1)
@@ -1999,6 +2040,7 @@ def create_dub_audio(
                             timing_mode=timing_mode,
                             tts_dir=tts_dir,
                             job_id=job_id,
+                            global_speed=global_speed,
                         )
                         for chain in chains
                     ]
@@ -2013,6 +2055,7 @@ def create_dub_audio(
                             timing_mode=timing_mode,
                             tts_dir=tts_dir,
                             job_id=job_id,
+                            global_speed=global_speed,
                         )
                     )
     generated_items.sort(key=lambda item: int(item["index"]))

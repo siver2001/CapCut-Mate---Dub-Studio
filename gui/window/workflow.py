@@ -828,7 +828,34 @@ class WindowWorkflowMixin:
         if not path:
             return
         self.watermark_path_edit.setText(path)
-        self.settings.setdefault("watermark", {})["path"] = path
+        wm = self.settings.setdefault("watermark", {})
+        wm["path"] = path
+        
+        # Auto-detect background removal needs
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                has_alpha = "A" in img.mode or (img.mode == "P" and "transparency" in img.info)
+                if not has_alpha:
+                    # Auto-enable background removal and sample color
+                    wm["removeBg"] = True
+                    tl = img.getpixel((0, 0))
+                    if isinstance(tl, tuple):
+                        wm["bgColor"] = "#{:02x}{:02x}{:02x}".format(tl[0], tl[1], tl[2])
+                    else:
+                        wm["bgColor"] = "#{:02x}{:02x}{:02x}".format(tl, tl, tl)
+                    if hasattr(self, "watermark_remove_bg_check"):
+                        self.watermark_remove_bg_check.setChecked(True)
+                else:
+                    # If it already has alpha, we can usually turn off removeBg unless user wants it
+                    # But for "automatic", we'll just leave it as is or turn it off
+                    # Let's keep it OFF for true transparent PNGs
+                    wm["removeBg"] = False
+                    if hasattr(self, "watermark_remove_bg_check"):
+                        self.watermark_remove_bg_check.setChecked(False)
+        except Exception:
+            pass
+
         self.on_basic_settings_changed()
 
     def _ensure_directory(self, raw_path: str, fallback: Path) -> Path:
@@ -1812,6 +1839,22 @@ class WindowWorkflowMixin:
             self.watermark_scale_value.setText(f"{safe_value}%")
         self.refresh_preview()
 
+    def on_watermark_opacity_changed(self, value: int) -> None:
+        safe_value = max(0, min(100, int(value)))
+        self.settings.setdefault("watermark", {})["opacity"] = safe_value / 100.0
+        if hasattr(self, "watermark_opacity_value"):
+            self.watermark_opacity_value.setText(f"{safe_value}%")
+        self.refresh_preview()
+
+    def pick_watermark_bg_color(self) -> None:
+        wm = self.settings.setdefault("watermark", {})
+        current = QColor(wm.get("bgColor", "#000000"))
+        color = QColorDialog.getColor(current, self, "Chọn màu nền để xóa")
+        if not color.isValid():
+            return
+        wm["bgColor"] = color.name()
+        self.refresh_all()
+
     def on_watermark_scale_dragged(self, scale: float) -> None:
         slider_value = max(5, min(50, int(round(float(scale) * 100))))
         self.settings.setdefault("watermark", {})["scale"] = slider_value / 100.0
@@ -2171,6 +2214,8 @@ class WindowWorkflowMixin:
         self.settings["watermark"]["path"] = self.watermark_path_edit.text()
         self.settings["watermark"]["position"] = str(self.watermark_position_combo.currentData())
         self.settings["watermark"]["scale"] = float(self.watermark_scale_slider.value()) / 100.0
+        self.settings["watermark"]["opacity"] = float(self.watermark_opacity_slider.value()) / 100.0
+        self.settings["watermark"]["removeBg"] = self.watermark_remove_bg_check.isChecked()
         self._sync_voice_mapping_from_widgets()
         if not getattr(self, "voice_combo_map", {}):
             self.settings["voiceMapping"] = {}
@@ -2362,6 +2407,8 @@ class WindowWorkflowMixin:
             self.watermark_path_edit,
             self.watermark_position_combo,
             self.watermark_scale_slider,
+            self.watermark_opacity_slider,
+            self.watermark_remove_bg_check,
         ]
         for optional_name in (
             "default_voice_combo", "default_voice_test_btn",
@@ -2563,6 +2610,8 @@ class WindowWorkflowMixin:
         self.watermark_path_edit.setText(watermark.get("path", ""))
         self._set_combo_value(self.watermark_position_combo, watermark.get("position", "top-right"))
         self.watermark_scale_slider.setValue(int(watermark.get("scale", 0.15) * 100))
+        self.watermark_opacity_slider.setValue(int(watermark.get("opacity", 1.0) * 100))
+        self.watermark_remove_bg_check.setChecked(bool(watermark.get("removeBg", False)))
         for widget in widgets:
             if widget is not None:
                 widget.blockSignals(False)
@@ -2576,6 +2625,10 @@ class WindowWorkflowMixin:
         if hasattr(self, "watermark_scale_value"):
             self.watermark_scale_value.setText(
                 f"{int(round(float(watermark.get('scale', 0.15)) * 100))}%"
+            )
+        if hasattr(self, "watermark_opacity_value"):
+            self.watermark_opacity_value.setText(
+                f"{int(round(float(watermark.get('opacity', 1.0)) * 100))}%"
             )
         default_voice_status_label = getattr(self, "default_voice_status_label", None)
         if default_voice_status_label is not None:

@@ -823,6 +823,7 @@ def render_intro_hook(
     background_music_volume: float = 0.0,
     dynamic_regions: list[dict[str, Any]] | None = None,
     output_ratio: str = "original",
+    global_speed: float = 1.0,
 ) -> dict[str, Any]:
     video_duration_ms = int(video_meta.get("durationMs", 0))
     clip_window = select_intro_hook_window(
@@ -867,6 +868,7 @@ def render_intro_hook(
         tts_dir=dirs["tts"],
         intro=True,
         rate_delta_percent=intro_rate_delta_percent,
+        global_speed=global_speed,
     )
     actual_intro_duration_ms = min(
         max(
@@ -957,7 +959,14 @@ def render_intro_hook(
             output_ratio=output_ratio,
         )
     else:
-        mux_video_with_audio(video_path=clip_path, audio_path=mixed_intro_audio, output_path=teaser_output_path, output_ratio=output_ratio)
+        mux_video_with_audio(
+            video_path=clip_path, 
+            audio_path=mixed_intro_audio, 
+            output_path=teaser_output_path, 
+            output_ratio=output_ratio,
+            watermark_options=subtitle_preset.get("watermarkOptions"),
+            video_meta=video_meta
+        )
     return {
         "enabled": True,
         "text": intro_text,
@@ -1056,7 +1065,7 @@ def apply_watermark_to_ffmpeg_command(
     watermark_path = Path(watermark_options["path"])
     if not watermark_path.exists():
         return filter_arg, video_filter, video_map
-    # Actually, command input index calculation is safer if we just count '-i'
+
     input_count = command.count("-i")
     watermark_idx = input_count
     # Add -loop 1 to ensure the watermark image doesn't "run out" of frames
@@ -1066,11 +1075,15 @@ def apply_watermark_to_ffmpeg_command(
     command.insert(command.index("-map"), str(watermark_path))
     
     scale_factor = float(watermark_options.get("scale", 0.15))
+    opacity = float(watermark_options.get("opacity", 1.0))
+    remove_bg = bool(watermark_options.get("removeBg", False))
+    bg_color = str(watermark_options.get("bgColor", "#000000")).replace("#", "0x")
+    
     video_width = int(video_meta.get("width", 1080)) if video_meta else 1080
     wm_w = max(10, int(video_width * scale_factor))
     
     pos = watermark_options.get("position", "top-right")
-    margin = 10
+    margin = 15
     if pos == "top-left":
         overlay_pos = f"{margin}:{margin}"
     elif pos == "top-right":
@@ -1080,24 +1093,68 @@ def apply_watermark_to_ffmpeg_command(
     else: # bottom-right
         overlay_pos = f"W-w-{margin}:H-h-{margin}"
 
-    # Use yuva420p for the watermark input to ensure alpha is preserved when overlaying on YUV video
-    wm_filter = f"[{watermark_idx}:v]scale={wm_w}:-1,format=yuva420p[wm];"
+    # Use rgba format and apply opacity via colorchannelmixer
+    # This ensures transparency in PNGs is handled correctly.
+    # We also add colorkey if background removal is requested OR detected automatically.
+    wm_filter = f"[{watermark_idx}:v]format=rgba,scale={wm_w}:-1"
+    
+    # Auto-detection logic
+    detected_colors = []
+    try:
+        from PIL import Image
+        with Image.open(watermark_path) as img:
+            has_alpha = "A" in img.mode or (img.mode == "P" and "transparency" in img.info)
+            
+            # If the user didn't specify a color or if we want to be automatic
+            if not has_alpha or remove_bg:
+                w, h = img.size
+                corners = [
+                    img.getpixel((0, 0)),
+                    img.getpixel((w - 1, 0)),
+                    img.getpixel((0, h - 1)),
+                    img.getpixel((w - 1, h - 1))
+                ]
+                
+                def to_hex(p):
+                    if isinstance(p, tuple):
+                        if len(p) >= 4 and p[3] == 0:
+                            return None
+                        return "0x{:02x}{:02x}{:02x}".format(p[0], p[1], p[2])
+                    return "0x{:02x}{:02x}{:02x}".format(p, p, p)
+
+                # Get unique colors from corners, filtering out None (transparent)
+                unique_corners = [c for c in [to_hex(c) for c in corners] if c is not None]
+                unique_corners = list(dict.fromkeys(unique_corners))
+                
+                if remove_bg and bg_color != "0x000000":
+                    detected_colors = [bg_color]
+                else:
+                    # If auto, take the most common corner color or just all unique ones if few
+                    detected_colors = unique_corners[:2] # Max 2 for checkerboard
+    except Exception:
+        if remove_bg:
+            detected_colors = [bg_color]
+
+    # Apply colorkey filters for detected background colors
+    for color in detected_colors:
+        wm_filter += f",colorkey={color}:0.12:0.06"
+        
+    if opacity < 1.0:
+        wm_filter += f",colorchannelmixer=aa={opacity:.3f}"
+        
+    # Ensure watermark has alpha but compatible with YUV overlay
+    wm_filter += ",format=yuva420p[wm];"
     
     if filter_arg == "-vf":
-        # Convert -vf to -filter_complex
         filter_arg = "-filter_complex"
         if video_map == "0:v:0":
-            # No existing filter_complex, just apply to 0:v:0
-            video_filter = f"{wm_filter}[0:v:0][wm]overlay={overlay_pos}:format=auto[vout]"
+            video_filter = f"{wm_filter}[0:v:0][wm]overlay={overlay_pos}[vout]"
         else:
-            # -vf with an output? Unlikely. But if so:
-            video_filter = f"[0:v:0]{video_filter}[base];{wm_filter}[base][wm]overlay={overlay_pos}:format=auto[vout]"
+            video_filter = f"[0:v:0]{video_filter}[base];{wm_filter}[base][wm]overlay={overlay_pos}[vout]"
         video_map = "[vout]"
     else:
-        # Already -filter_complex
-        # We need to take the output map, overlay watermark, and output a new map
         old_out = video_map.strip("[]")
-        video_filter = f"{video_filter};{wm_filter}[{old_out}][wm]overlay={overlay_pos}:format=auto[vout_wm]"
+        video_filter = f"{video_filter};{wm_filter}[{old_out}][wm]overlay={overlay_pos}[vout_wm]"
         video_map = "[vout_wm]"
         
     return filter_arg, video_filter, video_map
@@ -1109,6 +1166,9 @@ def apply_aspect_ratio_to_ffmpeg_command(
     output_ratio: str
 ) -> tuple[str, str, str]:
     if output_ratio == "original" or not output_ratio:
+        return filter_arg, video_filter, video_map
+    
+    if output_ratio == "original":
         return filter_arg, video_filter, video_map
     
     is_dynamic = output_ratio.endswith("_dynamic")
@@ -2148,11 +2208,15 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     dirs = ensure_job_dirs(analysis["jobId"])
     input_path = Path(analysis["inputPath"]).resolve()
     subtitle_preset = {**analysis.get("renderDefaults", {}).get("subtitlePreset", {}), **render_options.get("subtitlePreset", {})}
+    wm_cfg = render_options.get("watermark") or {}
     subtitle_preset["watermarkOptions"] = {
-        "enabled": bool(render_options.get("watermarkEnabled", False)),
-        "path": render_options.get("watermarkPath", ""),
-        "position": render_options.get("watermarkPosition", "top-right"),
-        "scale": float(render_options.get("watermarkScale", 0.15)),
+        "enabled": bool(wm_cfg.get("enabled", render_options.get("watermarkEnabled", False))),
+        "path": wm_cfg.get("path", render_options.get("watermarkPath", "")),
+        "position": wm_cfg.get("position", render_options.get("watermarkPosition", "top-right")),
+        "scale": float(wm_cfg.get("scale", render_options.get("watermarkScale", 0.15))),
+        "opacity": float(wm_cfg.get("opacity", render_options.get("watermarkOpacity", 1.0))),
+        "removeBg": bool(wm_cfg.get("removeBg", render_options.get("watermarkRemoveBg", False))),
+        "global_speed": float(wm_cfg.get("global_speed", render_options.get("watermarkGlobalSpeed", 1.0))),
     }
     voice_mapping = {
         speaker_id: resolve_voice_preset(voice)
@@ -2189,7 +2253,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     target_language = render_options.get("targetLanguage") or analysis.get("targetLanguage") or "vi"
     localization_mode = str(render_options.get("localizationMode") or analysis.get("renderDefaults", {}).get("localizationMode") or "creative")
     output_targets = render_options.get("outputTargets") or {"mp4": True, "draft": False}
-    output_ratio = render_options.get("outputRatio") or "9:16"
+    output_ratio = render_options.get("outputRatio") or "original"
     subtitle_enabled = bool(subtitle_preset.get("enabled", True))
     effective_subtitle_region = resolve_subtitle_region_for_position(
         analysis["videoMeta"],
@@ -2360,14 +2424,15 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     emit_progress(phase="render", step="tts", progress=0.44, message="Đang tạo lồng tiếng")
     dub_audio_path = dirs["audio"] / "dub_voice.wav"
     manifest = create_dub_audio(
-        job_id=str(analysis.get("jobId") or ""),
-        video_meta=analysis["videoMeta"],
+        job_id=str(analysis.get('jobId') or ''),
+        video_meta=analysis['videoMeta'],
         source_video_path=input_path,
         segments=segments,
         voices=voice_mapping,
         timing_mode=timing_mode,
         tts_dir=dirs["tts"],
         dub_audio_path=dub_audio_path,
+        global_speed=float(subtitle_preset["watermarkOptions"].get("global_speed", 1.0)),
     )
     manifest_path = dirs["audio"] / "dub_manifest.json"
     manifest_path.write_text(json.dumps([asdict(item) for item in manifest], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2456,6 +2521,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 background_music_volume=background_music_volume,
                 dynamic_regions=dynamic_regions,
                 output_ratio=output_ratio,
+                global_speed=float(subtitle_preset["watermarkOptions"].get("global_speed", 1.0)),
             )
             flattened_render_path = dirs["render"] / f"{Path(input_path).stem}_dubstudio.mp4"
             concat_rendered_videos(Path(intro_result["videoPath"]), main_render_path, flattened_render_path)
