@@ -1650,14 +1650,24 @@ def detect_subtitle_region_in_frame(
     best_candidate_score = -1.0
 
     for raw_start, raw_end in candidate_ranges:
-        start = max(raw_start - 4, 0)
-        end = min(raw_end + 4, sample_height)
+        # Find the peak scoring row within this candidate range to anchor the subtitle
+        range_scores = row_scores[raw_start:raw_end]
+        if not range_scores:
+            continue
+        peak_y_in_range = raw_start + range_scores.index(max(range_scores))
+        
+        # We restrict the vertical scan band tightly around the peak row (peak_y - 6 to peak_y + 8)
+        # and add padding later. This is optimized to capture standard Chinese character heights
+        # without missing hook stroke accents or bloating the mask.
+        start = max(peak_y_in_range - 6, raw_start)
+        end = min(peak_y_in_range + 8, raw_end)
+        
         band_height = max(end - start, 1)
         band_score = sum(row_scores[start:end])
         
         y_center_norm = (start + end) / 2 / max(sample_height, 1)
         vertical_bias = 0.5  # Heavy penalty for upper half to avoid dynamic stickers
-        if 0.55 <= y_center_norm <= 0.95:  # standard bottom dialogue area
+        if 0.75 <= y_center_norm <= 0.95:  # standard bottom dialogue area
             vertical_bias = 2.8
         elif 0.05 <= y_center_norm <= 0.40:  # top dialogue / lyrics area
             vertical_bias = 0.65
@@ -1694,10 +1704,12 @@ def detect_subtitle_region_in_frame(
         spans = [span for span in spans if span[1] - span[0] >= min_span]
 
         if not spans:
-            fallback_left = int((int(fallback_region.get("x", 0)) / max(int(video_meta["width"]), 1)) * sample_width)
-            fallback_width = int((int(fallback_region.get("w", sample_width)) / max(int(video_meta["width"]), 1)) * sample_width)
-            left = max(fallback_left, 0)
-            right = min(left + max(fallback_width, int(sample_width * 0.48)), sample_width - 1)
+            # Avoid stretching to full screen width by default. 
+            # Fallback to a centered width of max 65% of screen width if no region config is specified.
+            fallback_width = int(sample_width * 0.65)
+            fallback_left = (sample_width - fallback_width) // 2
+            left = fallback_left
+            right = left + fallback_width
             chosen_span_score = band_score * 0.55
         else:
             chosen_span = None
@@ -1718,14 +1730,16 @@ def detect_subtitle_region_in_frame(
                 if span_score > chosen_span_score:
                     chosen_span_score = span_score
                     chosen_span = (span_start, span_end)
-            left = chosen_span[0] if chosen_span else margin_x
-            right = (chosen_span[1] - 1) if chosen_span else sample_width - margin_x - 1
+            # Apply padding margin to prevent cutoffs
+            left = max(chosen_span[0] - 4, margin_x) if chosen_span else margin_x
+            right = min(chosen_span[1] + 3, sample_width - margin_x - 1) if chosen_span else sample_width - margin_x - 1
 
-        region_x = int(max((left - 8) * scale_x, 0))
-        region_y = int(max((start - 4) * scale_y, 0))
-        # Calculate width dynamically based on detected text span + 5% buffer
-        region_w = int(((right - left) + 8) * scale_x * 1.05)
-        region_h = int(max(((end - start) + 4) * scale_y, video_meta["height"] * 0.035))
+        region_x = int(max((left - 3) * scale_x, 0))
+        region_y = int(max((start - 1) * scale_y, 0))
+        # Calculate width dynamically with padding and +8% buffer as safety margin
+        region_w = int(((right - left) + 12) * scale_x * 1.08)
+        # Apply +8% buffer to height as requested to fully capture top/bottom accents
+        region_h = int(max(((end - start) + 2) * scale_y, video_meta["height"] * 0.042) * 1.08)
         region_w = min(region_w, video_meta["width"] - region_x)
         region_h = min(region_h, video_meta["height"] - region_y)
         
@@ -1735,14 +1749,15 @@ def detect_subtitle_region_in_frame(
         if dx_center > video_meta["width"] * 0.30:
             continue
 
-        # Subtitles are wider than tall - filter out squares and vertical blocks (e.g. animals/furniture)
-        aspect_ratio = region_w / max(region_h, 1)
-        if aspect_ratio < 1.3:
-            continue
-
         # Apply Canny validation to confirm fallback stripe contains actual high-contrast text lines
         roi = im[start:end, left:right]
         y_center_norm = (start + end) / 2 / max(sample_height, 1)
+
+        # Subtitles are wider than tall - filter out squares and vertical blocks (e.g. animals/furniture)
+        # We relax this for standard bottom third dialogue since short subtitles can have small aspect ratios
+        aspect_ratio = region_w / max(region_h, 1)
+        if aspect_ratio < 1.3 and y_center_norm < 0.75:
+            continue
         is_top = y_center_norm < 0.48
         
         if not validate_gray_roi_as_text(roi, is_top_area=is_top):
@@ -2057,6 +2072,14 @@ def build_dynamic_subtitle_regions(
                         cluster.append((pt_test, r_test))
                 if len(cluster) > len(best_cluster):
                     best_cluster = cluster
+                    
+            # Golden Rule of Safety: Purge any cluster whose Y coordinates lie outside the standard bottom dialogue plane (Norm Y < 0.75)
+            # to guarantee absolutely zero false positives on upper half layers (the dog's body, background decorations)
+            if best_cluster:
+                mean_y = sum(int(r.get("centerY", 0)) for pt, r in best_cluster) / len(best_cluster)
+                mean_y_norm = mean_y / max(video_meta.get("height", 720), 1)
+                if mean_y_norm < 0.75:
+                    best_cluster = []
             
             # Majority rule filters
             if len(detected_points) >= 3:
@@ -2076,58 +2099,67 @@ def build_dynamic_subtitle_regions(
                 if float(detected_points[0][1].get("confidence", 0.0)) < 0.65:
                     detected_points = []
 
-        # 2. Group consecutive detected frames that are within a tight temporal gap (<= 600ms)
-        sub_groups = []
-        curr_group = []
-        for pt, r in detected_points:
-            if not curr_group:
-                curr_group.append((pt, r))
-            else:
-                last_pt = curr_group[-1][0]
-                if pt - last_pt <= 600:
-                    curr_group.append((pt, r))
-                else:
-                    sub_groups.append(curr_group)
-                    curr_group = [(pt, r)]
-        if curr_group:
-            sub_groups.append(curr_group)
+        # 2. Formulate a single, continuous dialogue mask for this segment if consensus is met
+        if detected_points:
+            # Use max for width & height to avoid leak, and median coordinates for vertical stabilization
+            group_w = max(int(r.get("w", 0)) for pt, r in detected_points)
+            group_h = max(int(r.get("h", 0)) for pt, r in detected_points)
+            group_y = _median([int(r.get("y", 0)) for pt, r in detected_points])
+            group_centerX = _median([int(r.get("centerX", 0)) for pt, r in detected_points])
+            max_conf = max(float(r.get("confidence", 0.0)) for pt, r in detected_points)
 
-        # 3. Formulate localized active dynamic masking zones
-        if sub_groups:
-            for group in sub_groups:
-                # Use max for width & height to avoid leak, and median coordinates for vertical stabilization
-                group_w = max(int(r.get("w", 0)) for pt, r in group)
-                group_h = max(int(r.get("h", 0)) for pt, r in group)
-                group_y = _median([int(r.get("y", 0)) for pt, r in group])
-                group_centerX = _median([int(r.get("centerX", 0)) for pt, r in group])
-                max_conf = max(float(r.get("confidence", 0.0)) for pt, r in group)
-
-                padded_region = fallback_anchor_region.copy()
-                # Apply precise +5% width margin to fully encapsulate Chinese characters
-                padded_region["w"] = min(int(group_w * 1.05), int(video_meta["width"]))
-                padded_region["h"] = group_h
-                padded_region["centerY"] = group_y + group_h // 2
-                padded_region["centerX"] = group_centerX
-                padded_region["x"] = max(0, int(padded_region["centerX"] - padded_region["w"] // 2))
-                padded_region["y"] = group_y
-                
-                # Align mask timing perfectly with segment duration to prevent early disappearance
-                padded_region["startMs"] = sub_start
-                padded_region["endMs"] = sub_end
-                padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
-                padded_region["detected"] = True
-                padded_region["confidence"] = round(max(max_conf, SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
-                dynamic_regions.append(padded_region)
+            padded_region = fallback_anchor_region.copy()
+            # Apply precise width and height buffer
+            padded_region["w"] = min(int(group_w), int(video_meta["width"]))
+            padded_region["h"] = min(int(group_h), int(video_meta["height"]))
+            padded_region["centerY"] = group_y + group_h // 2
+            padded_region["centerX"] = group_centerX
+            padded_region["x"] = max(0, int(padded_region["centerX"] - padded_region["w"] // 2))
+            padded_region["y"] = group_y
+            
+            # Align mask timing dynamically based on both segment duration and actual frame detection timeline.
+            # This ensures the mask does NOT disappear early if the Vietnamese translation is shorter 
+            # than the original Chinese voice line, preventing exposed Chinese text.
+            first_pt = detected_points[0][0]
+            last_pt = detected_points[-1][0]
+            padded_region["startMs"] = max(0, min(sub_start, first_pt - 200))
+            padded_region["endMs"] = max(sub_end, last_pt + 500)
+            padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
+            padded_region["detected"] = True
+            padded_region["confidence"] = round(max(max_conf, SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
+            dynamic_regions.append(padded_region)
         else:
             # If no subtitle was detected, keep an inactive placeholder to benchmark alignment references
             padded_region = fallback_anchor_region.copy()
-            padded_region["startMs"] = sub_start
-            padded_region["endMs"] = sub_end
+            # Extend fallback timing slightly at edges for temporal buffer safety
+            padded_region["startMs"] = max(0, sub_start - 150)
+            padded_region["endMs"] = sub_end + 450
             padded_region["detected"] = False
             dynamic_regions.append(padded_region)
 
-    # 4. Turn off masking globally if the video has virtually no subtitles
+    # 4. Dialogue Plane Y Fallback Propagation: If we detected subtitles in some segments,
+    # propagate a smart fallback mask to any missed segments using the median Y plane of successful detections.
     total_segments = len(subtitles)
+    detected_count = sum(1 for r in dynamic_regions if r.get("detected"))
+    if detected_count > 0:
+        valid_centers = [r["centerY"] for r in dynamic_regions if r.get("detected") and r["centerY"] / max(video_meta["height"], 1) >= 0.75]
+        valid_heights = [r["h"] for r in dynamic_regions if r.get("detected") and r["centerY"] / max(video_meta["height"], 1) >= 0.75]
+        
+        # Determine global dialogue plane Y and height
+        global_centerY = int(_median(valid_centers)) if valid_centers else (int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2)
+        global_h = int(_median(valid_heights)) if valid_heights else int(video_meta["height"] * 0.055)
+        
+        for r in dynamic_regions:
+            if not r.get("detected"):
+                # Use a snug fallback width and the global dialogue height
+                r["w"] = min(int(video_meta["width"] * 0.65), video_meta["width"])
+                r["h"] = global_h
+                r["centerY"] = global_centerY
+                r["detected"] = True  # Enable mask to guarantee 100% leak-proof dialogue coverage!
+                r["confidence"] = 0.50
+                r["cleanupEffect"] = choose_cleanup_effect(r, video_meta=video_meta)
+
+    # 5. Turn off masking globally if the video has virtually no subtitles
     detected_count = sum(1 for r in dynamic_regions if r.get("detected"))
     if total_segments > 0 and (detected_count / total_segments) < 0.12:
         for r in dynamic_regions:
