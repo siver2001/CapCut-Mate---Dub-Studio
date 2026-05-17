@@ -1630,15 +1630,14 @@ def prepare_runtime(target: str) -> None:
             
     if normalized in {"render", "all"}:
         ensure_edge_tts_runtime(phase="render", step="prepare", progress=0.03)
-        if DUB_SOURCE_SEPARATION_ENABLED:
-            ensure_source_separation_runtime(phase="render", step="prepare", progress=0.04)
-        if DUB_USE_VALTEC:
-            ensure_valtec_runtime(
-                phase="render",
-                step="prepare",
-                progress=0.055,
-                preload_zeroshot=DUB_VALTEC_PRELOAD_ZEROSHOT,
-            )
+        # Always prepare Source Separation and Valtec-TTS during a manual prepare task to ensure all offline assets are fully loaded!
+        ensure_source_separation_runtime(phase="render", step="prepare", progress=0.04)
+        ensure_valtec_runtime(
+            phase="render",
+            step="prepare",
+            progress=0.055,
+            preload_zeroshot=True,
+        )
         if DUB_TRANSLATE_PROVIDER in {"ollama", "auto"}:
             ensure_ollama_runtime(
                 required=DUB_TRANSLATE_PROVIDER == "ollama",
