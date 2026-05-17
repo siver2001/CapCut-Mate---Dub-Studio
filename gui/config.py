@@ -1543,3 +1543,39 @@ BOX_STYLE_PRESETS = {
     **_EXTRA_BOX_STYLE_PRESETS,
     **CAPCUT_BOX_STYLE_PRESETS,
 }
+
+CUSTOM_CLOUD_VOICES_FILE = ROOT / "config" / "custom_cloud_voices.json"
+
+def reload_custom_cloud_voices():
+    # 1. Read custom cloud voices from config/custom_cloud_voices.json
+    custom_cloud_options = []
+    if CUSTOM_CLOUD_VOICES_FILE.exists():
+        try:
+            import json
+            custom_data = json.loads(CUSTOM_CLOUD_VOICES_FILE.read_text(encoding="utf-8"))
+            for k, v in custom_data.items():
+                custom_cloud_options.append((k, v.get("label", k)))
+        except Exception:
+            pass
+            
+    # 2. Update voice configs in-place to preserve references
+    global VOICE_OPTIONS, INTRO_TTS_OPTIONS, VOICE_LABELS, SHORT_VOICE_LABELS
+    
+    # Filter out any existing cloud options to avoid duplicates
+    non_cloud_options = [opt for opt in VOICE_OPTIONS if not opt[0].startswith("cloud:")]
+    
+    VOICE_OPTIONS.clear()
+    VOICE_OPTIONS.extend(non_cloud_options + custom_cloud_options)
+    
+    INTRO_TTS_OPTIONS.clear()
+    INTRO_TTS_OPTIONS.extend(VOICE_OPTIONS)
+    
+    VOICE_LABELS.clear()
+    VOICE_LABELS.update({value: label for value, label in VOICE_OPTIONS})
+    
+    for k, v in custom_cloud_options:
+        SHORT_VOICE_LABELS[k] = v.replace("Cloud • ", "")
+
+# Execute initial reload
+reload_custom_cloud_voices()
+

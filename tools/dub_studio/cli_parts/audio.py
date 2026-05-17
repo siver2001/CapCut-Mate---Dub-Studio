@@ -774,6 +774,128 @@ def synthesize_tts(
     )
     valtec_reference_audio = resolve_valtec_reference_audio(selected_voice)
 
+    if selected_voice.startswith("cloud:"):
+        try:
+            import requests
+            import os
+            import unicodedata, re
+            
+            api_url = os.getenv("DUB_VOICE_API_URL", "").strip()
+            api_key = os.getenv("DUB_VOICE_API_KEY", "").strip()
+            
+            if not api_url:
+                raise RuntimeError("Chưa cấu hình Voice API URL trong phần cài đặt.")
+                
+            voice_id = selected_voice.replace("cloud:", "")
+            
+            # FPT AI Custom Client Adapter
+            if "fpt.ai" in api_url.lower():
+                fpt_endpoint = "https://api.fpt.ai/houts/v1/tts"
+                fpt_speed = 0
+                try:
+                    if rate and rate.endswith("%"):
+                        percent_val = float(rate[:-1])
+                        # FPT AI speed parameter accepts integers from -10 (slowest) to 10 (fastest). 0 is normal.
+                        fpt_speed = int(percent_val / 10)
+                        fpt_speed = max(-10, min(10, fpt_speed))
+                except Exception:
+                    fpt_speed = 0
+
+                fpt_headers = {
+                    "api-key": api_key,
+                    "speed": str(fpt_speed),
+                    "voice": voice_id,
+                    "prosody": "0"
+                }
+                
+                clean_cloud_text = unicodedata.normalize("NFC", str(edge_text).strip())
+                clean_cloud_text = re.sub(r"\.{2,}", ".", clean_cloud_text)
+                clean_cloud_text = re.sub(r"\s+", " ", clean_cloud_text)
+                if clean_cloud_text and not clean_cloud_text[-1] in (".", "!", "?", ",", ";", ":"):
+                    clean_cloud_text += "."
+
+                resp = requests.post(fpt_endpoint, headers=fpt_headers, data=clean_cloud_text.encode("utf-8"), timeout=30)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"FPT AI trả về lỗi HTTP {resp.status_code}: {resp.text}")
+                
+                fpt_data = resp.json()
+                if fpt_data.get("error") != 0:
+                    raise RuntimeError(f"FPT AI TTS Error: {fpt_data.get('message')}")
+                
+                async_url = fpt_data.get("async")
+                if not async_url:
+                    raise RuntimeError("FPT AI không trả về link tải âm thanh (async url).")
+                
+                import time
+                audio_content = None
+                for _ in range(15):
+                    time.sleep(1.5)
+                    audio_resp = requests.get(async_url, timeout=15)
+                    if audio_resp.status_code == 200 and len(audio_resp.content) > 1000:
+                        if b"waiting" not in audio_resp.content and b"error" not in audio_resp.content:
+                            audio_content = audio_resp.content
+                            break
+                
+                if not audio_content:
+                    raise RuntimeError("Quá thời gian chờ FPT AI xử lý file âm thanh (timeout 15s).")
+                
+                output_path.write_bytes(audio_content)
+                validate_generated_audio_file(output_path, context="FPT AI Voice synthesis")
+                return
+            
+            headers = {
+                "Content-Type": "application/json"
+            }
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+                
+            clean_cloud_text = unicodedata.normalize("NFC", str(edge_text).strip())
+            clean_cloud_text = re.sub(r"\.{2,}", ".", clean_cloud_text)
+            clean_cloud_text = re.sub(r"\s+", " ", clean_cloud_text)
+            if clean_cloud_text and not clean_cloud_text[-1] in (".", "!", "?", ",", ";", ":"):
+                clean_cloud_text += "."
+                
+            speed_val = 1.0
+            try:
+                if rate and rate.endswith("%"):
+                    speed_factor = 1.0 + (float(rate[:-1]) / 100.0)
+                    speed_val = max(0.25, min(4.0, speed_factor))
+                if global_speed != 1.0:
+                    speed_val = max(0.25, min(4.0, speed_val * global_speed))
+            except Exception:
+                speed_val = 1.0
+                
+            payload = {
+                "model": "tts-1",
+                "input": clean_cloud_text,
+                "voice": voice_id,
+                "response_format": "mp3",
+                "speed": speed_val
+            }
+            
+            target_endpoint = api_url
+            if not target_endpoint.endswith("/audio/speech") and not target_endpoint.endswith("/audio/speech/"):
+                if target_endpoint.endswith("/"):
+                    target_endpoint = target_endpoint + "audio/speech"
+                else:
+                    target_endpoint = target_endpoint + "/audio/speech"
+            
+            resp = requests.post(target_endpoint, headers=headers, json=payload, timeout=60)
+            if resp.status_code != 200:
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                raise RuntimeError(f"Voice API trả về lỗi (HTTP {resp.status_code}): {err_msg}")
+                
+            output_path.write_bytes(resp.content)
+            validate_generated_audio_file(output_path, context="Voice API synthesis")
+            return
+        except Exception as e:
+            raise RuntimeError(
+                f"Voice API lồng tiếng thất bại cho {speaker_id} với voice {selected_voice}: {e}"
+            ) from e
+
     if is_valtec_voice_preset(selected_voice):
         try:
             from tools.valtec_wrapper import get_valtec_provider
@@ -1523,6 +1645,8 @@ def prepare_tts_clip_for_timeline(source_path: Path, output_path: Path) -> Path:
 
 def _tts_provider_for_voice(voice: str) -> str:
     selected_voice = resolve_voice_preset(voice)
+    if selected_voice.startswith("cloud:"):
+        return "cloud"
     if is_vieneu_voice_preset(selected_voice):
         if not DUB_USE_VIENEU:
             raise RuntimeError(

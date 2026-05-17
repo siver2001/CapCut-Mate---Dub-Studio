@@ -1650,109 +1650,170 @@ class WindowLayoutMixin:
         config_card, config_inner_layout = self._make_card("Cấu hình hệ thống", "Thiết lập các biến môi trường hoạt động cho ứng dụng.")
         config_inner_layout.setContentsMargins(16, 16, 16, 16)
         
-        config_grid = QGridLayout()
-        config_grid.setHorizontalSpacing(12)
-        config_grid.setVerticalSpacing(12)
+        # Container layout for dual-column split
+        config_cols_layout = QHBoxLayout()
+        config_cols_layout.setSpacing(24) # Generous spacing between parallel panels
 
-        # DUB_TRANSCRIBE_PROVIDER
-        config_grid.addWidget(self._field_label("Bộ nhận diện Sub (Transcribe):"), 0, 0)
+        # Helper function to assign height and placeholder to inputs
+        def prepare_input(widget, min_height=36, placeholder=""):
+            widget.setMinimumHeight(min_height)
+            if placeholder and hasattr(widget, "setPlaceholderText"):
+                widget.setPlaceholderText(placeholder)
+            return widget
+
+        # ----------------------------------------------------
+        # LEFT COLUMN: Translation, Transcribing, Ollama & AI Mode
+        # ----------------------------------------------------
+        left_grid = QGridLayout()
+        left_grid.setHorizontalSpacing(12)
+        left_grid.setVerticalSpacing(12)
+
+        # 1. DUB_TRANSCRIBE_PROVIDER
+        left_grid.addWidget(self._field_label("Bộ nhận diện Sub (Transcribe):"), 0, 0)
         self.conf_transcribe_combo = QComboBox()
         self.conf_transcribe_combo.addItems(["auto", "whisperx"])
-        self.conf_transcribe_combo.setFixedWidth(280)
-        config_grid.addWidget(self.conf_transcribe_combo, 0, 1, Qt.AlignmentFlag.AlignLeft)
+        prepare_input(self.conf_transcribe_combo)
+        left_grid.addWidget(self.conf_transcribe_combo, 0, 1)
 
-        # DUB_TRANSLATE_PROVIDER
-        config_grid.addWidget(self._field_label("Bộ dịch thuật (Translate):"), 1, 0)
+        # 2. DUB_TRANSLATE_PROVIDER
+        left_grid.addWidget(self._field_label("Bộ dịch thuật (Translate):"), 1, 0)
         self.conf_translate_combo = QComboBox()
         self.conf_translate_combo.addItems(["ollama", "microsoft", "google", "mt5"])
-        self.conf_translate_combo.setFixedWidth(280)
-        config_grid.addWidget(self.conf_translate_combo, 1, 1, Qt.AlignmentFlag.AlignLeft)
+        prepare_input(self.conf_translate_combo)
+        left_grid.addWidget(self.conf_translate_combo, 1, 1)
 
-        # DUB_OLLAMA_BASE_URL
-        config_grid.addWidget(self._field_label("Ollama Base URL:"), 2, 0)
+        # 3. DUB_OLLAMA_BASE_URL
+        left_grid.addWidget(self._field_label("Ollama Base URL:"), 2, 0)
         self.conf_ollama_url_edit = QLineEdit()
-        config_grid.addWidget(self.conf_ollama_url_edit, 2, 1)
+        prepare_input(self.conf_ollama_url_edit, placeholder="Ví dụ: http://localhost:11434")
+        left_grid.addWidget(self.conf_ollama_url_edit, 2, 1)
 
-        # DUB_OLLAMA_MODEL
-        config_grid.addWidget(self._field_label("Ollama Model:"), 3, 0)
+        # 4. DUB_OLLAMA_MODEL
+        left_grid.addWidget(self._field_label("Ollama Model:"), 3, 0)
         self.conf_ollama_model_edit = QLineEdit()
-        config_grid.addWidget(self.conf_ollama_model_edit, 3, 1)
+        prepare_input(self.conf_ollama_model_edit, placeholder="Ví dụ: qwen2.5-coder:7b")
+        left_grid.addWidget(self.conf_ollama_model_edit, 3, 1)
 
-        # HF_TOKEN
-        config_grid.addWidget(self._field_label("HuggingFace Token:"), 4, 0)
-        self.conf_hf_token_edit = QLineEdit()
-        self.conf_hf_token_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
-        config_grid.addWidget(self.conf_hf_token_edit, 4, 1)
-
-        # DUB_HF_CACHE_DIR
-        config_grid.addWidget(self._field_label("HuggingFace Cache Dir:"), 5, 0)
-        hf_cache_row = QHBoxLayout()
-        self.conf_hf_cache_edit = QLineEdit()
-        hf_cache_btn = self._make_button("Chọn", "ghost")
-        hf_cache_btn.clicked.connect(self.choose_hf_cache_dir)
-        hf_cache_row.addWidget(self.conf_hf_cache_edit, 1)
-        hf_cache_row.addWidget(hf_cache_btn)
-        config_grid.addLayout(hf_cache_row, 5, 1)
-
-        # DUB_VIDEO_X264_CRF
-        config_grid.addWidget(self._field_label("Video x264 CRF (CPU):"), 6, 0)
-        self.conf_x264_crf_edit = QLineEdit()
-        self.conf_x264_crf_edit.setReadOnly(True)
-        config_grid.addWidget(self.conf_x264_crf_edit, 6, 1)
-
-        # DUB_VIDEO_X264_PRESET
-        config_grid.addWidget(self._field_label("Video x264 Preset:"), 7, 0)
-        self.conf_x264_preset_edit = QLineEdit()
-        self.conf_x264_preset_edit.setReadOnly(True)
-        config_grid.addWidget(self.conf_x264_preset_edit, 7, 1)
-
-        # DUB_VIDEO_NVENC_CQ
-        config_grid.addWidget(self._field_label("Video NVENC CQ (GPU):"), 8, 0)
-        self.conf_nvenc_cq_edit = QLineEdit()
-        self.conf_nvenc_cq_edit.setReadOnly(True)
-        config_grid.addWidget(self.conf_nvenc_cq_edit, 8, 1)
-
-        # DUB_VIDEO_NVENC_PRESET
-        config_grid.addWidget(self._field_label("Video NVENC Preset:"), 9, 0)
-        self.conf_nvenc_preset_edit = QLineEdit()
-        self.conf_nvenc_preset_edit.setReadOnly(True)
-        config_grid.addWidget(self.conf_nvenc_preset_edit, 9, 1)
-
-        # DUB_AI_MODE
-        config_grid.addWidget(self._field_label("Chế độ AI (AI Mode):"), 10, 0)
+        # 5. DUB_AI_MODE
+        left_grid.addWidget(self._field_label("Chế độ AI (AI Mode):"), 4, 0)
         self.conf_ai_mode_combo = QComboBox()
         self.conf_ai_mode_combo.addItems(["local", "cloud"])
-        self.conf_ai_mode_combo.setFixedWidth(280)
-        config_grid.addWidget(self.conf_ai_mode_combo, 10, 1, Qt.AlignmentFlag.AlignLeft)
+        prepare_input(self.conf_ai_mode_combo)
+        left_grid.addWidget(self.conf_ai_mode_combo, 4, 1)
 
-        # DUB_CLOUD_API_KEY
-        config_grid.addWidget(self._field_label("Cloud API Key:"), 11, 0)
+        # 6. DUB_CLOUD_MODEL
+        left_grid.addWidget(self._field_label("Cloud Model Name:"), 5, 0)
+        self.conf_cloud_model_edit = QLineEdit()
+        prepare_input(self.conf_cloud_model_edit, placeholder="Ví dụ: gemini-2.5-flash")
+        left_grid.addWidget(self.conf_cloud_model_edit, 5, 1)
+
+        # 7. DUB_CLOUD_API_KEY
+        left_grid.addWidget(self._field_label("Cloud API Key:"), 6, 0)
         cloud_api_row = QHBoxLayout()
         self.conf_cloud_api_key_edit = QLineEdit()
         self.conf_cloud_api_key_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        prepare_input(self.conf_cloud_api_key_edit, placeholder="Nhập Gemini API Key...")
         self.conf_cloud_api_check_btn = self._make_button("Kiểm tra Model", "ghost")
+        self.conf_cloud_api_check_btn.setMinimumHeight(36)
         self.conf_cloud_api_check_btn.clicked.connect(self.check_cloud_models)
         cloud_api_row.addWidget(self.conf_cloud_api_key_edit, 1)
         cloud_api_row.addWidget(self.conf_cloud_api_check_btn)
-        config_grid.addLayout(cloud_api_row, 11, 1)
+        left_grid.addLayout(cloud_api_row, 6, 1)
 
-        # DUB_CLOUD_MODEL
-        config_grid.addWidget(self._field_label("Cloud Model Name:"), 12, 0)
-        self.conf_cloud_model_edit = QLineEdit()
-        self.conf_cloud_model_edit.setPlaceholderText("Ví dụ: gemini-2.5-flash")
-        config_grid.addWidget(self.conf_cloud_model_edit, 12, 1)
 
-        # Button Save
+        # ----------------------------------------------------
+        # RIGHT COLUMN: Audio cache, Tokens, Video & Voice API
+        # ----------------------------------------------------
+        right_grid = QGridLayout()
+        right_grid.setHorizontalSpacing(12)
+        right_grid.setVerticalSpacing(12)
+
+        # 1. DUB_VOICE_API_URL
+        right_grid.addWidget(self._field_label("Voice API URL (TTS):"), 0, 0)
+        self.conf_voice_api_url_edit = QLineEdit()
+        prepare_input(self.conf_voice_api_url_edit, placeholder="Ví dụ: https://api.valtec.vn/tts/v1")
+        right_grid.addWidget(self.conf_voice_api_url_edit, 0, 1)
+
+        # 2. DUB_VOICE_API_KEY
+        right_grid.addWidget(self._field_label("Voice API Key (TTS):"), 1, 0)
+        voice_api_row = QHBoxLayout()
+        self.conf_voice_api_key_edit = QLineEdit()
+        self.conf_voice_api_key_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        prepare_input(self.conf_voice_api_key_edit, placeholder="Nhập API Key lồng tiếng...")
+        self.conf_voice_api_check_btn = self._make_button("Kiểm tra Voice API", "ghost")
+        self.conf_voice_api_check_btn.setMinimumHeight(36)
+        self.conf_voice_api_check_btn.clicked.connect(self.check_voice_api_voices)
+        voice_api_row.addWidget(self.conf_voice_api_key_edit, 1)
+        voice_api_row.addWidget(self.conf_voice_api_check_btn)
+        right_grid.addLayout(voice_api_row, 1, 1)
+
+        # 3. HF_TOKEN
+        right_grid.addWidget(self._field_label("HuggingFace Token:"), 2, 0)
+        self.conf_hf_token_edit = QLineEdit()
+        self.conf_hf_token_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        prepare_input(self.conf_hf_token_edit, placeholder="hf_...")
+        right_grid.addWidget(self.conf_hf_token_edit, 2, 1)
+
+        # 4. DUB_HF_CACHE_DIR
+        right_grid.addWidget(self._field_label("HuggingFace Cache Dir:"), 3, 0)
+        hf_cache_row = QHBoxLayout()
+        self.conf_hf_cache_edit = QLineEdit()
+        prepare_input(self.conf_hf_cache_edit, placeholder="Thư mục lưu trữ model local...")
+        hf_cache_btn = self._make_button("Chọn", "ghost")
+        hf_cache_btn.setMinimumHeight(36)
+        hf_cache_btn.clicked.connect(self.choose_hf_cache_dir)
+        hf_cache_row.addWidget(self.conf_hf_cache_edit, 1)
+        hf_cache_row.addWidget(hf_cache_btn)
+        right_grid.addLayout(hf_cache_row, 3, 1)
+
+        # 5. Video x264 CPU Configs (CRF / Preset)
+        right_grid.addWidget(self._field_label("Video x264 (CRF / Preset):"), 4, 0)
+        x264_row = QHBoxLayout()
+        self.conf_x264_crf_edit = QLineEdit()
+        self.conf_x264_crf_edit.setReadOnly(True)
+        prepare_input(self.conf_x264_crf_edit, placeholder="CRF (Mặc định: 18)")
+        self.conf_x264_preset_edit = QLineEdit()
+        self.conf_x264_preset_edit.setReadOnly(True)
+        prepare_input(self.conf_x264_preset_edit, placeholder="Preset (Mặc định: fast)")
+        x264_row.addWidget(self.conf_x264_crf_edit, 1)
+        x264_row.addWidget(self.conf_x264_preset_edit, 1)
+        right_grid.addLayout(x264_row, 4, 1)
+
+        # 6. Video NVENC GPU Configs (CQ / Preset)
+        right_grid.addWidget(self._field_label("Video NVENC (CQ / Preset):"), 5, 0)
+        nvenc_row = QHBoxLayout()
+        self.conf_nvenc_cq_edit = QLineEdit()
+        self.conf_nvenc_cq_edit.setReadOnly(True)
+        prepare_input(self.conf_nvenc_cq_edit, placeholder="CQ (Mặc định: 23)")
+        self.conf_nvenc_preset_edit = QLineEdit()
+        self.conf_nvenc_preset_edit.setReadOnly(True)
+        prepare_input(self.conf_nvenc_preset_edit, placeholder="Preset (Mặc định: p4)")
+        nvenc_row.addWidget(self.conf_nvenc_cq_edit, 1)
+        nvenc_row.addWidget(self.conf_nvenc_preset_edit, 1)
+        right_grid.addLayout(nvenc_row, 5, 1)
+
+        # Add both columns to main horizontal wrapper
+        config_cols_layout.addLayout(left_grid, 1)
+        config_cols_layout.addLayout(right_grid, 1)
+        config_inner_layout.addLayout(config_cols_layout)
+
+        config_inner_layout.addSpacing(16)
+
+        # Combined wide buttons layout at the bottom
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(16)
+
         self.conf_save_btn = self._make_button("Lưu cấu hình", "success")
+        self.conf_save_btn.setMinimumHeight(40)
         self.conf_save_btn.clicked.connect(self.save_system_config)
-        config_grid.addWidget(self.conf_save_btn, 13, 0, 1, 2)
+        buttons_layout.addWidget(self.conf_save_btn, 1)
 
-        # Button Update
         self.conf_update_btn = self._make_button("Kiểm tra & Cập nhật ứng dụng", "ghost")
+        self.conf_update_btn.setMinimumHeight(40)
         self.conf_update_btn.clicked.connect(self.check_and_update_application)
-        config_grid.addWidget(self.conf_update_btn, 14, 0, 1, 2)
+        buttons_layout.addWidget(self.conf_update_btn, 1)
 
-        config_inner_layout.addLayout(config_grid)
+        config_inner_layout.addLayout(buttons_layout)
         config_inner_layout.addStretch(1)
         config_page_layout.addWidget(config_card)
 

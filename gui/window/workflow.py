@@ -1378,6 +1378,12 @@ class WindowWorkflowMixin:
         cloud_model = env_data.get("DUB_CLOUD_MODEL") or os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash")
         self.conf_cloud_model_edit.setText(cloud_model)
 
+        voice_api_url = env_data.get("DUB_VOICE_API_URL") or os.getenv("DUB_VOICE_API_URL", "")
+        self.conf_voice_api_url_edit.setText(voice_api_url)
+
+        voice_api_key = env_data.get("DUB_VOICE_API_KEY") or os.getenv("DUB_VOICE_API_KEY", "")
+        self.conf_voice_api_key_edit.setText(voice_api_key)
+
         # Read-only encoding parameters
         x264_crf = env_data.get("DUB_VIDEO_X264_CRF") or os.getenv("DUB_VIDEO_X264_CRF", "18")
         self.conf_x264_crf_edit.setText(x264_crf)
@@ -1401,6 +1407,8 @@ class WindowWorkflowMixin:
         ai_mode = self.conf_ai_mode_combo.currentText().strip()
         cloud_api_key = self.conf_cloud_api_key_edit.text().strip()
         cloud_model = self.conf_cloud_model_edit.text().strip()
+        voice_api_url = self.conf_voice_api_url_edit.text().strip()
+        voice_api_key = self.conf_voice_api_key_edit.text().strip()
 
         if ai_mode == "cloud":
             if not cloud_api_key:
@@ -1455,6 +1463,8 @@ class WindowWorkflowMixin:
             "DUB_AI_MODE": ai_mode,
             "DUB_CLOUD_API_KEY": cloud_api_key,
             "DUB_CLOUD_MODEL": cloud_model,
+            "DUB_VOICE_API_URL": voice_api_url,
+            "DUB_VOICE_API_KEY": voice_api_key,
         }
 
         # Apply changes to lines
@@ -1536,6 +1546,160 @@ class WindowWorkflowMixin:
                 QMessageBox.warning(self, "Lỗi", "Hết quota. Vui lòng kiểm tra lại quota của API Key này.")
             else:
                 QMessageBox.warning(self, "Lỗi", f"Không thể kết nối hoặc kiểm tra API Key:\n{e}")
+
+    def check_voice_api_voices(self) -> None:
+        api_url = self.conf_voice_api_url_edit.text().strip()
+        api_key = self.conf_voice_api_key_edit.text().strip()
+        if not api_url:
+            QMessageBox.warning(self, "Lỗi", "Vui lòng nhập Voice API URL trước khi kiểm tra.")
+            return
+
+        import requests
+        # Standardize voice list endpoint URL
+        target_url = api_url
+        if target_url.endswith("/audio/speech") or target_url.endswith("/audio/speech/"):
+            target_url = target_url.replace("/audio/speech", "").replace("/audio/speech/", "")
+            
+        if not target_url.endswith("/voices") and not target_url.endswith("/voices/"):
+            if target_url.endswith("/"):
+                target_url += "voices"
+            else:
+                target_url += "/voices"
+
+        headers = {
+            "Content-Type": "application/json"
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        try:
+            extracted_voices = []
+            
+            # 1. Handle FPT AI dynamic bypass & quota limit check
+            if "fpt.ai" in api_url.lower():
+                token_info = ""
+                try:
+                    fpt_limit_url = "https://api.fpt.ai/houts/v1/limit"
+                    limit_headers = {"api-key": api_key}
+                    limit_resp = requests.get(fpt_limit_url, headers=limit_headers, timeout=10)
+                    if limit_resp.status_code == 200:
+                        limit_data = limit_resp.json()
+                        limit_val = limit_data.get("limit") or limit_data.get("current_limit")
+                        usage_val = limit_data.get("usage") or limit_data.get("current_usage")
+                        if limit_val is not None and usage_val is not None:
+                            remaining = max(0, int(limit_val) - int(usage_val))
+                            token_info = f"Số ký tự (token) FPT AI còn lại: {remaining:,} / {int(limit_val):,} ký tự."
+                except Exception:
+                    pass
+
+                extracted_voices = [
+                    ("leminh", "FPT • Lê Minh (Nam Bắc)"),
+                    ("banmai", "FPT • Ban Mai (Nữ Bắc)"),
+                    ("thuha", "FPT • Thu Hà (Nữ Bắc)"),
+                    ("lannhi", "FPT • Lan Nhi (Nữ Nam)"),
+                    ("haicong", "FPT • Hải Công (Nam Nam)"),
+                    ("giaminh", "FPT • Gia Minh (Nam Trung)"),
+                ]
+                
+                self._save_and_sync_voices(extracted_voices, token_info)
+                return
+
+            # 2. Handle standard OpenAI or Custom OpenAI-compatible TTS URL
+            resp = requests.get(target_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+            
+            data = resp.json()
+            
+            # Highly flexible parsing of various API JSON formats
+            items = []
+            if isinstance(data, dict):
+                if "data" in data and isinstance(data["data"], list):
+                    items = data["data"]
+                elif "voices" in data and isinstance(data["voices"], list):
+                    items = data["voices"]
+                else:
+                    for k, v in data.items():
+                        if isinstance(v, dict) and ("name" in v or "label" in v):
+                            lbl = v.get("name") or v.get("label") or k
+                            extracted_voices.append((k, lbl))
+                        elif isinstance(v, str):
+                            extracted_voices.append((k, v))
+            elif isinstance(data, list):
+                items = data
+                
+            if items:
+                for item in items:
+                    if isinstance(item, dict):
+                        voice_id = item.get("id") or item.get("voice_id")
+                        voice_name = item.get("name") or item.get("label") or voice_id
+                        if voice_id:
+                            extracted_voices.append((str(voice_id), str(voice_name)))
+                    elif isinstance(item, str):
+                        extracted_voices.append((item, item))
+            
+            if not extracted_voices:
+                QMessageBox.warning(self, "Thông báo", "Không tìm thấy giọng nói hợp lệ trong phản hồi từ API.")
+                return
+
+            self._save_and_sync_voices(extracted_voices)
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Lỗi", f"Không thể kết nối hoặc tải danh sách giọng nói từ Voice API:\n{e}")
+
+    def _save_and_sync_voices(self, extracted_voices: list, extra_info: str = "") -> None:
+        import json
+        import sys
+        from pathlib import Path
+        
+        is_frozen = getattr(sys, "frozen", False)
+        if is_frozen:
+            root = Path(sys.executable).resolve().parent
+        else:
+            root = Path(__file__).resolve().parent.parent.parent
+            
+        config_dir = root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        custom_voices_file = config_dir / "custom_cloud_voices.json"
+        
+        voices_to_save = {}
+        for vid, vname in extracted_voices:
+            voices_to_save[f"cloud:{vid}"] = {"label": f"Cloud • {vname}"}
+            
+        custom_voices_file.write_text(json.dumps(voices_to_save, ensure_ascii=False, indent=2), encoding="utf-8")
+        
+        # Trigger dynamic in-place reload in gui/config.py
+        from gui.config import reload_custom_cloud_voices
+        reload_custom_cloud_voices()
+        
+        # Refresh Intro Hook Voice drop-down
+        if hasattr(self, "intro_voice_combo") and self.intro_voice_combo:
+            from gui.config import VOICE_OPTIONS
+            current_intro_voice = self.intro_voice_combo.currentData()
+            self.intro_voice_combo.clear()
+            for val, lbl in VOICE_OPTIONS:
+                self.intro_voice_combo.addItem(lbl, val)
+            idx = self.intro_voice_combo.findData(current_intro_voice)
+            if idx >= 0:
+                self.intro_voice_combo.setCurrentIndex(idx)
+
+        # Refresh Character voice mapping panel
+        if hasattr(self, "rebuild_voice_mapping_ui"):
+            self.rebuild_voice_mapping_ui()
+
+        # Refresh Subtitle Timeline editing grid
+        if hasattr(self, "rebuild_subtitle_table"):
+            self.rebuild_subtitle_table()
+            
+        voice_list_str = "\n".join([f"- {vname} (ID: {vid})" for vid, vname in extracted_voices[:30]])
+        if len(extracted_voices) > 30:
+            voice_list_str += f"\n... và {len(extracted_voices) - 30} giọng nói khác."
+            
+        msg = f"Đã tải thành công {len(extracted_voices)} giọng nói từ Voice API:\n\n{voice_list_str}\n"
+        if extra_info:
+            msg += f"\n👉 {extra_info}\n"
+        msg += "\nCác giọng nói mới này đã được tự động cập nhật vào trang chính và có thể sử dụng trực tiếp để lồng tiếng ngay lập tức!"
+        QMessageBox.information(self, "Kiểm tra Voice API thành công", msg)
 
     def open_configured_output_directory(self) -> None:
         target = self.output_dir_edit.text().strip()

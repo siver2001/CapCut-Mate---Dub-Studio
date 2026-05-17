@@ -1,0 +1,20 @@
+{
+  "cloud:leminh": {
+    "label": "Cloud • FPT • Lê Minh (Nam Bắc)"
+  },
+  "cloud:banmai": {
+    "label": "Cloud • FPT • Ban Mai (Nữ Bắc)"
+  },
+  "cloud:thuha": {
+    "label": "Cloud • FPT • Thu Hà (Nữ Bắc)"
+  },
+  "cloud:lannhi": {
+    "label": "Cloud • FPT • Lan Nhi (Nữ Nam)"
+  },
+  "cloud:haicong": {
+    "label": "Cloud • FPT • Hải Công (Nam Nam)"
+  },
+  "cloud:giaminh": {
+    "label": "Cloud • FPT • Gia Minh (Nam Trung)"
+  }
+}
