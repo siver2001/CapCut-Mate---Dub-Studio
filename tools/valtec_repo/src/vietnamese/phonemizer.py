@@ -16,8 +16,8 @@ try:
 except Exception:
     fcntl = None
 
-# Disabled viphoneme to use the robust char-based mapping as primary on Windows
-VIPHONEME_AVAILABLE = False
+# Enabled viphoneme to use high-quality IPA phonemization via bridge on Windows
+VIPHONEME_AVAILABLE = True
 _VIPHONEME_WORKDIR = None
 _VINORM_ISOLATED_PARENT = None
 
