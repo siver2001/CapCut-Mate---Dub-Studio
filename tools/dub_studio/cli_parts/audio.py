@@ -305,14 +305,14 @@ def clamp_rate_percent(percent: int, timing_mode: str = "balanced_natural", *, i
     ultra_tight = is_ultra_tight_mode(timing_mode)
     if intro:
         if ultra_tight:
-            min_rate, max_rate = (5, 45)
+            min_rate, max_rate = (5, 25)
         else:
-            min_rate, max_rate = (-6, 40) if timing_mode == "balanced_natural" else (-10, 48)
+            min_rate, max_rate = (-6, 18) if timing_mode == "balanced_natural" else (-10, 22)
     else:
         if ultra_tight:
-            min_rate, max_rate = (-6, 45)
+            min_rate, max_rate = (-6, 20)
         else:
-            min_rate, max_rate = (-10, 32) if timing_mode == "balanced_natural" else (-14, 38)
+            min_rate, max_rate = (-10, 12) if timing_mode == "balanced_natural" else (-14, 16)
     return max(min_rate, min(percent, max_rate))
 
 
@@ -1102,6 +1102,11 @@ def fit_audio_length_with_mode(
         return ffprobe_audio_duration_ms(output_path)
 
     speed_factor = clip_ms / max(target_fill_ms, 1)
+    # Prevent excessive time-stretching that degrades natural vocal cadence ("bắn liên thanh")
+    max_allowed_speed = 1.20 if ultra_tight else 1.15
+    if speed_factor > max_allowed_speed:
+        speed_factor = max_allowed_speed
+
     run(
         [
             "ffmpeg",
