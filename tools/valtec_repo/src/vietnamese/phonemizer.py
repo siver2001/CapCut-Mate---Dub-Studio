@@ -302,7 +302,7 @@ def text_to_phonemes_viphoneme(text: str) -> Tuple[List[str], List[int], List[in
         try:
             import subprocess
             from pathlib import Path
-            bridge_script = Path(__file__).parent.parent.parent.parent / "tools" / "viphoneme_bridge.py"
+            bridge_script = Path(__file__).parent.parent.parent.parent / "viphoneme_bridge.py"
             
             print(f"DEBUG: Using viphoneme bridge for text: {text[:30]}...", flush=True)
             # Run bridge with timeout

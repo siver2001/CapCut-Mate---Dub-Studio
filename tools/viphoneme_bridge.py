@@ -11,6 +11,12 @@ if hasattr(sys.stdin, 'reconfigure'):
 # Disable vinorm isolation to avoid hangs on Windows
 os.environ["VIPHONEME_ISOLATE_VINORM"] = "0"
 
+# Add tools folder to sys.path to force viphoneme to use our local mock vinorm instead of the broken global site-packages one
+from pathlib import Path
+tools_dir = str(Path(__file__).parent.resolve())
+if tools_dir not in sys.path:
+    sys.path.insert(0, tools_dir)
+
 try:
     import viphoneme
     text = sys.stdin.read().strip()
