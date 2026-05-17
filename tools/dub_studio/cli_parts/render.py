@@ -838,15 +838,11 @@ def render_intro_hook(
         clip_duration_ms=clip_window["durationMs"],
     )
     tts_profile = estimate_tts_text_profile(intro_text)
+    # Teasers should be energetic and fast-paced! We target a faster reading speed (1.45x faster) 
+    # to deliver a dồn dập, engaging introduction, which also naturally shortens the video clip.
+    natural_tts_duration_ms = max(int(tts_profile.get("expectedSeconds", 0.0) * 1000 / 1.45), 2000)
     remaining_source_ms = max(video_duration_ms - clip_window["startMs"], clip_window["durationMs"])
-    max_intro_duration_ms = min(max(clip_window["durationMs"] + 6000, 24000), remaining_source_ms)
-    desired_intro_duration_ms = min(
-        max(
-            clip_window["durationMs"],
-            int(tts_profile.get("expectedSeconds", 0.0) * 1000) + 900,
-        ),
-        max_intro_duration_ms,
-    )
+    
     emit_progress(phase="render", step="intro_hook", progress=0.87, message="Đang tạo giọng nói intro (TTS)...")
     intro_voice = intro_hook.get("voice") or voice_mapping.get("speaker_1") or DEFAULT_VOICES[0]
     intro_rate_delta_percent = int(intro_hook.get("voiceRateDeltaPercent") or 0)
@@ -856,6 +852,7 @@ def render_intro_hook(
     intro_ass_path = dirs["render"] / "intro_hook.ass"
     teaser_output_path = dirs["render"] / "intro_hook_rendered.mp4"
 
+    # Synthesize TTS based on its natural pacing/duration to avoid dragging or rushed delivery.
     fitted_intro_voice, intro_clip_ms, intro_rate, _, _, _ = synthesize_timed_tts_clip(
         index=0,
         speaker_id="intro_hook",
@@ -863,16 +860,19 @@ def render_intro_hook(
         translated=intro_text,
         source_text=intro_text,
         delivery="excited",
-        target_ms=max(desired_intro_duration_ms - 140, 1200),
+        target_ms=natural_tts_duration_ms,
         timing_mode=timing_mode,
         tts_dir=dirs["tts"],
         intro=True,
         rate_delta_percent=intro_rate_delta_percent,
         global_speed=global_speed,
     )
+    
+    # The video clip duration now perfectly matches the exact duration of the spoken teaser, 
+    # with a tiny 600ms pause added at the end for an elegant transition.
     actual_intro_duration_ms = min(
         max(
-            int(intro_clip_ms) + 500, # Add 500ms buffer after speaking
+            int(intro_clip_ms) + 600, # Natural breathing pause
             1200
         ),
         remaining_source_ms,

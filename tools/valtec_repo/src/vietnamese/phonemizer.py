@@ -297,36 +297,46 @@ def text_to_phonemes_viphoneme(text: str) -> Tuple[List[str], List[int], List[in
     if is_frozen:
         return text_to_phonemes_charbased(text)
     
-    # Use bridge for Windows to avoid hangs
+    # Use direct import on Windows with proper mock routing to avoid subprocess overhead and timeouts!
     if os.name == 'nt':
         try:
-            import subprocess
             from pathlib import Path
-            bridge_script = Path(__file__).parent.parent.parent.parent / "viphoneme_bridge.py"
+            tools_dir = str((Path(__file__).parent.parents[2] / "tools").resolve())
+            if tools_dir not in sys.path:
+                sys.path.insert(0, tools_dir)
+            os.environ["VIPHONEME_ISOLATE_VINORM"] = "0"
             
-            print(f"DEBUG: Using viphoneme bridge for text: {text[:30]}...", flush=True)
-            # Run bridge with timeout
-            process = subprocess.Popen(
-                [sys.executable, str(bridge_script)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8'
-            )
-            try:
-                ipa_text, _ = process.communicate(input=text, timeout=10.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                print("[WARN] Viphoneme bridge timed out")
-                return text_to_phonemes_charbased(text)
-            
-            if process.returncode != 0 or not ipa_text:
-                return text_to_phonemes_charbased(text)
-                
+            import viphoneme
+            ipa_text = viphoneme.vi2IPA(text)
         except Exception as e:
-            print(f"[WARN] Viphoneme bridge failed: {e}")
-            return text_to_phonemes_charbased(text)
+            print(f"[WARN] Direct Windows viphoneme failed: {e}, falling back to bridge subprocess")
+            # Fallback to subprocess bridge with extended timeout to be extremely safe!
+            try:
+                import subprocess
+                from pathlib import Path
+                bridge_script = Path(__file__).parent.parent.parent.parent / "viphoneme_bridge.py"
+                
+                print(f"DEBUG: Using viphoneme bridge for text: {text[:30]}...", flush=True)
+                process = subprocess.Popen(
+                    [sys.executable, str(bridge_script)],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8'
+                )
+                try:
+                    ipa_text, _ = process.communicate(input=text, timeout=25.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    print("[WARN] Viphoneme bridge timed out")
+                    return text_to_phonemes_charbased(text)
+                
+                if process.returncode != 0 or not ipa_text:
+                    return text_to_phonemes_charbased(text)
+            except Exception as ex:
+                print(f"[WARN] Viphoneme bridge failed: {ex}")
+                return text_to_phonemes_charbased(text)
     else:
         # Normal mode for Linux: use full viphoneme with isolation
         try:

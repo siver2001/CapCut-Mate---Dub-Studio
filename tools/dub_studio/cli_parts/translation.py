@@ -1128,17 +1128,35 @@ def _intro_teaser_quality_ok(text: str, *, clip_duration_ms: int) -> bool:
     clean = normalize_text(text)
     if not clean:
         return False
-    min_words, max_words = _intro_word_range(clip_duration_ms)
     word_count = _count_intro_words(clean)
     sentence_count = _count_intro_sentences(clean)
-    if sentence_count < 2:
+    if sentence_count < 3:
         return False
-    if word_count < max(16, int(min_words * 0.72)):
+    # Enforce a longer, detailed storytelling teaser (50 to 95 words)
+    if word_count < 50:
         return False
-    if word_count > int(max_words * 1.35):
+    if word_count > 95:
         return False
-    if len(clean) < 60:
+    if len(clean) < 180:
         return False
+        
+    # Strictly ban robotic or canned cliches
+    lower_text = clean.lower()
+    banned_phrases = [
+        "câu chuyện bắt đầu từ",
+        "phần còn lại còn đáng xem",
+        "mang đến cho chúng ta",
+        "chúng ta hãy cùng",
+        "chưa dừng lại ở đó",
+        "đáng xem hơn nhiều",
+        "hãy cùng khám phá",
+        "chào mừng các bạn",
+        "video hôm nay",
+        "bắt đầu từ",
+    ]
+    for phrase in banned_phrases:
+        if phrase in lower_text:
+            return False
     return True
 
 
@@ -1149,47 +1167,38 @@ def _build_intro_teaser_prompt(
     clip_duration_ms: int,
     retry_reason: str = "",
 ) -> str:
-    min_words, max_words = _intro_word_range(clip_duration_ms)
+    # A rich, detailed storytelling teaser of 55 to 85 words (2.5x to 3x longer than before)
+    min_words = 55
+    max_words = 85
     retry_block = (
-        "\nPrevious attempt was too generic or not engaging enough. "
-        "Start with a REAL question or dramatic statement — not a setup phrase.\n"
+        f"\nPrevious attempt failed because of this issue: {retry_reason}. "
+        "Remember, do NOT use generic sentences or cliches. Write a concrete story with concrete facts!\n"
         if retry_reason
         else "\n"
     )
     return (
-        "You are a Vietnamese narrator writing a HIGHLY ENGAGING 3-4 sentence teaser voice-over "
-        "for a dubbed short video. Your job is to make people immediately curious and hit 'keep watching'.\n"
+        "You are an engaging Vietnamese storyteller writing a rich, detailed, and highly interesting 3-5 sentence "
+        "teaser voice-over for a dubbed family/vlog video.\n"
         "\n"
-        "CRITICAL RULE — How to start (sentence 1):\n"
-        "Do NOT start with setup phrases like 'Trong video này...', 'Video này...', 'Chúng ta...', 'Hãy xem...'.\n"
-        "Instead, start DIRECTLY with ONE of these patterns:\n"
-        "  A) A shocking question: 'Bạn có biết...?' / 'Tại sao...?' / 'Điều gì xảy ra khi...?'\n"
-        "  B) A dramatic statement: 'Anh ấy không ngờ rằng...' / 'Chính lúc này, mọi thứ đã thay đổi...'\n"
-        "  C) A direct hook: 'Nghe câu chuyện này đi...' / 'Chuyện có thật này...'\n"
-        "  D) A comparison that surprises: 'Nhiều người nghĩ...nhưng sự thật lại là...'\n"
+        "STORYTELLING REQUIREMENTS:\n"
+        "- Explain the actual event clearly and engagingly using facts from the timeline (names like Wantuan, Nuomin, actions, places).\n"
+        "- The teaser must be easy to understand, crystal clear, and sound like a natural enthusiastic human storyteller, NOT robotic or artificial.\n"
+        "- Target word count: Write exactly between 55 and 85 spoken Vietnamese words (about 3-5 complete sentences).\n"
         "\n"
-        "Sentence 2: Explain the core premise in 1-2 concrete sentences. Who is involved? What happened?\n"
-        "Use specific details from the video content — names, numbers, actions, locations.\n"
+        "CRITICAL RULES — BANNED ROBOTIC CLICHES (DO NOT USE ANY OF THESE):\n"
+        "- Never start or include: 'Câu chuyện bắt đầu từ...'\n"
+        "- Never end or include: '...phần còn lại còn đáng xem hơn nhiều' or '...đáng xem hơn nhiều'\n"
+        "- Never use templated transitions: 'mọi chuyện chưa dừng lại ở đó', 'hãy cùng khám phá', 'video hôm nay mang đến', 'chào mừng các bạn'\n"
+        "- Keep it 100% natural, factual, and lively. Start directly with a hook about the actual event, for example:\n"
+        "  'Bạn đã bao giờ thấy chú cún nào đi du lịch biển mà sướng như Wantuan và Nuomin chưa?' / "
+        "  'Hôm nay mẹ dắt hai chú cún cưng Wantuan và Nuomin ra biển chơi, nhưng có điều gì đó cực kỳ bất ngờ sắp xảy ra...'\n"
         "\n"
-        "Sentence 3 (optional but recommended): Escalate the tension or raise the stakes.\n"
-        "This is where you hint that it gets even more intense.\n"
-        "\n"
-        "Quality rules:\n"
-        "- NO generic phrases like 'mọi chuyện chưa dừng lại', 'câu chuyện bắt đầu từ đây', "
-        "'video hôm nay mang đến', 'hãy cùng khám phá'\n"
-        "- Every word must feel specific and real, not templated\n"
-        "- Write like a natural excited narrator speaking, not like subtitles\n"
-        "- Sound like a Vietnamese friend telling you something amazing they just saw\n"
-        f"- Time allowance: The teaser clip is exactly {clip_duration_ms/1000:.1f} seconds long.\n"
-        f"- Exact word count limit: You MUST write exactly between {min_words} and {max_words} spoken Vietnamese words.\n"
-        "This is strictly enforced so the narration ends exactly as the teaser clip concludes and fits naturally with the speed of the video.\n"
         "- No hashtags, emojis, or markdown\n"
-        '- Return ONLY: {"teaser":"<your teaser text>"}'
+        '- Return ONLY: {"teaser":"<your detailed natural teaser text>"}'
         f"{retry_block}\n"
         + json.dumps(
             {
                 "sourceLanguage": source_language or "auto",
-                "clipDurationMs": int(clip_duration_ms),
                 "timeline": _build_intro_generation_payload(window_segments),
             },
             ensure_ascii=False,
