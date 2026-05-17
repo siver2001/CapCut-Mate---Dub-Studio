@@ -189,6 +189,42 @@ def build_command(root: Path, python_exe: str, *, clean: bool) -> list[str]:
         if metadata_exists(package_name):
             cmd.extend(["--copy-metadata", package_name])
 
+    # Explicitly import all hidden submodules of Valtec-TTS / viphoneme / vinorm to avoid missing dependencies in PyInstaller build
+    valtec_hiddens = [
+        "src",
+        "src.models",
+        "src.models.synthesizer",
+        "src.text",
+        "src.text.symbols",
+        "src.vietnamese",
+        "src.vietnamese.text_processor",
+        "src.vietnamese.phonemizer",
+        "src.nn",
+        "src.nn.commons",
+        "src.nn.mel_processing",
+        "src.utils",
+        "src.utils.helpers",
+        "valtec_tts",
+        "viphoneme",
+        "viphoneme.T2IPA",
+        "viphoneme.syms",
+        "viphoneme.text2sequence",
+        "viphoneme.get_english_sym",
+        "vinorm",
+        "vinorm.vinorm",
+        "vinorm.Dict",
+        "vinorm.Mapping",
+        "vinorm.RegexRule",
+        "vinorm.lib",
+    ]
+    for hid in valtec_hiddens:
+        cmd.extend(["--hidden-import", hid])
+
+    # Attach the custom runtime hook to setup environmental variables and dynamic sys.path modifications
+    runtime_hook_path = root / "tools" / "pyi_runtime_hook.py"
+    if runtime_hook_path.exists():
+        cmd.extend(["--runtime-hook", str(runtime_hook_path)])
+
     cmd.append(str(root / ENTRY_POINT))
     return cmd
 
