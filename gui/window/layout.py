@@ -1664,7 +1664,7 @@ class WindowLayoutMixin:
         # DUB_TRANSLATE_PROVIDER
         config_grid.addWidget(self._field_label("Bộ dịch thuật (Translate):"), 1, 0)
         self.conf_translate_combo = QComboBox()
-        self.conf_translate_combo.addItems(["ollama", "microsoft", "google"])
+        self.conf_translate_combo.addItems(["ollama", "microsoft", "google", "mt5"])
         self.conf_translate_combo.setFixedWidth(280)
         config_grid.addWidget(self.conf_translate_combo, 1, 1, Qt.AlignmentFlag.AlignLeft)
 

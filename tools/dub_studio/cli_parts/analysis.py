@@ -868,7 +868,7 @@ def should_use_valtec_voice(*, voice: str, speaker_id: str = "speaker_1", job_id
     return resolve_valtec_prompt_audio(speaker_id=speaker_id, job_id=job_id) is not None
 
 
-def resolve_tts_output_extension(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> str:
+def resolve_tts_output_extension(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "", global_speed: float = 1.0) -> str:
     return (
         ".wav"
         if should_use_vieneu_voice(voice=voice, speaker_id=speaker_id, job_id=job_id)
@@ -1398,7 +1398,7 @@ def collect_active_ranges(scores: list[float], threshold: float, min_len: int) -
     return ranges
 
 
-SOURCE_SUBTITLE_DETECTION_CONFIDENCE = 0.16
+SOURCE_SUBTITLE_DETECTION_CONFIDENCE = 0.42
 
 
 def snap_axis(value: int, step: int) -> int:
@@ -1468,6 +1468,29 @@ def subtitle_region_detected(region: dict[str, Any] | None) -> bool:
     return float(region.get("confidence", 0.0)) >= SOURCE_SUBTITLE_DETECTION_CONFIDENCE
 
 
+def validate_gray_roi_as_text(roi, is_top_area: bool = False) -> bool:
+    if roi.size == 0:
+        return False
+    import numpy as np
+    import cv2
+    
+    std_val = float(np.std(roi))
+    min_std = 25.0 if is_top_area else 14.0
+    if std_val < min_std:
+        return False
+        
+    edges = cv2.Canny(roi, 30, 90)
+    edge_density = float(np.count_nonzero(edges)) / roi.size
+    
+    # Text characters must have sharp, dense borders (at least 2.4% edge density).
+    # If the candidate lies in the top screen, raise constraints to 4.5% to suppress sky/ceiling borders.
+    min_density = 0.045 if is_top_area else 0.024
+    if edge_density < min_density:
+        return False
+        
+    return True
+
+
 def detect_subtitle_region_in_frame(
     frame: bytes,
     *,
@@ -1488,7 +1511,8 @@ def detect_subtitle_region_in_frame(
     edges = cv2.Canny(blur, 20, 80)
     comb = cv2.bitwise_or(edges, thresh)
 
-    kw = max(int(sample_width * 0.40), 96)
+    # Tighten horizontal kernel to connect close letters without ballooning into background details
+    kw = max(int(sample_width * 0.15), 24)
     kh = max(int(sample_height * 0.035), 6)
     ker = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
     dil = cv2.dilate(comb, ker, iterations=2)
@@ -1511,32 +1535,37 @@ def detect_subtitle_region_in_frame(
         cx = xx + ww // 2
         cy = yy + hh // 2
 
+        # Subtitles are horizontally centered - strictly filter out off-center objects
         dx_center = abs(cx - sample_width // 2)
-        if ww < sample_width * 0.08 or dx_center > sample_width * 0.35:
+        if ww < sample_width * 0.06 or dx_center > sample_width * 0.24:
             continue
 
-        if hh < max(int(sample_height * 0.02), 4) or hh > sample_height * 0.26:
+        # Subtitles are wider than tall - filter out squares and vertical blocks (e.g. face/ears)
+        aspect_ratio = ww / max(hh, 1)
+        if aspect_ratio < 1.15:
+            continue
+
+        # Filter out elements that are too small or excessively large vertical containers
+        if hh < max(int(sample_height * 0.02), 4) or hh > sample_height * 0.25:
             continue
 
         y_center_norm = cy / max(sample_height, 1)
-        vertical_score = 1.0
-        
-        if pref_y_scaled is not None:
-            dy_pref = abs(cy - pref_y_scaled) / max(sample_height, 1)
-            if dy_pref <= 0.12:
-                vertical_score = 2.0 - (dy_pref * 2.5)
-            else:
-                vertical_score = max(0.2, 1.0 - dy_pref)
-        else:
-            if 0.65 <= y_center_norm <= 0.90:
-                vertical_score = 1.6
-            else:
-                vertical_score = 1.0 - abs(y_center_norm - 0.78)
+        # Avoid thin edge lines at extreme borders of the screen
+        if y_center_norm < 0.04 or y_center_norm > 0.96:
+            continue
+
+        # Score fairly across all regions, prioritizing bottom dialogue plane over top decorative stickers
+        vertical_score = 0.5  # Heavy penalty for upper half to avoid dynamic stickers
+        if 0.55 <= y_center_norm <= 0.95:  # Lower third plane (standard dialogue)
+            vertical_score = 2.8
+        elif 0.05 <= y_center_norm <= 0.40:  # Upper third plane (e.g. dynamic top titles/lyrics)
+            vertical_score = 0.65
 
         roi = im[yy:yy+hh, xx:xx+ww]
         contrast = float(np.std(roi)) if roi.size > 0 else 0.0
 
-        score = ww * (contrast + 1.0) * vertical_score
+        # Score based on geometry, aspect ratio, and local contrast
+        score = ww * aspect_ratio * (contrast + 1.0) * vertical_score
 
         if score > best_cv_score:
             best_cv_score = score
@@ -1545,29 +1574,37 @@ def detect_subtitle_region_in_frame(
     if best_cv_candidate and best_cv_score > 5.0:
         xx, yy, ww, hh, cx, cy = best_cv_candidate
         
-        region_w = int(max((ww + 24) * scale_x, video_meta["width"] * 0.85))
-        region_h = int(max((hh + 12) * scale_y, video_meta["height"] * 0.075))
+        # Apply strict high-contrast text validation to eliminate non-text contours (sky, sidewalk, animals)
+        roi = im[yy:yy+hh, xx:xx+ww]
+        y_center_norm = cy / max(sample_height, 1)
+        is_top = y_center_norm < 0.48
         
-        # Exact horizontal center of the video
-        centerX = int(video_meta["width"] // 2)
-        region_y = int(max((yy - 6) * scale_y, 0))
-        centerY = int(region_y + region_h // 2)
-        
-        region_x = max(0, int(centerX - region_w // 2))
-        region_w = min(region_w, video_meta["width"] - region_x)
-        region_h = min(region_h, video_meta["height"] - region_y)
+        if validate_gray_roi_as_text(roi, is_top_area=is_top):
+            # Calculate width dynamically based on detected text bounding box + 5% buffer
+            region_w = int((ww + 20) * scale_x * 1.05)
+            # Snug, minimal vertical overlay to prevent obstructing views - reduced from 0.075 to 0.035
+            region_h = int(max((hh + 6) * scale_y, video_meta["height"] * 0.035))
+            
+            # Exact horizontal center of the video
+            centerX = int(video_meta["width"] // 2)
+            region_y = int(max((yy - 4) * scale_y, 0))
+            centerY = int(region_y + region_h // 2)
+            
+            region_x = max(0, int(centerX - region_w // 2))
+            region_w = min(region_w, video_meta["width"] - region_x)
+            region_h = min(region_h, video_meta["height"] - region_y)
 
-        return {
-            "detected": True,
-            "cleanupMode": fallback_region.get("cleanupMode", "localized_blur"),
-            "x": region_x,
-            "y": region_y,
-            "w": region_w,
-            "h": region_h,
-            "centerX": centerX,
-            "centerY": centerY,
-            "confidence": 1.0,
-        }
+            return {
+                "detected": True,
+                "cleanupMode": fallback_region.get("cleanupMode", "localized_blur"),
+                "x": region_x,
+                "y": region_y,
+                "w": region_w,
+                "h": region_h,
+                "centerX": centerX,
+                "centerY": centerY,
+                "confidence": 1.0,
+            }
 
     margin_x = max(int(sample_width * 0.06), 8)
     row_scores = [0.0] * sample_height
@@ -1617,7 +1654,13 @@ def detect_subtitle_region_in_frame(
         end = min(raw_end + 4, sample_height)
         band_height = max(end - start, 1)
         band_score = sum(row_scores[start:end])
-        vertical_bias = 1.0
+        
+        y_center_norm = (start + end) / 2 / max(sample_height, 1)
+        vertical_bias = 0.5  # Heavy penalty for upper half to avoid dynamic stickers
+        if 0.55 <= y_center_norm <= 0.95:  # standard bottom dialogue area
+            vertical_bias = 2.8
+        elif 0.05 <= y_center_norm <= 0.40:  # top dialogue / lyrics area
+            vertical_bias = 0.65
 
         col_scores = [0.0] * sample_width
         for x in range(margin_x, sample_width - margin_x):
@@ -1678,27 +1721,35 @@ def detect_subtitle_region_in_frame(
             left = chosen_span[0] if chosen_span else margin_x
             right = (chosen_span[1] - 1) if chosen_span else sample_width - margin_x - 1
 
-        region_x = int(max((left - 10) * scale_x, 0))
+        region_x = int(max((left - 8) * scale_x, 0))
         region_y = int(max((start - 4) * scale_y, 0))
-        region_w = int(max(((right - left) + 10) * scale_x, video_meta["width"] * 0.18))
-        region_h = int(max(((end - start) + 4) * scale_y, video_meta["height"] * 0.045))
+        # Calculate width dynamically based on detected text span + 5% buffer
+        region_w = int(((right - left) + 8) * scale_x * 1.05)
+        region_h = int(max(((end - start) + 4) * scale_y, video_meta["height"] * 0.035))
         region_w = min(region_w, video_meta["width"] - region_x)
         region_h = min(region_h, video_meta["height"] - region_y)
-        region_center_y = region_y + region_h // 2
-        fallback_center_y_full = int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2
-        fallback_distance = abs(region_center_y - fallback_center_y_full) / max(int(video_meta["height"]), 1)
+        
+        # Subtitles are horizontally centered - nới rộng dx_center nhẹ lên 0.30 để tránh bỏ sót phụ đề lệch
+        region_centerX = region_x + region_w // 2
+        dx_center = abs(region_centerX - video_meta["width"] // 2)
+        if dx_center > video_meta["width"] * 0.30:
+            continue
+
+        # Subtitles are wider than tall - filter out squares and vertical blocks (e.g. animals/furniture)
+        aspect_ratio = region_w / max(region_h, 1)
+        if aspect_ratio < 1.3:
+            continue
+
+        # Apply Canny validation to confirm fallback stripe contains actual high-contrast text lines
+        roi = im[start:end, left:right]
+        y_center_norm = (start + end) / 2 / max(sample_height, 1)
+        is_top = y_center_norm < 0.48
+        
+        if not validate_gray_roi_as_text(roi, is_top_area=is_top):
+            continue
+
         confidence = (band_score / max(sample_width * band_height * 0.16, 1.0)) * vertical_bias
         confidence += min(chosen_span_score / max(sample_height * max(right - left, 1) * 0.18, 1.0), 1.35) * 0.22
-        
-        pref_y = fallback_region.get("preferred_y") if fallback_region else None
-        if pref_y is not None:
-            distance_to_preferred = abs(region_center_y - pref_y) / max(int(video_meta["height"]), 1)
-            if distance_to_preferred <= 0.08:
-                confidence *= 1.45
-            else:
-                confidence *= 1.0 - min(distance_to_preferred * 1.0, 0.72)
-        else:
-            confidence *= 1.0 - min(fallback_distance * 0.25, 0.22)
 
         candidate = {
             "detected": True,
@@ -1829,11 +1880,14 @@ def consolidate_detected_regions(
 
     final_source = compatible if compatible else source
 
+    # To ensure 100% complete coverage without leak, use max of width/height and median of x/y
+    merged_w = max([int(r.get("w", 0)) for r in final_source]) if final_source else 100
+    merged_h = max([int(r.get("h", 0)) for r in final_source]) if final_source else 40
     merged = {
         "x": med([int(r.get("x", 0)) for r in final_source]),
         "y": med([int(r.get("y", 0)) for r in final_source]),
-        "w": med([int(r.get("w", 0)) for r in final_source]),
-        "h": med([int(r.get("h", 0)) for r in final_source]),
+        "w": merged_w,
+        "h": merged_h,
         "confidence": max(float(r.get("confidence", 0.0)) for r in final_source),
     }
     merged["centerX"] = merged["x"] + merged["w"] // 2
@@ -1942,38 +1996,7 @@ def build_dynamic_subtitle_regions(
     sample_height = max(int(video_meta["height"] * sample_width / max(video_meta["width"], 1)), 180)
     cache: dict[int, dict[str, Any]] = {}
     dynamic_regions: list[dict[str, Any]] = []
-    y_votes = []
-    try:
-        tot_dur = max(int(video_meta.get("durationMs", 0)), 1000)
-        t_pts = [int(tot_dur * i / 11) for i in range(1, 11)]
-        for pt in t_pts:
-            fr = extract_gray_frame(video_path, pt, sample_width, sample_height)
-            if len(fr) >= sample_width * sample_height:
-                im = np.frombuffer(fr, dtype=np.uint8).reshape((sample_height, sample_width))
-                b_mask = cv2.adaptiveThreshold(im, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, -20)
-                edges = cv2.Canny(im, 20, 80)
-                comb = cv2.bitwise_or(edges, b_mask)
-                kw = max(int(sample_width * 0.12), 64)
-                kh = max(int(sample_height * 0.04), 16)
-                ker = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
-                dil = cv2.dilate(comb, ker, iterations=2)
-                cnts, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                for c in cnts:
-                    xx, yy, ww, hh = cv2.boundingRect(c)
-                    if ww > sample_width * 0.12 and abs((xx + ww // 2) - sample_width // 2) < sample_width * 0.15:
-                        y_votes.append(int(yy * (video_meta["height"] / sample_height)))
-    except Exception:
-        pass
 
-    if y_votes:
-        buckets = {}
-        for y_v in y_votes:
-            b_idx = y_v // 40
-            buckets[b_idx] = buckets.get(b_idx, 0) + 1
-            buckets[b_idx - 1] = buckets.get(b_idx - 1, 0) + 0.5
-            buckets[b_idx + 1] = buckets.get(b_idx + 1, 0) + 0.5
-        best_b = max(buckets.items(), key=lambda x: x[1])[0]
-        fallback_region["preferred_y"] = best_b * 40
     fallback_position_region = {
         **fallback_region,
         "centerX": fallback_region.get("x", 0) + fallback_region.get("w", 0) // 2,
@@ -1982,36 +2005,31 @@ def build_dynamic_subtitle_regions(
         "detected": False,
     }
     fallback_anchor_region = quantize_region(fallback_position_region, video_meta=video_meta)
-    previous_detected_region: dict[str, Any] | None = None
 
+    # 1. Gather smart sample points (optimal density: every 350ms - 400ms per sample)
+    # Reverted to high-fidelity FFmpeg subprocess to guarantee 100% accurate frame seek
     for index, subtitle in enumerate(subtitles):
         sub_start = int(subtitle.start_ms)
         sub_end = int(subtitle.end_ms)
         subtitle_duration = max(sub_end - sub_start, 1)
 
-        # Sample only a few points per subtitle; frame extraction is one of the
-        # most expensive parts of render when cleanup is enabled.
-        num_samples = min(max(int(DUB_SUBTITLE_REGION_SAMPLES), 1), 8)
+        # Distribute 4 to 6 sample points evenly across the segment duration
+        num_samples = min(max(int(subtitle_duration // 350), 3), 6)
         sample_points = set()
-        if num_samples == 1:
-            fractions = [0.5]
-        elif num_samples == 2:
-            fractions = [0.25, 0.75]
-        else:
-            fractions = [i / max(num_samples - 1, 1) for i in range(num_samples)]
-        for frac in fractions:
+        for i in range(num_samples):
+            frac = i / max(num_samples - 1, 1)
             pt = int(sub_start + frac * subtitle_duration)
             sample_points.add(pt)
 
-        detected_regions: list[dict[str, Any]] = []
-        for sample_point in sorted(sample_points):
-            # Coarser cache key (round to nearest 150ms) to avoid duplicate extraction
-            sample_key = int(round(sample_point / 150.0) * 150)
+        detected_points = []
+        for pt in sorted(list(sample_points)):
+            sample_key = int(round(pt / 150.0) * 150)
             if sample_key not in cache:
                 try:
-                    frame = extract_gray_frame(video_path, sample_key, sample_width, sample_height)
+                    # Leverage extremely accurate time seeking of codebase-native FFmpeg frame extractor
+                    frame_bytes = extract_gray_frame(video_path, sample_key, sample_width, sample_height)
                     cache[sample_key] = detect_subtitle_region_in_frame(
-                        frame,
+                        frame_bytes,
                         sample_width=sample_width,
                         sample_height=sample_height,
                         video_meta=video_meta,
@@ -2019,68 +2037,103 @@ def build_dynamic_subtitle_regions(
                     )
                 except Exception:
                     cache[sample_key] = fallback_position_region.copy()
+
             region = cache[sample_key]
             if subtitle_region_detected(region):
-                detected_regions.append(quantize_region(region, video_meta=video_meta))
+                detected_points.append((pt, quantize_region(region, video_meta=video_meta)))
 
-        region: dict[str, Any] | None = None
-        if detected_regions:
-            # Pass 2: Cross-validate detections (removes temporal outliers)
-            validated = cross_validate_regions(detected_regions, video_meta=video_meta)
-            non_outliers = [r for r in validated if not r.get("_outlier")]
-            source = non_outliers if non_outliers else detected_regions
-            region = consolidate_detected_regions(source, video_meta=video_meta)
-        elif previous_detected_region is not None:
-            region = previous_detected_region.copy()
-        elif subtitle_region_detected(fallback_anchor_region):
-            region = fallback_anchor_region.copy()
+        # Y-Consensus Algorithm to filter out false positive vertical coordinate noise
+        if detected_points:
+            # We cluster the detected Y coordinates with a tolerance of 5% of video height
+            y_tolerance = int(video_meta["height"] * 0.05)
+            best_cluster = []
+            
+            for pt_anchor, r_anchor in detected_points:
+                anchor_y = int(r_anchor.get("y", 0))
+                cluster = []
+                for pt_test, r_test in detected_points:
+                    test_y = int(r_test.get("y", 0))
+                    if abs(test_y - anchor_y) <= y_tolerance:
+                        cluster.append((pt_test, r_test))
+                if len(cluster) > len(best_cluster):
+                    best_cluster = cluster
+            
+            # Majority rule filters
+            if len(detected_points) >= 3:
+                # Require at least 50% consensus on the vertical coordinate plane
+                if len(best_cluster) < (len(detected_points) + 1) // 2 or len(best_cluster) < 2:
+                    detected_points = []
+                else:
+                    detected_points = best_cluster
+            elif len(detected_points) == 2:
+                # Both points must agree within tolerance
+                y1 = int(detected_points[0][1].get("y", 0))
+                y2 = int(detected_points[1][1].get("y", 0))
+                if abs(y1 - y2) > y_tolerance:
+                    detected_points = []
+            else:  # len == 1
+                # Must have high confidence to be trusted as a single sample detection
+                if float(detected_points[0][1].get("confidence", 0.0)) < 0.65:
+                    detected_points = []
 
-        if region is None:
-            region = fallback_anchor_region.copy()
-            region["detected"] = True
-            region["confidence"] = SOURCE_SUBTITLE_DETECTION_CONFIDENCE
-
-        if detected_regions and previous_detected_region is not None:
-            y_diff = abs(int(region.get("centerY", 0)) - int(previous_detected_region.get("centerY", 0)))
-            if y_diff > 16:
-                region = quantize_region(region, video_meta=video_meta)
+        # 2. Group consecutive detected frames that are within a tight temporal gap (<= 600ms)
+        sub_groups = []
+        curr_group = []
+        for pt, r in detected_points:
+            if not curr_group:
+                curr_group.append((pt, r))
             else:
-                region = stabilize_region(region, previous_detected_region, video_meta=video_meta)
-        elif detected_regions:
-            region = quantize_region(region, video_meta=video_meta)
+                last_pt = curr_group[-1][0]
+                if pt - last_pt <= 600:
+                    curr_group.append((pt, r))
+                else:
+                    sub_groups.append(curr_group)
+                    curr_group = [(pt, r)]
+        if curr_group:
+            sub_groups.append(curr_group)
 
-        # Determine if the region was truly detected by OpenCV
-        was_detected = False
-        if detected_regions:
-            was_detected = True
-        elif previous_detected_region is not None and previous_detected_region.get("detected"):
-            was_detected = True
+        # 3. Formulate localized active dynamic masking zones
+        if sub_groups:
+            for group in sub_groups:
+                # Use max for width & height to avoid leak, and median coordinates for vertical stabilization
+                group_w = max(int(r.get("w", 0)) for pt, r in group)
+                group_h = max(int(r.get("h", 0)) for pt, r in group)
+                group_y = _median([int(r.get("y", 0)) for pt, r in group])
+                group_centerX = _median([int(r.get("centerX", 0)) for pt, r in group])
+                max_conf = max(float(r.get("confidence", 0.0)) for pt, r in group)
 
-        region["detected"] = was_detected
-        if was_detected:
-            region["confidence"] = round(max(float(region.get("confidence", 0.0)), SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
+                padded_region = fallback_anchor_region.copy()
+                # Apply precise +5% width margin to fully encapsulate Chinese characters
+                padded_region["w"] = min(int(group_w * 1.05), int(video_meta["width"]))
+                padded_region["h"] = group_h
+                padded_region["centerY"] = group_y + group_h // 2
+                padded_region["centerX"] = group_centerX
+                padded_region["x"] = max(0, int(padded_region["centerX"] - padded_region["w"] // 2))
+                padded_region["y"] = group_y
+                
+                # Align mask timing perfectly with segment duration to prevent early disappearance
+                padded_region["startMs"] = sub_start
+                padded_region["endMs"] = sub_end
+                padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
+                padded_region["detected"] = True
+                padded_region["confidence"] = round(max(max_conf, SOURCE_SUBTITLE_DETECTION_CONFIDENCE), 4)
+                dynamic_regions.append(padded_region)
         else:
-            region["confidence"] = 0.0
+            # If no subtitle was detected, keep an inactive placeholder to benchmark alignment references
+            padded_region = fallback_anchor_region.copy()
+            padded_region["startMs"] = sub_start
+            padded_region["endMs"] = sub_end
+            padded_region["detected"] = False
+            dynamic_regions.append(padded_region)
 
-        # Apply minimum padding — just enough to avoid cutting off the edges of subtitle text
-        padded_region = region.copy()
-        padded_region["centerX"] = padded_region["x"] + padded_region["w"] // 2
-        padded_region["centerY"] = padded_region["y"] + padded_region["h"] // 2
-
-        padded_region["startMs"] = sub_start
-        padded_region["endMs"] = sub_end
-        padded_region["cleanupEffect"] = choose_cleanup_effect(padded_region, video_meta=video_meta)
-        padded_region["detected"] = was_detected
-        dynamic_regions.append(padded_region)
-        previous_detected_region = region.copy()
-
-    # If the video genuinely has no subtitles, disable cleanup mask entirely
-    total_segments = len(dynamic_regions)
+    # 4. Turn off masking globally if the video has virtually no subtitles
+    total_segments = len(subtitles)
     detected_count = sum(1 for r in dynamic_regions if r.get("detected"))
-    if total_segments > 0 and (detected_count / total_segments) < 0.15:
+    if total_segments > 0 and (detected_count / total_segments) < 0.12:
         for r in dynamic_regions:
             r["detected"] = False
 
+    # 5. Compute stable display plane positions for the new Vietnamese subtitles at bottom fallback
     subtitle_positions = build_stable_subtitle_positions(
         subtitles,
         dynamic_regions=dynamic_regions,
@@ -2088,23 +2141,28 @@ def build_dynamic_subtitle_regions(
         video_meta=video_meta,
     )
 
-    # Align dynamic regions exactly with the final subtitle positions
-    for r, pos in zip(dynamic_regions, subtitle_positions):
-        min_w = int(video_meta["width"] * 0.85)
-        if r["w"] < min_w:
-            r["w"] = min_w
-
-        # Vertical offset from center of the old sub for better coverage
-        y_offset = int(video_meta.get("height", 1024) * 0.005)
-
-        # Keep both the mask and the new subtitle exactly centered horizontally on the video
+    # 6. Align horizontal center exactly, and calculate final bounding box coordinates
+    fallback_center_y = int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2
+    for r in dynamic_regions:
+        r["w"] = min(int(r["w"]), int(video_meta["width"]))
         r["centerX"] = video_meta["width"] // 2
-        r["centerY"] = pos["centerY"] + y_offset
-        r["x"] = max(0, int(r["centerX"] - r["w"] // 2))
-        r["y"] = max(0, int(r["centerY"] - r["h"] // 2))
         
-        pos["centerX"] = r["centerX"]
-        pos["centerY"] = r["centerY"]
+        # If text is not detected, default the mask Y plane to fallback position
+        if not r.get("detected"):
+            r["centerY"] = fallback_center_y
+            r["x"] = max(0, int(r["centerX"] - r["w"] // 2))
+            r["y"] = max(0, int(r["centerY"] - r["h"] // 2))
+        else:
+            # Keep the exact detected centerY plane (which supports subtitles at any height)
+            r["x"] = max(0, int(r["centerX"] - r["w"] // 2))
+            r["y"] = max(0, int(r["centerY"] - r["h"] // 2))
+
+    # Backward-align the Vietnamese subtitle positions exactly over the active dynamic masks
+    for subtitle, pos in zip(subtitles, subtitle_positions):
+        matching_r = choose_region_for_subtitle(subtitle, dynamic_regions)
+        if matching_r is not None and matching_r.get("detected"):
+            pos["centerX"] = video_meta["width"] // 2
+            pos["centerY"] = matching_r["centerY"]
 
     return dynamic_regions, subtitle_positions
 

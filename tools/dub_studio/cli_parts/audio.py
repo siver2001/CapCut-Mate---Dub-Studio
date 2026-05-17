@@ -1944,6 +1944,7 @@ def create_dub_audio(
             or ""
         )
         voice = voice_override or voices.get(speaker_id) or DEFAULT_VOICES[0]
+        print(f"DEBUG: Processing segment {index}/{len(segments)}: voice={voice}, text='{translated[:30]}...'", flush=True)
 
         if not translated:
             target_ms = resolve_segment_target_ms(
@@ -2048,6 +2049,7 @@ def create_dub_audio(
                         generated_items.extend(future.result())
             else:
                 for chain in chains:
+                    print(f"DEBUG: Starting _run_tts_chain for {len(chain)} items...", flush=True)
                     generated_items.extend(
                         _run_tts_chain(
                             items=chain,
@@ -2058,7 +2060,32 @@ def create_dub_audio(
                             global_speed=global_speed,
                         )
                     )
+                    print(f"DEBUG: Finished _run_tts_chain for {len(chain)} items.", flush=True)
     generated_items.sort(key=lambda item: int(item["index"]))
+
+    # Anchor-Sub-Sync pre-pass: Recalculate and synchronize subtitle/audio timing anchors dynamically
+    timeline_cursor = 0
+    for idx, item in enumerate(generated_items):
+        segment = item["segment"]
+        clip_ms = int(item["clip_ms"])
+        orig_start = max(int(segment.get("startMs", 0)), 0)
+        
+        # Prevent speech overlaps by forcing sequential start bounds (minimum 50ms interval)
+        actual_start = max(orig_start, timeline_cursor)
+        if idx > 0:
+            prev_end = generated_items[idx - 1]["actual_end"]
+            if actual_start < prev_end + 50:
+                actual_start = prev_end + 50
+                
+        actual_end = actual_start + clip_ms
+        
+        # Save computed timings back to tracking variables and segment dictionary
+        item["actual_start"] = actual_start
+        item["actual_end"] = actual_end
+        segment["startMs"] = actual_start
+        segment["endMs"] = actual_end
+        
+        timeline_cursor = actual_end
 
     for item in generated_items:
         index = int(item["index"])
@@ -2072,10 +2099,12 @@ def create_dub_audio(
         rate = str(item["rate"])
         pitch = str(item["pitch"])
         volume = str(item["volume"])
+        actual_start = int(item["actual_start"])
+        actual_end = int(item["actual_end"])
 
         input_index = len(tts_inputs) // 2 + 1
         tts_inputs.extend(["-i", str(fitted_clip)])
-        delay = max(int(segment["startMs"]), 0)
+        delay = actual_start
         label = f"d{input_index}"
         energy_gain_db = 0.0
         reference_energy_db: float | None = None
@@ -2106,8 +2135,8 @@ def create_dub_audio(
             ClipManifest(
                 index=index,
                 segment_id=segment["id"],
-                start_ms=int(segment["startMs"]),
-                end_ms=int(segment["endMs"]),
+                start_ms=actual_start,
+                end_ms=actual_end,
                 voice=voice,
                 rate=rate,
                 pitch=pitch,

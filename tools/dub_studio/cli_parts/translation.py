@@ -118,7 +118,71 @@ def translate_via_google_free(text: str, source_lang: str = "auto", target_lang:
     return ""
 
 
+_LOCAL_TRANSLATION_CACHE = {}
+
+def translate_via_local_seq2seq(text: str, source_lang: str = "auto", target_lang: str = "vi") -> str:
+    """Tự động tải mô hình dịch local tương ứng với ngôn ngữ nguồn để tạo bản dịch thô."""
+    clean_text = normalize_text(text)
+    if not clean_text:
+        return ""
+    
+    from ..config import (
+        DUB_MT5_EN2VI_MODEL,
+        DUB_MT5_ZH2VI_MODEL,
+        DUB_MT5_JA2VI_MODEL,
+        DUB_MT5_KO2VI_MODEL,
+        DUB_USE_GPU,
+        HUGGINGFACE_HUB_CACHE,
+    )
+    
+    src = str(source_lang).strip().lower()
+    
+    # Ánh xạ model tương ứng với 4 ngôn ngữ nguồn sang tiếng Việt
+    if src in {"zh", "cn", "chinese"}:
+        model_name = DUB_MT5_ZH2VI_MODEL
+    elif src in {"ja", "jp", "japanese"}:
+        model_name = DUB_MT5_JA2VI_MODEL
+    elif src in {"ko", "kr", "korean"}:
+        model_name = DUB_MT5_KO2VI_MODEL
+    else:
+        model_name = DUB_MT5_EN2VI_MODEL
+        
+    global _LOCAL_TRANSLATION_CACHE
+    if model_name not in _LOCAL_TRANSLATION_CACHE:
+        try:
+            import torch
+            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+            
+            device = "cuda" if (torch.cuda.is_available() and DUB_USE_GPU) else "cpu"
+            safe_print(f"[info] Đang nạp mô hình dịch thô {src.upper()}->VI: {model_name} lên {device}...", flush=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=HUGGINGFACE_HUB_CACHE)
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_name, cache_dir=HUGGINGFACE_HUB_CACHE).to(device)
+            _LOCAL_TRANSLATION_CACHE[model_name] = (tokenizer, model, device)
+        except Exception as e:
+            safe_print(f"[error] Lỗi nạp mô hình local {model_name}: {e}. Fallback sang Google Free.", flush=True)
+            return translate_via_google_free(text, source_lang, target_lang)
+            
+    tokenizer, model, device = _LOCAL_TRANSLATION_CACHE[model_name]
+    
+    try:
+        if "envt5" in model_name.lower():
+            input_text = f"en2vi: {clean_text}"
+        else:
+            input_text = clean_text
+            
+        import torch
+        inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        with torch.no_grad():
+            outputs = model.generate(**inputs, max_length=256, num_beams=4, early_stopping=True)
+        translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return normalize_text(translated)
+    except Exception as e:
+        safe_print(f"[warn] Lỗi dịch qua model local {model_name}: {e}. Fallback sang Google Free.", flush=True)
+        return translate_via_google_free(text, source_lang, target_lang)
+
+
 MICROSOFT_TRANSLATION_CACHE_VERSION = 1
+
 
 
 def machine_translation_cache_path(cache_path: Path) -> Path:
@@ -348,6 +412,13 @@ def _trim_translation_context(text: str, max_chars: int) -> str:
     return (shortened or clean[: max_chars - 1].strip()).rstrip(" ,;:")
 
 
+def _calculate_target_spoken_chars(duration_ms: int) -> int:
+    """Calculate target character count for a segment to ensure natural pacing."""
+    duration_seconds = max(duration_ms, 400) / 1000.0
+    # Natural Vietnamese speaking rate is around 14-16 characters per second (including spaces).
+    return int(duration_seconds * 14.5)
+
+
 def _estimate_translation_char_limit(
     source_text: str,
     duration_ms: int,
@@ -394,6 +465,7 @@ def _compact_translation_item(
         "speakerId": item.get("speakerId") or "speaker_1",
         "maxSubtitleChars": _estimate_translation_char_limit(source_text, duration_ms, spoken=False),
         "maxSpokenChars": _estimate_translation_char_limit(source_text, duration_ms, spoken=True),
+        "targetSpokenChars": _calculate_target_spoken_chars(duration_ms),
     }
 
     if previous_text:
@@ -489,6 +561,7 @@ def _build_localization_prompt(
         "4. Translate every sourceText, including single words, short phrases, reactions, interjections, slang, jokes, and idioms.\n"
         "5. Do NOT leave meaningful source-language words untranslated.\n"
         "6. STRICT BAN ON CHINESE CHARACTERS: Absolutely ZERO Chinese hanzi (e.g., 堆积如山) must remain in the output. Translate EVERY single word into standard, natural Vietnamese.\n"
+        "7. PRESERVE PROPER NAMES: Do NOT translate proper names, brand names, or specific identifiers into Vietnamese unless explicitly instructed. Keep names like 'Wantuan', 'Nuomin' exactly as they are in English/Pinyin.\n"
         "\n"
         "Each item must be a JSON object with exactly these keys:\n"
         '- "translatedText": natural, concise, captivating Vietnamese subtitle text. It MUST fit within the provided "maxSubtitleChars" or "maxSpokenChars" limits.\n'
@@ -496,15 +569,19 @@ def _build_localization_prompt(
         "\n"
         "LOCALIZATION & WRITING EXCELLENCE RULES:\n"
         f"{mode_instructions}"
-                "- IDIOMATIC & COHERENT: Do NOT translate word-for-word. Do not use direct literal meanings. Translate the complete contextual meaning to make sense in Vietnamese. For example, do not translate '打' as 'đánh' unless it makes sense, and do not use 'vừa gió vừa sưng' for 'gout/arthritis' or 'red and swollen'.\n"
-        "- CLARITY & CONTEXT: The translation must be instantly comprehensible to native Vietnamese speakers. Avoid weird or robotic phrases. All sentences must sound natural for a product review, vlog, or voiceover.\n"
-        "- NO NONSENSE & GIBBERISH: Completely eliminate gibberish sentences and Whisper hallucinations (e.g., weird phrases about 'microphones', 'esports', or 'American team' when the topic is cat toothpaste). Avoid translating out-of-context terms literally. Instead, rewrite them smoothly to match the product topic (e.g., 'theo công nghệ Mỹ', 'đạt chuẩn quốc tế').\n" 
-        "- EMOTIONAL RESONANCE & PRONOUN CONSISTENCY: You MUST consistently refer to yourself as 'mình' across ALL segments when speaking as the narrator or main host. This is a strict requirement for a friendly, modern Vietnamese persona. Avoid 'tôi', 'tớ', 'chúng tôi', or 'chúng mình' unless it's a specific dialogue between characters. Use natural, warm Vietnamese pronouns for others (e.g., 'mình/bạn', 'mình/các bạn').\n"
-        "- SMART ADAPTIVE LENGTH: Do NOT make every translation the same length. Short, punchy sentences are better for excitement; longer, smooth sentences are better for calm parts. You MUST summarize or condense the text if it exceeds the 'maxSpokenChars' or 'maxSubtitleChars' limits to ensure the narrator doesn't have to speak unnaturally fast.\n"
-        "- CLARITY & FLOW: The translation must sound like a human, not a machine. Use natural Vietnamese discourse markers (nhé, nha, nè, hén) to make it sound friendly and alive.\n"
-        "- NO HALLUCINATIONS: Completely eliminate nonsensical phrases or Whisper hallucinations. If a segment is clearly background noise or gibberish, provide a very short, neutral Vietnamese filler or skip it.\n"
+        "- IDIOMATIC & COHERENT: Do NOT translate word-for-word. Do not use direct literal meanings. Translate the complete contextual meaning to make sense in Vietnamese. For example, do not translate '打' as 'đánh' unless it makes sense.\n"
+        "- CLARITY & FLOW: The translation must sound like a human storyteller, not a machine. Use natural Vietnamese discourse markers (nhé, nha, nè, hén) to make it sound friendly and alive.\n"
+        "- WRITING EXCELLENCE: Every sentence must be 'hay' (beautiful, engaging, and catchy). Use expressive verbs and warm adjectives. Avoid stiff, formal, or robotic phrasing. If a sentence sounds dry, rewrite it to be more playful and cute.\n"
+        "- ADAPTIVE LENGTH & PACING: You MUST aim for the 'targetSpokenChars' length to ensure the narrator speaks at a natural pace. If the translation is significantly shorter than the target, add natural filler words or expand the sentence. If it's too long, condense it. DO NOT leave silence gaps at the end of segments.\n"
+        "- NO NONSENSE & GIBBERISH: Completely eliminate gibberish sentences and Whisper hallucinations. Rewrite them smoothly to match the pet vlog topic.\n"
         "- CONTEXTUAL COHERENCE: Ensure that the story flows logically from one segment to the next. Use the provided context to resolve ambiguities.\n"
         "- GLOBAL THEME ALIGNMENT: Ensure the vocabulary and style match the overall topic of the video (e.g., technical for tech reviews, playful for vlogs).\n"
+        "- PUPPY PERSONA RULES (If Pet Vlog):\n"
+        "  - Host/Narrator self-reference: 'mình' or 'Wantuan'/'Nuomin'.\n"
+        "  - Addressing audience ('姨们'/'Yimen'): Use 'Các cô chú' or 'Cả nhà'. NEVER 'Các dì'.\n"
+        "  - Owner reference: 'Mẹ' or 'Ba'.\n"
+        "  - Specific names: 'Wantuan' (Vằn Thầu), 'Nuomin' (Nhu Mễ). Keep these names consistent.\n"
+        "\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
@@ -615,13 +692,15 @@ def _compact_machine_review_item(
 ) -> dict[str, Any]:
     source_text = normalize_text(item.get("sourceText") or "")
     machine_translated = normalize_text(item.get("translatedText") or "")
+    duration_ms = max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 400)
     compact_item: dict[str, Any] = {
         "index": index,
         "sourceText": source_text,
         "machineTranslatedText": machine_translated,
-        "durationMs": max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 400),
+        "durationMs": duration_ms,
         "speakerId": item.get("speakerId") or "speaker_1",
-        "maxSpokenChars": _estimate_translation_char_limit(machine_translated or source_text, max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 400), spoken=True),
+        "maxSpokenChars": _estimate_translation_char_limit(machine_translated or source_text, duration_ms, spoken=True),
+        "targetSpokenChars": _calculate_target_spoken_chars(duration_ms),
     }
     previous_translated = normalize_text(
         item.get("previousTranslatedText")
@@ -688,29 +767,29 @@ def _build_machine_review_prompt(
         )
 
     return (
-        "You are an expert Vietnamese Localization Editor and Video Content Strategist.\n"
-        "Your mission is to fix broken machine translations and turn them into professional, natural, and logical video scripts.\n"
+        "You are a Senior Vietnamese Script Editor. Your goal is to make the video script 'cực kỳ hay' (exceptionally engaging and natural).\n"
+        "Your mission is to fix broken machine translations and turn them into professional, charming, and logical video scripts.\n"
         f"Source language: {source_language or 'auto-detected language'}.\n"
         f"Style: {localization_mode.replace('_', ' ').title()}\n"
         "\n"
-        "STRICT LOGIC & CONTEXT RULES:\n"
-        "1. THEME DOMINANCE: The GLOBAL VIDEO CONTEXT is absolute. If theme is 'Pet/Cat Care', any mention of 'singing', 'lyrics', 'song', 'stage' is 100% an ASR error. Replace 'singing' (唱) with 'long/hard to say' (长/难说).\n"
-        "2. PET CONTEXT SPECIAL REPAIR: \n"
-        "   - 'yazama' -> 'vấn đề nha chu/vôi răng'.\n"
-        "   - 'lời từ chối/phủ nhận' (denials) -> 'phản ứng/sự kháng cự' (reactions/resistance).\n"
-        "   - 'hát hay quá' -> 'câu này hơi dài/khó nói'.\n"
-        "3. NONSENSE ELIMINATION: Never output non-existent words. Use the theme to find the most likely intended meaning.\n"
-        "4. NATURAL STORYTELLING: Use professional, conversational Vietnamese. Ensure sentences connect logically.\n"
-        "5. PRONOUNS: Use a natural, consistent Vietnamese narrating style. MANDATORY: Use 'mình' as the primary first-person pronoun for the host/narrator throughout the entire video. Do NOT switch to 'tôi' or 'tớ'.\n"
-        "6. NO HANZI: No Chinese characters allowed.\n"
-        "7. TIME CONSTRAINT & SUMMARIZATION (CRITICAL): Each segment has a 'durationMs' and a 'maxSpokenChars' limit. Your translation MUST be concise enough to be read naturally within that time. If the draft is too long, SUMMARIZE it while keeping the essential meaning. Aim for a natural pace (approx. 3 words per second).\n"
+        "WRITING EXCELLENCE & PET VLOG RULES:\n"
+        "1. BE CREATIVE: Rewrite sentences to be catchy and emotionally resonant. Use natural Vietnamese idioms and wordplay where appropriate.\n"
+        "2. PUPPY CHARM: The narrator is a cute puppy. Use cute particles (nè, nha, nhé, cơ, á). Self-reference = 'mình'.\n"
+        "3. PROPER NAMES: Strictly keep 'Wantuan' and 'Nuomin'. Avoid literal transliterations.\n"
+        "4. AUDIENCE: Translate audience labels as 'Các cô chú' or 'Cả nhà'.\n"
+        "5. TONE: High energy, playful, and expressive. Every segment must sound like it was written by a professional content creator.\n"
+        "6. PACING: Aim for 'targetSpokenChars'. If a segment is long (high duration), expand the text to avoid silence. If short, condense it.\n"
+        "7. LANGUAGE-SPECIFIC POLISHING:\n"
+        "   - English: Avoid literal word-by-word translations, use natural spoken Vietnamese structures.\n"
+        "   - Chinese: Convert rigid Sino-Vietnamese (Hán-Việt) terms into standard modern colloquial Vietnamese.\n"
+        "   - Japanese & Korean: Since the raw translation might be stiff due to agglutinative grammar and particles (e.g. passive voices, auxiliary verbs), smooth it out into direct, active, and clean Vietnamese sentences.\n"
         "\n"
         "OUTPUT REQUIREMENT:\n"
         f"- Return ONLY a valid JSON array of exactly {len(items_payload)} items.\n"
         "- Format: [{\"translatedText\": \"...\", \"delivery\": \"...\"}, ...]\n"
         "\n"
         "BATCH TO PROCESS:\n"
-        f"{json.dumps(items_payload, ensure_ascii=False)}"
+        + json.dumps(items_payload, ensure_ascii=False)
     )
 
 
@@ -1758,6 +1837,21 @@ def translate_segments(
         provider = str(os.getenv("DUB_TRANSLATE_PROVIDER") or DUB_TRANSLATE_PROVIDER).lower().strip()
         if provider in {"ollama", "auto"}:
             translated = ""
+        elif provider == "mt5":
+            emit_progress(
+                phase=phase,
+                step="translate",
+                progress=machine_progress(position),
+                message=f"Đang dịch thô local (Seq2Seq) câu {position}/{len(segments)}",
+            )
+            try:
+                translated = translate_via_local_seq2seq(text, source_hint, normalized_target_language)
+            except Exception as e:
+                safe_print(f"[warn] Lỗi dịch thô local câu {position}: {e}, fallback Google Free", flush=True)
+                try:
+                    translated = translate_via_google_free(text, source_hint, normalized_target_language)
+                except Exception:
+                    translated = ""
         elif provider == "google":
             try:
                 translated = translate_via_google_free(text, source_hint, normalized_target_language)
@@ -1968,8 +2062,13 @@ def translate_segments(
         pending_updates += 1
         flush_translation_cache()
 
+    # Final step: Audit and fix common translation artifacts to ensure persona consistency
+    # This must happen BEFORE flushing the cache so that the clean versions are persisted.
+    segments = validate_translation_quality(segments)
+
     flush_translation_cache(force=True)
     flush_machine_cache(force=True)
+
     return segments
 
 
@@ -2321,3 +2420,54 @@ def build_intro_hook_text_with_context(
     if len(normalize_text(baseline_text)) > len(normalize_text(fallback_text)):
         return finalize_intro_text(baseline_text)
     return finalize_intro_text(fallback_text)
+
+
+def validate_translation_quality(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Final audit of translation results to fix common errors and artifacts."""
+    for item in segments:
+        text = item.get("translatedText") or ""
+        if not text:
+            continue
+            
+        # 1. Fix literal name transliterations (Common LLM failures for this project)
+        text = text.replace("Vạn Tuân", "Wantuan")
+        text = text.replace("Vạn Tuần", "Wantuan")
+        text = text.replace("Văn Tuân", "Wantuan")
+        text = text.replace("Vằn Thầu", "Wantuan")
+        text = text.replace("Nô Mẫn", "Nuomin")
+        text = text.replace("Nhu Mễ", "Nuomin")
+        text = text.replace("Nhu Mỹ", "Nuomin")
+        text = text.replace("糯米", "Nuomin")
+        text = text.replace("Thứ Hai", "Wantuan")
+        
+        # 2. Fix audience addressing (Remnants of 'Yimen' -> 'Các dì')
+        text = text.replace("Các dì", "Các cô chú")
+        text = text.replace("dì ơi", "cô chú ơi")
+        text = text.replace("Các 姨", "Các cô chú")
+        text = text.replace("Các姨", "Các cô chú")
+        text = text.replace("dì mắng", "cô chú mắng")
+        text = text.replace("đoàn buồn", "Wantuan buồn")
+        
+        # 3. Fix weird ASR remnants
+        text = text.replace("hát hay quá", "câu này dài quá")
+        text = text.replace("ngôn ngữ khác", "câu này hơi khó")
+        
+        # 4. Enforce pronoun 'mình' consistency
+        if text.startswith("Tôi ") or text.startswith("Tui "):
+            text = "Mình " + text[4:]
+        if text.startswith("Chúng tôi"):
+            text = text.replace("Chúng tôi", "Chúng mình", 1)
+        if " của 小狗" in text:
+            text = text.replace(" của 小狗", " của mình")
+        if "của 糯米" in text:
+             text = text.replace("của 糯米", "của Nuomin")
+            
+        # 5. Remove any leftover hanzi or weird particles
+        text = re.sub(r'[\u4e00-\u9fff]+', '', text)
+        text = text.replace("姨", "") # Catch-all for leftover 姨
+        
+        # 6. Final cleanup of multiple spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        item["translatedText"] = text
+    return segments

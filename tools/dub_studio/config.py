@@ -108,22 +108,22 @@ MICROSOFT_TRANSLATOR_TIMEOUT = max(
     int(env_value("DUB_MICROSOFT_TRANSLATOR_TIMEOUT", default="20")),
     5,
 )
-DUB_USE_GPU = env_bool("DUB_USE_GPU", default=True)
+DUB_USE_GPU = True
 DUB_USE_VIENEU = env_bool("DUB_USE_VIENEU", default=True)
 DUB_USE_VALTEC = env_bool("DUB_USE_VALTEC", default=True)
-DUB_VALTEC_PRELOAD_ZEROSHOT = env_bool("DUB_VALTEC_PRELOAD_ZEROSHOT", default=True)
+DUB_VALTEC_PRELOAD_ZEROSHOT = env_bool("DUB_VALTEC_PRELOAD_ZEROSHOT", default=False)
 DUB_TTS_ENABLE_PARALLEL = env_bool("DUB_TTS_ENABLE_PARALLEL", default=True)
 DUB_TTS_ALLOW_SILENT_FALLBACK = env_bool("DUB_TTS_ALLOW_SILENT_FALLBACK", default=False)
-DUB_ENABLE_ENERGY_MATCHING = env_bool("DUB_ENABLE_ENERGY_MATCHING", default=True)
+DUB_ENABLE_ENERGY_MATCHING = False
 DUB_MAX_ENERGY_GAIN_DB = float(env_value("DUB_MAX_ENERGY_GAIN_DB", default="7.0"))
-DUB_SOURCE_SEPARATION_ENABLED = env_bool("DUB_SOURCE_SEPARATION_ENABLED", default=True)
+DUB_SOURCE_SEPARATION_ENABLED = True
 DUB_SOURCE_SEPARATION_PROVIDER = env_value("DUB_SOURCE_SEPARATION_PROVIDER", default="torchaudio").lower()
 DUB_SOURCE_SEPARATION_MODEL = env_value("DUB_SOURCE_SEPARATION_MODEL", default="htdemucs")
 DUB_SOURCE_SEPARATION_STEM = env_value("DUB_SOURCE_SEPARATION_STEM", default="vocals")
 DUB_SOURCE_SEPARATION_TIMEOUT = max(int(env_value("DUB_SOURCE_SEPARATION_TIMEOUT", default="1800")), 120)
 DUB_BACKGROUND_AUDIO_GAIN = float(env_value("DUB_BACKGROUND_AUDIO_GAIN", default="0.92"))
 DUB_ORIGINAL_AUDIO_FALLBACK_GAIN = float(env_value("DUB_ORIGINAL_AUDIO_FALLBACK_GAIN", default="0.12"))
-DUB_GPU_DEVICE = int(env_value("DUB_GPU_DEVICE", default=("1" if sys.platform == "win32" else "0")))
+DUB_GPU_DEVICE = 0
 DUB_STUDIO_DIR = ROOT / "temp" / "dub_studio"
 LLAMA_CPP_BIN = env_value("DUB_LLAMA_CPP_BIN", default="")
 LLAMA_CPP_MODEL = env_value("DUB_LLAMA_CPP_MODEL", default="")
@@ -154,10 +154,7 @@ EDGE_TTS_CONCURRENCY = max(
     ),
     1,
 )
-DUB_SUBTITLE_REGION_SAMPLES = max(
-    int(env_value("DUB_SUBTITLE_REGION_SAMPLES", default="12")),
-    1,
-)
+DUB_SUBTITLE_REGION_SAMPLES = 2
 VIENEU_TTS_CONCURRENCY = max(
     int(
         env_value(
@@ -369,3 +366,11 @@ def whisperx_disabled() -> bool:
 
 def vieneu_model_ready(model_dir: Path = VIENEU_MODEL_DIR) -> bool:
     return model_dir.exists() and all((model_dir / filename).exists() for filename in VIENEU_REQUIRED_FILES)
+
+
+# Cấu hình các mô hình dịch local cho 4 ngôn ngữ
+DUB_MT5_EN2VI_MODEL = env_value("DUB_MT5_EN2VI_MODEL", default="Helsinki-NLP/opus-mt-en-vi")
+DUB_MT5_ZH2VI_MODEL = env_value("DUB_MT5_ZH2VI_MODEL", default="Helsinki-NLP/opus-mt-zh-vi")
+DUB_MT5_JA2VI_MODEL = env_value("DUB_MT5_JA2VI_MODEL", default="Helsinki-NLP/opus-mt-ja-vi")
+DUB_MT5_KO2VI_MODEL = env_value("DUB_MT5_KO2VI_MODEL", default="Helsinki-NLP/opus-mt-ko-vi")
+

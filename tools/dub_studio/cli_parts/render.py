@@ -2313,6 +2313,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     translated_cache_path = dirs["analysis"] / "translated.json"
     editable_subtitle_timeline = analysis.get("subtitleTimeline") or []
     segments = copy.deepcopy(analysis["segments"])
+    print("DEBUG: Starting translate_segments...", flush=True)
     segments = translate_segments(
         segments,
         source_language,
@@ -2321,7 +2322,10 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         phase="render",
         localization_mode=localization_mode,
     )
+    print("DEBUG: Finished translate_segments.", flush=True)
+    print("DEBUG: Starting build_subtitle_timeline...", flush=True)
     rebuilt_subtitle_timeline = build_subtitle_timeline(segments)
+    print("DEBUG: Finished build_subtitle_timeline.", flush=True)
     timeline_text_by_segment = {
         str(item.get("segmentId") or ""): normalize_text(item.get("text") or "")
         for item in editable_subtitle_timeline

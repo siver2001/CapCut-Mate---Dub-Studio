@@ -9,14 +9,15 @@ import sys
 import tempfile
 import unicodedata
 from typing import List, Tuple
-from viphoneme import vi2IPA
+# Moved viphoneme import inside function to avoid hangs on Windows
 
 try:
     import fcntl  # type: ignore
 except Exception:
     fcntl = None
 
-VIPHONEME_AVAILABLE = True
+# Disabled viphoneme to use the robust char-based mapping as primary on Windows
+VIPHONEME_AVAILABLE = False
 _VIPHONEME_WORKDIR = None
 _VINORM_ISOLATED_PARENT = None
 
@@ -125,30 +126,30 @@ TONE_MARKS = {
 
 # Default tone (no diacritic) = 0 (ngang/level)
 
-# Vietnamese orthography to IPA mapping
+# Vietnamese character to IPA mapping (COMPREHENSIVE - matching training data)
+# Multi-char outputs are split into lists to avoid KeyError for missing multi-char symbols
 VI_TO_IPA = {
-    # Trigraphs (check first)
+    # Multi-char consonants (check these first - ORDER MATTERS)
     'ngh': 'ŋ',
-    
-    # Digraphs
     'ng': 'ŋ',
     'nh': 'ɲ',
-    'ch': 'c',      # Vietnamese ch = palatal stop
-    'tr': 'ʈ',      # Retroflex
-    'th': 'tʰ',     # Aspirated
+    'ch': ['t', 'ʃ'],  # Vietnamese ch = IPA t + ʃ (separated in training data)
+    'tr': 'ʈ',   # retroflex
+    'th': ['t', 'h'],   # aspirated th
     'ph': 'f',
-    'kh': 'x',      # Voiceless velar fricative
+    'kh': 'x',   # Vietnamese 'kh' = IPA 'x' (matches training data)
     'gh': 'ɣ',
     'gi': 'z',
-    'qu': 'kw',
-    
-    # Special consonants
-    'đ': 'ɗ',       # Implosive d
-    
-    # Simple consonants
-    'b': 'ɓ',       # Implosive b (can also be plain b)
-    'c': 'k',
-    'd': 'z',       # Northern: z, Southern: j
+    'qu': 'kw',   # qu -> kw (single symbol in training data)
+    # Special Vietnamese consonants
+    'đ': 'ɗ',    # implosive d
+    # Basic consonants that need IPA mapping
+    'x': 's',    # Vietnamese 'x' = IPA 's'
+    'c': 'k',    # Vietnamese 'c' = IPA 'k'
+    'd': 'z',    # Vietnamese 'd' (northern) = 'z'
+    'r': 'ɹ',    # Vietnamese 'r' = IPA 'ɹ' (matches training data)
+    's': 's',
+    'b': 'b',
     'g': 'ɣ',
     'h': 'h',
     'k': 'k',
@@ -156,27 +157,24 @@ VI_TO_IPA = {
     'm': 'm',
     'n': 'n',
     'p': 'p',
-    'r': 'ʐ',       # Retroflex (varies by dialect)
-    's': 's',
     't': 't',
     'v': 'v',
-    'x': 's',       # Vietnamese x = s
-    
-    # Vowels
-    'a': 'aː',
-    'ă': 'a',       # Short a
-    'â': 'ə',       # Schwa
-    'e': 'ɛ',
-    'ê': 'e',
+    'f': 'f',
+    'j': 'j',
+    'w': 'w',
+    'y': 'j',    # Vietnamese 'y' = IPA 'j' (matches training data)
+    # Vowels - MUST match training data phonemes exactly!
+    'a': 'aː',   # Long 'a' (matches training: aː)
+    'ă': 'a',    # Short 'a' 
+    'â': 'ə',    # schwa
+    'e': 'ɛ',    # open-mid (matches training: ɛ)
+    'ê': 'e',    # close-mid
     'i': 'i',
-    'y': 'i',       # Same as i
-    'o': 'ɔ',
-    'ô': 'o',
-    'ơ': 'əː',      # Long schwa
+    'o': 'ɔ',    # open-mid back (matches training: ɔ)
+    'ô': 'o',    # close-mid back
+    'ơ': 'əː',   # long schwa
     'u': 'u',
-    'ư': 'ɯ',       # Unrounded u
-    
-    # Diphthongs (handled separately)
+    'ư': 'ɯ',    # close back unrounded
 }
 
 # Final consonants (codas)
@@ -240,11 +238,15 @@ def syllable_to_ipa(syllable: str) -> Tuple[List[str], int]:
     while i < len(syllable):
         matched = False
         
-        # Try trigraphs
+        # Try trigraphs first
         if i + 2 < len(syllable):
             tri = syllable[i:i+3]
             if tri in VI_TO_IPA:
-                phonemes.append(VI_TO_IPA[tri])
+                result = VI_TO_IPA[tri]
+                if isinstance(result, list):
+                    phonemes.extend(result)
+                else:
+                    phonemes.append(result)
                 i += 3
                 matched = True
         
@@ -252,17 +254,25 @@ def syllable_to_ipa(syllable: str) -> Tuple[List[str], int]:
         if not matched and i + 1 < len(syllable):
             di = syllable[i:i+2]
             if di in VI_TO_IPA:
-                phonemes.append(VI_TO_IPA[di])
+                result = VI_TO_IPA[di]
+                if isinstance(result, list):
+                    phonemes.extend(result)
+                else:
+                    phonemes.append(result)
                 i += 2
                 matched = True
         
-        # Single character
+        # Try single char
         if not matched:
             char = syllable[i]
             if char in VI_TO_IPA:
-                phonemes.append(VI_TO_IPA[char])
+                result = VI_TO_IPA[char]
+                if isinstance(result, list):
+                    phonemes.extend(result)
+                else:
+                    phonemes.append(result)
             elif char.isalpha():
-                phonemes.append(char)  # Keep as-is if not mapped
+                phonemes.append(char)
             i += 1
     
     return phonemes, tone
@@ -287,23 +297,55 @@ def text_to_phonemes_viphoneme(text: str) -> Tuple[List[str], List[int], List[in
     if is_frozen:
         return text_to_phonemes_charbased(text)
     
-    # Normal mode: use full viphoneme with isolation
-    try:
-        _ensure_vinorm_isolated()
-        workdir = _get_viphoneme_workdir()
-        with _viphoneme_global_lock():
-            cwd = os.getcwd()
-            os.chdir(workdir)
+    # Use bridge for Windows to avoid hangs
+    if os.name == 'nt':
+        try:
+            import subprocess
+            from pathlib import Path
+            bridge_script = Path(__file__).parent.parent.parent.parent / "tools" / "viphoneme_bridge.py"
+            
+            print(f"DEBUG: Using viphoneme bridge for text: {text[:30]}...", flush=True)
+            # Run bridge with timeout
+            process = subprocess.Popen(
+                [sys.executable, str(bridge_script)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8'
+            )
             try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    with _redirect_fds_to_devnull():
-                        ipa_text = vi2IPA(text)
-            finally:
-                os.chdir(cwd)
-    except Exception as e:
-        print(f"[WARN] Viphoneme failed: {e}")
-        return text_to_phonemes_charbased(text)
+                ipa_text, _ = process.communicate(input=text, timeout=10.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                print("[WARN] Viphoneme bridge timed out")
+                return text_to_phonemes_charbased(text)
+            
+            if process.returncode != 0 or not ipa_text:
+                return text_to_phonemes_charbased(text)
+                
+        except Exception as e:
+            print(f"[WARN] Viphoneme bridge failed: {e}")
+            return text_to_phonemes_charbased(text)
+    else:
+        # Normal mode for Linux: use full viphoneme with isolation
+        try:
+            from viphoneme import vi2IPA
+            _ensure_vinorm_isolated()
+            workdir = _get_viphoneme_workdir()
+            with _viphoneme_global_lock():
+                cwd = os.getcwd()
+                os.chdir(workdir)
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        with _redirect_fds_to_devnull():
+                            ipa_text = vi2IPA(text)
+                finally:
+                    os.chdir(cwd)
+        except Exception as e:
+            print(f"[WARN] Viphoneme failed: {e}")
+            return text_to_phonemes_charbased(text)
     
     # Check if viphoneme returned empty or invalid result
     if not ipa_text or ipa_text.strip() in ['', '.', '..', '...']:

@@ -1,16 +1,7 @@
-import numba
+# numba removed
 
 
-@numba.jit(
-    numba.void(
-        numba.int32[:, :, ::1],
-        numba.float32[:, :, ::1],
-        numba.int32[::1],
-        numba.int32[::1],
-    ),
-    nopython=True,
-    nogil=True,
-)
+# jit removed
 def maximum_path_jit(paths, values, t_ys, t_xs):
     b = paths.shape[0]
     max_neg_val = -1e9

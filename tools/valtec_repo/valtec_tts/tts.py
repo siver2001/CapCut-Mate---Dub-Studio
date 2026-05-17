@@ -158,13 +158,14 @@ class TTS:
         if not config_path.exists():
             raise FileNotFoundError(f"config.json not found in {self.model_path}")
 
-        print(f"Loading model from: {checkpoint}")
+        print(f"DEBUG: Loading model from: {checkpoint}")
         self._engine = VietnameseTTS(checkpoint, str(config_path), self.device)
 
         # Store speakers
         self.speakers = self._engine.speakers
         self.default_speaker = self.speakers[0] if self.speakers else None
-        print(f"Available speakers: {self.speakers}")
+        print(f"DEBUG: Available speakers: {self.speakers}")
+        print("DEBUG: _load_model finished.")
     
     def synthesize(
         self,
@@ -194,6 +195,7 @@ class TTS:
         
         speaker = speaker or self.default_speaker
         
+        print(f"DEBUG: TTS.synthesize starting for speaker: {speaker}...")
         audio, sr = self._engine.synthesize(
             text=text,
             speaker=speaker,
@@ -202,7 +204,7 @@ class TTS:
             noise_scale_w=noise_scale_w,
             sdp_ratio=sdp_ratio,
         )
-        
+        print("DEBUG: TTS.synthesize finished.")
         return audio, sr
     
     def speak(
