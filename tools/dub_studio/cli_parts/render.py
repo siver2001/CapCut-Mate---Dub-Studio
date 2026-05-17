@@ -838,9 +838,17 @@ def render_intro_hook(
         clip_duration_ms=clip_window["durationMs"],
     )
     tts_profile = estimate_tts_text_profile(intro_text)
-    # Teasers should be energetic and fast-paced! We target a faster reading speed (1.45x faster) 
-    # to deliver a dồn dập, engaging introduction, which also naturally shortens the video clip.
-    natural_tts_duration_ms = max(int(tts_profile.get("expectedSeconds", 0.0) * 1000 / 1.45), 2000)
+    # Adaptive teaser duration constraint to deliver punchy, energetic pacing.
+    # We target a duration between 11 and 16 seconds. If AI writes a longer story, 
+    # the target duration forces a faster reading rate so speech stays snappy and 
+    # the video clip never drags out beyond the core highlights (16 seconds max).
+    natural_tts_duration_ms = min(
+        max(
+            int(tts_profile.get("expectedSeconds", 0.0) * 1000 / 1.3), 
+            11000
+        ), 
+        16000
+    )
     remaining_source_ms = max(video_duration_ms - clip_window["startMs"], clip_window["durationMs"])
     
     emit_progress(phase="render", step="intro_hook", progress=0.87, message="Đang tạo giọng nói intro (TTS)...")

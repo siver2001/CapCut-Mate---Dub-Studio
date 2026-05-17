@@ -1132,12 +1132,12 @@ def _intro_teaser_quality_ok(text: str, *, clip_duration_ms: int) -> bool:
     sentence_count = _count_intro_sentences(clean)
     if sentence_count < 3:
         return False
-    # Enforce a longer, detailed storytelling teaser (50 to 95 words)
-    if word_count < 50:
+    # Enforce a rich, detailed storytelling teaser (45 to 75 words)
+    if word_count < 45:
         return False
-    if word_count > 95:
+    if word_count > 75:
         return False
-    if len(clean) < 180:
+    if len(clean) < 140:
         return False
         
     # Strictly ban robotic or canned cliches
@@ -1167,9 +1167,9 @@ def _build_intro_teaser_prompt(
     clip_duration_ms: int,
     retry_reason: str = "",
 ) -> str:
-    # A rich, detailed storytelling teaser of 55 to 85 words (2.5x to 3x longer than before)
-    min_words = 55
-    max_words = 85
+    # A rich, detailed storytelling teaser of 45 to 70 words (around 16 seconds target)
+    min_words = 45
+    max_words = 70
     retry_block = (
         f"\nPrevious attempt failed because of this issue: {retry_reason}. "
         "Remember, do NOT use generic sentences or cliches. Write a concrete story with concrete facts!\n"
@@ -1177,13 +1177,13 @@ def _build_intro_teaser_prompt(
         else "\n"
     )
     return (
-        "You are an engaging Vietnamese storyteller writing a rich, detailed, and highly interesting 3-5 sentence "
+        "You are an engaging Vietnamese storyteller writing a rich, detailed, and highly interesting 3-4 sentence "
         "teaser voice-over for a dubbed family/vlog video.\n"
         "\n"
         "STORYTELLING REQUIREMENTS:\n"
         "- Explain the actual event clearly and engagingly using facts from the timeline (names like Wantuan, Nuomin, actions, places).\n"
         "- The teaser must be easy to understand, crystal clear, and sound like a natural enthusiastic human storyteller, NOT robotic or artificial.\n"
-        "- Target word count: Write exactly between 55 and 85 spoken Vietnamese words (about 3-5 complete sentences).\n"
+        "- Target word count: Write exactly between 45 and 70 spoken Vietnamese words (about 3-4 complete sentences).\n"
         "\n"
         "CRITICAL RULES — BANNED ROBOTIC CLICHES (DO NOT USE ANY OF THESE):\n"
         "- Never start or include: 'Câu chuyện bắt đầu từ...'\n"
