@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, QUrl
-from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
+from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, QUrl, Qt, QSize
+from PyQt6.QtGui import QDesktopServices, QPixmap, QPainter, QPainterPath, QColor, QFont
+from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QLineEdit
 
 from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, VOICE_LABELS, VOICE_OPTIONS, is_frozen
 from gui.utils import decode_process_bytes, ensure_dir, repair_mojibake_text
@@ -15,6 +15,36 @@ from .helpers import SafeComboBox
 
 
 VOICE_PREVIEW_TEXT = "Trong khoảnh khắc thành phố vừa thức dậy, những âm thanh quen thuộc như tiếng chim hót, tiếng gió lùa hòa vào nhau, tạo nên một bản nhạc khiến tôi muốn chậm lại, lắng nghe và mỉm cười."
+
+
+def get_circular_pixmap(image_path: str, size: int = 48) -> QPixmap:
+    pixmap = QPixmap(image_path)
+    if pixmap.isNull():
+        return QPixmap()
+    
+    scaled = pixmap.scaled(
+        QSize(size, size),
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation
+    )
+    
+    out_pixmap = QPixmap(size, size)
+    out_pixmap.fill(Qt.GlobalColor.transparent)
+    
+    painter = QPainter(out_pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    
+    path = QPainterPath()
+    path.addEllipse(0, 0, size, size)
+    painter.setClipPath(path)
+    
+    x = (size - scaled.width()) // 2
+    y = (size - scaled.height()) // 2
+    painter.drawPixmap(x, y, scaled)
+    painter.end()
+    
+    return out_pixmap
 
 
 class WindowVoiceMixin:
@@ -25,6 +55,7 @@ class WindowVoiceMixin:
             if widget:
                 widget.deleteLater()
         self.voice_combo_map = {}
+        self.voice_name_edit_map = {}
         self.voice_test_button_map = {}
         self.voice_status_label_map = {}
         speakers = (self.effective_analysis or {}).get("speakers") or []
@@ -43,24 +74,113 @@ class WindowVoiceMixin:
             empty_label.setWordWrap(True)
             self.voice_layout.addWidget(empty_label)
             return
+        
+        from gui.config import TEMP_DUB_DIR
         for speaker in speakers:
             row = QFrame()
             row.setObjectName("StatCard")
             row_layout = QVBoxLayout(row)
             row_layout.setContentsMargins(16, 14, 16, 14)
             row_layout.setSpacing(10)
+            
             top_row = QHBoxLayout()
             top_row.setSpacing(12)
+            
+            # --- Avatar (Face Thumbnail or Initials Circle) ---
+            avatar_label = QLabel()
+            avatar_size = 44
+            avatar_label.setFixedSize(avatar_size, avatar_size)
+            avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            face_thumb_rel = speaker.get("faceThumbnail")
+            face_thumb_path = TEMP_DUB_DIR / face_thumb_rel if face_thumb_rel else None
+            
+            if face_thumb_path and face_thumb_path.exists():
+                circ_pix = get_circular_pixmap(str(face_thumb_path), avatar_size)
+                if not circ_pix.isNull():
+                    avatar_label.setPixmap(circ_pix)
+                else:
+                    face_thumb_path = None
+                    
+            if not face_thumb_path or not face_thumb_path.exists():
+                # Colored circle placeholder
+                placeholder = QPixmap(avatar_size, avatar_size)
+                placeholder.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(placeholder)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                
+                color_hex = speaker.get("colorTag") or "#56CFE1"
+                painter.setBrush(QColor(color_hex))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(0, 0, avatar_size, avatar_size)
+                
+                painter.setPen(QColor("#0f172a"))
+                font = QFont("Arial", 11, QFont.Weight.Bold)
+                painter.setFont(font)
+                display_name = speaker.get("displayName") or speaker.get("speakerId") or "S"
+                if "speaker_" in display_name.lower():
+                    try:
+                        num = display_name.split("_")[1]
+                        initial = f"S{num}"
+                    except Exception:
+                        initial = "S"
+                else:
+                    initial = display_name[0].upper()
+                painter.drawText(placeholder.rect(), Qt.AlignmentFlag.AlignCenter, initial)
+                painter.end()
+                avatar_label.setPixmap(placeholder)
+                
             badge = QLabel("Main" if speaker.get("isPrimary") else "Speaker")
             badge.setObjectName("MetricChip")
-            label = QLabel(f"{speaker.get('displayName', speaker.get('speakerId'))}")
-            label.setStyleSheet(
-                f"font-weight: 700; color: {speaker.get('colorTag') or '#f8fafc'};"
+            
+            # --- Editable Speaker Name QLineEdit ---
+            custom_name = self.settings.setdefault("displayNameMapping", {}).get(speaker["speakerId"])
+            
+            if custom_name:
+                name_text = custom_name
+            elif speaker.get("memoryName"):
+                name_text = speaker["memoryName"]
+            else:
+                name_text = ""
+                
+            name_edit = QLineEdit(name_text)
+            if speaker.get("memoryName"):
+                name_edit.setPlaceholderText(f"Người quen: {speaker['memoryName']}")
+            else:
+                raw_display = speaker.get("displayName") or speaker["speakerId"]
+                if "Người quen: " in raw_display:
+                    raw_display = raw_display.replace("Người quen: ", "", 1)
+                name_edit.setPlaceholderText(raw_display)
+                
+            name_edit.setStyleSheet("""
+                QLineEdit {
+                    background: rgba(15, 23, 42, 0.4);
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    border-radius: 8px;
+                    font-weight: 700;
+                    color: #ffffff;
+                    font-size: 13px;
+                    padding: 6px 10px;
+                    min-width: 150px;
+                }
+                QLineEdit:hover {
+                    background: rgba(15, 23, 42, 0.7);
+                    border: 1px solid rgba(56, 189, 248, 0.45);
+                }
+                QLineEdit:focus {
+                    background: #0f172a;
+                    border: 1px solid #38bdf8;
+                    color: #ffffff;
+                }
+            """)
+            
+            name_edit.editingFinished.connect(
+                lambda speaker_id=speaker["speakerId"], edit=name_edit: (
+                    self.on_speaker_name_changed(speaker_id, edit.text())
+                )
             )
-            detail_label = QLabel(
-                f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s"
-            )
-            detail_label.setObjectName("SectionHint")
+            
+            # --- Voice Combo Box & Preview button ---
             combo = SafeComboBox()
             for value, text in self._voice_options_for_speaker(speaker):
                 combo.addItem(text, value)
@@ -92,19 +212,35 @@ class WindowVoiceMixin:
             test_btn.clicked.connect(
                 lambda _checked=False, speaker_id=speaker["speakerId"]: self.on_test_voice_clicked(speaker_id)
             )
+            
+            # --- Status and Speaker Info Sub-Labels ---
             status_label = QLabel(
                 f"Đề xuất: {self._format_voice_label(selected_voice)}"
             )
             status_label.setObjectName("SectionHint")
+            
+            # Build detailed label (Pyannote stats + detected age/gender)
+            detail_text = f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s"
+            if speaker.get("gender") and speaker.get("age"):
+                gender_lbl = "Nam" if speaker.get("gender") == "M" else "Nữ"
+                detail_text += f" • Nhận diện: {gender_lbl}, ~{speaker.get('age')} tuổi"
+                
+            detail_label = QLabel(detail_text)
+            detail_label.setObjectName("SectionHint")
+            
+            top_row.addWidget(avatar_label)
             top_row.addWidget(badge)
-            top_row.addWidget(label)
+            top_row.addWidget(name_edit)
             top_row.addStretch(1)
             top_row.addWidget(combo, 1)
             top_row.addWidget(test_btn)
+            
             row_layout.addLayout(top_row)
             row_layout.addWidget(detail_label)
             row_layout.addWidget(status_label)
+            
             self.voice_combo_map[speaker["speakerId"]] = combo
+            self.voice_name_edit_map[speaker["speakerId"]] = name_edit
             self.voice_test_button_map[speaker["speakerId"]] = test_btn
             self.voice_status_label_map[speaker["speakerId"]] = status_label
             self.voice_layout.addWidget(row)
@@ -119,6 +255,49 @@ class WindowVoiceMixin:
             status_label.setText(f"Đã chọn: {self._format_voice_label(voice)}")
         self._push_analysis_overrides(rebuild_voice_ui=False)
         self.refresh_status_only()
+        self.save_speaker_to_memory(speaker_id)
+
+    def on_speaker_name_changed(self, speaker_id: str, new_name: str) -> None:
+        new_name = new_name.strip()
+        if not new_name:
+            self.settings.setdefault("displayNameMapping", {}).pop(speaker_id, None)
+        else:
+            self.settings.setdefault("displayNameMapping", {})[speaker_id] = new_name
+            
+        self._push_analysis_overrides(rebuild_voice_ui=False)
+        self.refresh_status_only()
+        self.save_speaker_to_memory(speaker_id)
+
+    def save_speaker_to_memory(self, speaker_id: str) -> None:
+        analysis = self.effective_analysis or self.analysis or {}
+        speakers = analysis.get("speakers") or []
+        speaker = next((item for item in speakers if item.get("speakerId") == speaker_id), None)
+        if not speaker:
+            return
+            
+        embedding = speaker.get("embedding")
+        if not embedding:
+            return
+            
+        custom_name = self.settings.setdefault("displayNameMapping", {}).get(speaker_id)
+        name = (custom_name or speaker.get("memoryName") or speaker_id).strip()
+        if not name:
+            name = speaker_id
+            
+        combo = self.voice_combo_map.get(speaker_id)
+        voice = (self._resolve_voice_combo_value(combo) if combo else speaker.get("voicePreset") or "edge:female").strip()
+        
+        gender = speaker.get("gender") or "F"
+        age = speaker.get("age") or 25
+        
+        from tools.speaker_identifier.memory_manager import add_or_update_speaker
+        add_or_update_speaker(
+            name=name,
+            embedding=embedding,
+            gender=gender,
+            age=age,
+            voice=voice
+        )
 
     def _voice_options_for_speaker(self, speaker: dict[str, Any]) -> list[tuple[str, str]]:
         options: list[tuple[str, str]] = []

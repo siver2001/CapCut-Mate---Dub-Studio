@@ -2072,7 +2072,55 @@ def do_analyze(
         refinement=refinement,
         sample_paths=sample_paths,
     )
-    emit_progress(phase="analysis", step="speaker", progress=0.7, message="Đang gom nhóm người nói theo WhisperX")
+    emit_progress(phase="analysis", step="speaker", progress=0.70, message="Đang gom nhóm người nói theo WhisperX")
+
+    # ----------------------------------------------------
+    # Tích hợp nhận diện speaker đa phương thức (TalkNet + InsightFace)
+    # ----------------------------------------------------
+    try:
+        from tools.dub_studio.cli_parts.runtime import ensure_speaker_identification_runtime
+        ensure_speaker_identification_runtime(phase="analysis", step="speaker", progress=0.72)
+        
+        from tools.speaker_identifier import run_talknet_asd, match_speakers_and_extract_features
+        talknet_res = run_talknet_asd(input_path, dirs["analysis"], sys.executable)
+        if talknet_res:
+            talknet_tracks, talknet_scores = talknet_res
+            pyannote_segs = []
+            for seg in segments:
+                pyannote_segs.append({
+                    "start": float(seg.get("startMs", 0)) / 1000.0,
+                    "end": float(seg.get("endMs", 0)) / 1000.0,
+                    "speaker": seg.get("speakerId", "speaker_1")
+                })
+            
+            visual_speaker_data = match_speakers_and_extract_features(
+                video_path=input_path,
+                pyannote_segments=pyannote_segs,
+                talknet_tracks=talknet_tracks,
+                talknet_scores=talknet_scores,
+                output_speakers_dir=dirs["analysis"] / "speakers",
+                use_gpu=bool(DUB_USE_GPU)
+            )
+            
+            visual_map = {item["speakerId"]: item for item in visual_speaker_data}
+            for spk_dict in speakers:
+                spk_id = spk_dict.get("speakerId")
+                vis_info = visual_map.get(spk_id)
+                if vis_info:
+                    spk_dict["faceThumbnail"] = vis_info["faceThumbnail"]
+                    spk_dict["gender"] = vis_info["gender"]
+                    spk_dict["age"] = vis_info["age"]
+                    spk_dict["voicePreset"] = vis_info["voicePreset"]
+                    spk_dict["memoryName"] = vis_info["memoryName"]
+                    spk_dict["embedding"] = vis_info["embedding"]
+                    if vis_info["memoryName"]:
+                        spk_dict["displayName"] = f"Người quen: {vis_info['memoryName']}"
+                    else:
+                        gender_lbl = "Nam" if vis_info["gender"] == "M" else "Nữ"
+                        spk_dict["displayName"] = f"{spk_id} ({gender_lbl}, ~{vis_info['age']} tuổi)"
+    except Exception as e:
+        warnings.append(f"Không thể chạy nhận diện khuôn mặt đa phương thức: {e}")
+
 
     subtitle_region = default_subtitle_region(video_meta)
     warnings: list[str] = list(whisperx_analysis.get("warnings") or [])

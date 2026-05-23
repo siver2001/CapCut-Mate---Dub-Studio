@@ -881,9 +881,11 @@ def build_speakers(
     voice_mapping: dict[str, str] | None = None,
     base_speakers: list[dict[str, Any]] | None = None,
     main_speaker_id: str = "speaker_1",
+    display_name_mapping: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     voice_mapping = voice_mapping or {}
     base_speakers = base_speakers or []
+    display_name_mapping = display_name_mapping or {}
     speaker_meta = {speaker.get("speakerId"): speaker for speaker in base_speakers}
     speakers: list[dict[str, Any]] = []
     for index in range(max(count, 1)):
@@ -892,11 +894,12 @@ def build_speakers(
         speakers.append(
             {
                 "speakerId": speaker_id,
-                "displayName": meta.get(
-                    "displayName",
+                "displayName": display_name_mapping.get(speaker_id)
+                or meta.get("displayName")
+                or (
                     "Nhân vật chính"
                     if speaker_id == main_speaker_id
-                    else f"Nhân vật {index + 1}",
+                    else f"Nhân vật {index + 1}"
                 ),
                 "estimatedGender": meta.get("estimatedGender", "unknown"),
                 "voicePreset": voice_mapping.get(speaker_id)
@@ -917,6 +920,12 @@ def build_speakers(
                 "totalDurationMs": int(meta.get("totalDurationMs", 0)),
                 "samplePath": meta.get("samplePath", ""),
                 "voiceCloneReady": bool(meta.get("voiceCloneReady")),
+                # Preserve multi-modal speaker identification fields
+                "faceThumbnail": meta.get("faceThumbnail") or "",
+                "gender": meta.get("gender") or meta.get("estimatedGender") or "F",
+                "age": meta.get("age") or 25,
+                "embedding": meta.get("embedding") or [],
+                "memoryName": meta.get("memoryName") or "",
             }
         )
     return speakers
@@ -1006,6 +1015,7 @@ def build_effective_analysis(job: dict[str, Any] | None) -> dict[str, Any] | Non
         voice_mapping=voice_mapping,
         base_speakers=base.get("speakers") or [],
         main_speaker_id=main_speaker_id,
+        display_name_mapping=overrides.get("displayNameMapping") or {},
     )
     base["segments"] = reconcile_segments_to_speaker_count(
         base.get("segments") or [], speaker_count, main_speaker_id=main_speaker_id

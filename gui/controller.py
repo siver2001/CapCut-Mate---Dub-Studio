@@ -200,6 +200,10 @@ class DubStudioJobController(QWidget):
                 **(job.get("overrides", {}).get("voiceMapping") or {}),
                 **(overrides.get("voiceMapping") or {}),
             },
+            "displayNameMapping": {
+                **(job.get("overrides", {}).get("displayNameMapping") or {}),
+                **(overrides.get("displayNameMapping") or {}),
+            },
             "subtitleRegion": {
                 **(job.get("overrides", {}).get("subtitleRegion") or {}),
                 **(overrides.get("subtitleRegion") or {}),

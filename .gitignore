@@ -131,3 +131,6 @@ src/pyJianYingDraft/assets/draft_meta_info.json
 # Cloned third-party repositories
 repos/
 
+# Local speaker memory database
+config/speaker_memory.json
+

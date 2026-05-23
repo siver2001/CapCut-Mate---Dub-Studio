@@ -1724,3 +1724,49 @@ def whisperx_audio_waveform(audio: Any) -> dict[str, Any]:
     }
 
 
+def ensure_speaker_identification_runtime(*, phase: str, step: str, progress: float) -> None:
+    """Ensures dependencies for active speaker detection and facial analysis are installed and models are downloaded."""
+    ensure_python_packages(
+        [
+            ("insightface", "insightface"),
+            ("scenedetect", "scenedetect"),
+            ("python_speech_features", "python_speech_features")
+        ],
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang tự động cài đặt các thư viện nhận diện speaker...",
+    )
+    
+    pretrain_model = ROOT / "repos" / "TalkNet-ASD" / "pretrain_TalkSet.model"
+    if not pretrain_model.exists():
+        emit_progress(
+            phase=phase,
+            step=step,
+            progress=min(progress + 0.05, 1.0),
+            message="Đang tải file trọng số TalkNet (pretrain_TalkSet.model)..."
+        )
+        import requests
+        url = "https://docs.google.com/uc?export=download"
+        session = requests.Session()
+        try:
+            response = session.get(url, params={"id": "1AbN9fCf9IexMxEKXLQY2KYBlb-IhSEea"}, stream=True)
+            token = None
+            for key, value in response.cookies.items():
+                if key.startswith("download_warning"):
+                    token = value
+                    break
+            if token:
+                response = session.get(url, params={"id": "1AbN9fCf9IexMxEKXLQY2KYBlb-IhSEea", "confirm": token}, stream=True)
+                
+            pretrain_model.parent.mkdir(parents=True, exist_ok=True)
+            with open(pretrain_model, "wb") as f:
+                for chunk in response.iter_content(chunk_size=32768):
+                    if chunk:
+                        f.write(chunk)
+        except Exception as e:
+            # Fallback if connection fails, letting subprocess try gdown
+            pass
+
+
+

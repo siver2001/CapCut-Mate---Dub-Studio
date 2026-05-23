@@ -2381,6 +2381,15 @@ class WindowWorkflowMixin:
         self.settings["watermark"]["opacity"] = float(self.watermark_opacity_slider.value()) / 100.0
         self.settings["watermark"]["removeBg"] = self.watermark_remove_bg_check.isChecked()
         self._sync_voice_mapping_from_widgets()
+        # Sync display names
+        display_names = {}
+        for speaker_id, edit in getattr(self, "voice_name_edit_map", {}).items():
+            if edit:
+                val = edit.text().strip()
+                if val:
+                    display_names[speaker_id] = val
+        self.settings["displayNameMapping"] = display_names
+
         if not getattr(self, "voice_combo_map", {}):
             self.settings["voiceMapping"] = {}
         self.settings["voiceMapping"] = self._expanded_voice_mapping()
@@ -2395,6 +2404,7 @@ class WindowWorkflowMixin:
             "speakerDetectionMode": self.settings["speakerDetectionMode"],
             "speakerCount": int(self.settings["speakerCount"]),
             "voiceMapping": self._expanded_voice_mapping(),
+            "displayNameMapping": copy.deepcopy(self.settings.get("displayNameMapping") or {}),
             "subtitleRegion": copy.deepcopy(self.settings["subtitleRegion"]),
         }
 
@@ -2466,6 +2476,17 @@ class WindowWorkflowMixin:
         }
         for index in range(max(1, min(int(merged["speakerCount"] or 1), 4))):
             merged["voiceMapping"].setdefault(f"speaker_{index + 1}", merged["defaultVoice"])
+        
+        merged["displayNameMapping"] = {}
+        for speaker in analysis.get("speakers", []):
+            name = speaker.get("displayName")
+            spk_id = speaker.get("speakerId")
+            if not name or not spk_id:
+                continue
+            if name.startswith("Người quen: "):
+                merged["displayNameMapping"][spk_id] = name.replace("Người quen: ", "", 1)
+            elif not name.startswith("speaker_") and "(" not in name and "tuổi" not in name:
+                merged["displayNameMapping"][spk_id] = name
         merged["introHook"].update(render_defaults.get("introHook") or {})
         merged["subtitlePreset"].update(render_defaults.get("subtitlePreset") or {})
         merged["subtitleRegion"].update(analysis.get("subtitleRegion") or {})
