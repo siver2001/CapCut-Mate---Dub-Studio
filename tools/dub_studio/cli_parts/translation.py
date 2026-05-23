@@ -1075,7 +1075,7 @@ def _intro_word_range(clip_duration_ms: int) -> tuple[int, int]:
     # Natural Vietnamese speaking rate is around 3.0 to 3.5 words per second.
     # We calibrate exact boundaries to ensure TTS narration doesn't get slowed down or too fast.
     min_words = max(12, min(65, int(round(clip_seconds * 2.8))))
-    max_words = max(min_words + 6, min(82, int(round(clip_seconds * 3.4))))
+    max_words = max(min_words + 6, min(75, int(round(clip_seconds * 3.4))))
     return min_words, max_words
 
 
@@ -1132,32 +1132,138 @@ def _intro_teaser_quality_ok(text: str, *, clip_duration_ms: int) -> bool:
     sentence_count = _count_intro_sentences(clean)
     if sentence_count < 3:
         return False
-    # Enforce a rich, detailed storytelling teaser (45 to 75 words)
-    if word_count < 45:
+    min_words, max_words = _intro_word_range(clip_duration_ms)
+    # Enforce a rich, detailed storytelling teaser
+    if word_count < min_words:
         return False
-    if word_count > 75:
+    if word_count > max_words:
         return False
     if len(clean) < 140:
         return False
-        
-    # Strictly ban robotic or canned cliches
-    lower_text = clean.lower()
-    banned_phrases = [
-        "câu chuyện bắt đầu từ",
-        "phần còn lại còn đáng xem",
-        "mang đến cho chúng ta",
-        "chúng ta hãy cùng",
-        "chưa dừng lại ở đó",
-        "đáng xem hơn nhiều",
-        "hãy cùng khám phá",
-        "chào mừng các bạn",
-        "video hôm nay",
-        "bắt đầu từ",
-    ]
-    for phrase in banned_phrases:
-        if phrase in lower_text:
-            return False
     return True
+
+
+def _load_copywriting_patterns(video_theme: str = "") -> list[dict[str, Any]]:
+    """
+    Loads copywriting hook patterns from config/copywriting_hooks_db.json.
+    If video_theme is provided, uses LlamaIndex semantic retrieval to select the
+    top 3 most contextually relevant hook templates based on the video's theme/climax.
+    """
+    hooks_path = ROOT / "config" / "copywriting_hooks_db.json"
+    if not hooks_path.exists():
+        # Fallback default patterns
+        return [
+            {
+                "name": "contrarian",
+                "description": "Đi ngược lại lầm tưởng số đông để kích thích phản biện.",
+                "hook_format": "Mọi người thường nghĩ {misconception}, nhưng thực tế là {reality}."
+            },
+            {
+                "name": "curiosity_gap",
+                "description": "Tạo ra một khoảng trống tò mò về một sự kiện bất ngờ.",
+                "hook_format": "Đây là lý do tại sao {surprise_event} lại xảy ra, và nó sẽ khiến bạn kinh ngạc."
+            },
+            {
+                "name": "result_first",
+                "description": "Đưa ngay kết quả hoặc thành tựu bất ngờ nhất lên làm điểm nhấn.",
+                "hook_format": "Chúng mình đã đạt được {result} chỉ bằng cách {unexpected_action}."
+            }
+        ]
+
+    try:
+        raw_db = json.loads(hooks_path.read_text(encoding="utf-8"))
+        all_hooks = raw_db.get("hooks", [])
+        if not video_theme or not all_hooks:
+            return all_hooks[:3]
+
+        # Use LlamaIndex to semantically search the best hooks!
+        from .runtime import ensure_llamaindex_runtime
+        ensure_llamaindex_runtime(phase="render", step="intro_hook", progress=0.86)
+
+        from llama_index.core import Document, VectorStoreIndex, Settings
+        from llama_index.llms.gemini import Gemini
+        from llama_index.embeddings.gemini import GeminiEmbedding
+
+        api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+        if not api_key:
+            return all_hooks[:3]
+
+        # Configure LlamaIndex to use Gemini Cloud Services
+        Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
+        Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
+
+        documents = []
+        for hook in all_hooks:
+            text = f"Category: {hook.get('category')}\nMood: {hook.get('mood')}\nTemplate: {hook.get('template')}\nExample: {hook.get('example')}"
+            doc = Document(text=text, extra_info={"id": hook.get("id"), "category": hook.get("category"), "template": hook.get("template")})
+            documents.append(doc)
+
+        index = VectorStoreIndex.from_documents(documents)
+        retriever = index.as_retriever(similarity_top_k=3)
+        retrieved_nodes = retriever.retrieve(video_theme)
+
+        selected_hooks = []
+        for node in retrieved_nodes:
+            metadata = node.node.metadata
+            selected_hooks.append({
+                "name": metadata.get("category"),
+                "description": f"Emotional style: {node.node.text.splitlines()[1]}",
+                "hook_format": metadata.get("template")
+            })
+        
+        if selected_hooks:
+            safe_print(f"[llamaindex] Retrieved {len(selected_hooks)} matching copywriting hooks semantically.", flush=True)
+            return selected_hooks
+    except Exception as exc:
+        safe_print(f"[llamaindex] Error during copywriting retrieval: {exc}", flush=True)
+        
+    return all_hooks[:3]
+
+
+def _score_teaser_copy(text: str) -> float:
+    """
+    Algorithmic NLP Copywriting Scorer:
+    Evaluates a teaser draft based on word count, audience engagement, kịch tính (but-therefore),
+    and direct addressing words.
+    """
+    if not text or len(text.strip()) < 10:
+        return 0.0
+    
+    score = 0.0
+    words = text.split()
+    word_count = len(words)
+    
+    # 1. Optimal teaser length: target 35 to 65 words, cap at 75
+    if 35 <= word_count <= 65:
+        score += 15.0
+    elif 15 <= word_count < 35:
+        score += 8.0
+    elif 65 < word_count <= 75:
+        score += 5.0
+    else:
+        score -= 10.0  # Penalize over 75 words or under 15 words
+        
+    # 2. Audience engagement & Direct address (Xưng hô trực tiếp)
+    lower = text.lower()
+    address_words = ("bạn", "của bạn", "chúng mình", "chúng ta", "mình")
+    for aw in address_words:
+        if aw in lower:
+            score += 4.0
+            
+    # 3. Dynamic Narrative and Tension (But-Therefore connectors)
+    # Checks for presence of contrast/cause-and-effect transitions
+    tension_connectors = ("nhưng", "tuy nhiên", "do đó", "vì thế", "thế nên", "bất ngờ", "lý do tại sao")
+    for tc in tension_connectors:
+        if tc in lower:
+            score += 3.0
+            
+    # 4. Curiosity-triggering power words
+    power_words = ("bí mật", "sự thật", "không ngờ", "kinh ngạc", "tiết lộ", "khám phá", "lần đầu tiên")
+    for pw in power_words:
+        if pw in lower:
+            score += 3.0
+            
+    return max(0.0, score)
 
 
 def _build_intro_teaser_prompt(
@@ -1165,36 +1271,53 @@ def _build_intro_teaser_prompt(
     *,
     source_language: str,
     clip_duration_ms: int,
+    video_theme: str = "",
     retry_reason: str = "",
 ) -> str:
-    # A rich, detailed storytelling teaser of 45 to 70 words (around 16 seconds target)
-    min_words = 45
-    max_words = 70
+    # A rich, detailed storytelling teaser
+    min_words, max_words = _intro_word_range(clip_duration_ms)
+    patterns = _load_copywriting_patterns(video_theme)
+    patterns_str = json.dumps(patterns, ensure_ascii=False, indent=2)
+    
     retry_block = (
         f"\nPrevious attempt failed because of this issue: {retry_reason}. "
         "Remember, do NOT use generic sentences or cliches. Write a concrete story with concrete facts!\n"
         if retry_reason
         else "\n"
     )
+    
     return (
-        "You are an engaging Vietnamese storyteller writing a rich, detailed, and highly interesting 3-4 sentence "
-        "teaser voice-over for a dubbed family/vlog video.\n"
+        "You are an expert Vietnamese social media copywriter and storytelling strategist.\n"
+        "Your task is to analyze the provided video timeline segments and draft exactly THREE distinct "
+        "variations of a short, high-retention teaser script in Vietnamese (about 3-4 sentences, 35-70 words total).\n"
+        "\n"
+        "Each variation MUST strictly follow one of the three copywriting frameworks retrieved semantically below:\n"
+        f"{patterns_str}\n"
         "\n"
         "STORYTELLING REQUIREMENTS:\n"
-        "- Explain the actual event clearly and engagingly using facts from the timeline (names like Wantuan, Nuomin, actions, places).\n"
-        "- The teaser must be easy to understand, crystal clear, and sound like a natural enthusiastic human storyteller, NOT robotic or artificial.\n"
-        "- Target word count: Write exactly between 45 and 70 spoken Vietnamese words (about 3-4 complete sentences).\n"
+        "- Explain the actual event clearly and engagingly using facts from the timeline (names, actions, places).\n"
+        "- The teaser must be easy to understand, crystal clear, and sound like a natural enthusiastic human storyteller.\n"
+        f"- Target word count: Write exactly between {min_words} and {max_words} spoken Vietnamese words per version.\n"
+        "- Never use hashtags, emojis, or markdown formatting.\n"
         "\n"
-        "CRITICAL RULES — BANNED ROBOTIC CLICHES (DO NOT USE ANY OF THESE):\n"
-        "- Never start or include: 'Câu chuyện bắt đầu từ...'\n"
-        "- Never end or include: '...phần còn lại còn đáng xem hơn nhiều' or '...đáng xem hơn nhiều'\n"
-        "- Never use templated transitions: 'mọi chuyện chưa dừng lại ở đó', 'hãy cùng khám phá', 'video hôm nay mang đến', 'chào mừng các bạn'\n"
-        "- Keep it 100% natural, factual, and lively. Start directly with a hook about the actual event, for example:\n"
-        "  'Bạn đã bao giờ thấy chú cún nào đi du lịch biển mà sướng như Wantuan và Nuomin chưa?' / "
-        "  'Hôm nay mẹ dắt hai chú cún cưng Wantuan và Nuomin ra biển chơi, nhưng có điều gì đó cực kỳ bất ngờ sắp xảy ra...'\n"
-        "\n"
-        "- No hashtags, emojis, or markdown\n"
-        '- Return ONLY: {"teaser":"<your detailed natural teaser text>"}'
+        "OUTPUT FORMAT:\n"
+        "You MUST return a single JSON object containing a list of the three candidates exactly like this:\n"
+        '{\n'
+        '  "candidates": [\n'
+        '    {\n'
+        '      "pattern": "<first framework name>",\n'
+        '      "teaser": "<Vietnamese teaser text adhering to the first structure>"\n'
+        '    },\n'
+        '    {\n'
+        '      "pattern": "<second framework name>",\n'
+        '      "teaser": "<Vietnamese teaser text adhering to the second structure>"\n'
+        '    },\n'
+        '    {\n'
+        '      "pattern": "<third framework name>",\n'
+        '      "teaser": "<Vietnamese teaser text adhering to the third structure>"\n'
+        '    }\n'
+        '  ]\n'
+        '}\n'
         f"{retry_block}\n"
         + json.dumps(
             {
@@ -1212,27 +1335,72 @@ def generate_intro_hook_via_ollama(
     source_language: str,
     clip_duration_ms: int,
 ) -> str:
-    """Generate a Vietnamese intro teaser hook using Ollama API."""
-    hook = ""
+    """Generate a Vietnamese intro teaser hook using LlamaIndex to structure the narrative and score it via Python."""
+    video_theme = ""
+    api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+    
+    # Step 1: Use LlamaIndex to query the climax/theme of the segments
+    if api_key and window_segments:
+        try:
+            from .runtime import ensure_llamaindex_runtime
+            ensure_llamaindex_runtime(phase="render", step="intro_hook", progress=0.86)
+
+            from llama_index.core import Document, SummaryIndex, Settings
+            from llama_index.llms.gemini import Gemini
+            from llama_index.embeddings.gemini import GeminiEmbedding
+
+            Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
+            Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
+
+            docs = [Document(text=f"Time: {s.get('startMs')}-{s.get('endMs')}ms. Context: {s.get('translatedText') or s.get('sourceText')}") for s in window_segments]
+            summary_index = SummaryIndex.from_documents(docs)
+            query_engine = summary_index.as_query_engine()
+            
+            # Semantic narrative analysis
+            response = query_engine.query("Tóm tắt ngắn gọn chủ đề chính, mâu thuẫn chính hoặc điểm cao trào kịch tính nhất của các phân cảnh này bằng một câu ngắn tiếng Việt.")
+            video_theme = str(response).strip()
+            safe_print(f"[llamaindex] Extracted video story theme: '{video_theme}'", flush=True)
+        except Exception as exc:
+            safe_print(f"[llamaindex] Error querying story theme: {exc}", flush=True)
+
+    # Step 2: Request kịch bản drafts matching the semantically-retrieved hooks
     for attempt in range(2):
         prompt = _build_intro_teaser_prompt(
             window_segments,
             source_language=source_language,
             clip_duration_ms=clip_duration_ms,
+            video_theme=video_theme,
             retry_reason=("too_short" if attempt else ""),
         )
-        payload = parse_json_response_payload(
-            run_ollama_prompt(
+        try:
+            raw_response = run_ollama_prompt(
                 prompt,
-                max_tokens=256,
-                temperature=max(0.38, OLLAMA_TEMP),
+                max_tokens=768,
+                temperature=0.4,
                 timeout=55,
             )
-        )
-        hook = _extract_intro_teaser_text(payload)
-        if _intro_teaser_quality_ok(hook, clip_duration_ms=clip_duration_ms):
-            return hook
-    return hook
+            payload = parse_json_response_payload(raw_response)
+        except Exception:
+            payload = {}
+            
+        candidates = payload.get("candidates") or []
+        if not candidates and isinstance(payload, dict) and "teaser" in payload:
+            candidates = [{"pattern": "default", "teaser": payload["teaser"]}]
+            
+        scored_candidates = []
+        for cand in candidates:
+            teaser_text = cand.get("teaser") or ""
+            score = _score_teaser_copy(teaser_text)
+            scored_candidates.append((score, teaser_text))
+            
+        if scored_candidates:
+            scored_candidates.sort(key=lambda x: x[0], reverse=True)
+            best_score, best_teaser = scored_candidates[0]
+            if best_teaser and len(best_teaser.strip()) > 15:
+                safe_print(f"[copywriting] Best candidate chosen: score={best_score:.1f}, text='{best_teaser}'", flush=True)
+                return best_teaser
+                
+    return build_structured_intro_hook_text(window_segments)
 
 
 def localize_batch_via_llama_cpp(
@@ -2254,6 +2422,102 @@ def select_intro_hook_window(
     }
 
 
+def select_intro_hook_montage(
+    segments: list[dict[str, Any]],
+    *,
+    video_duration_ms: int,
+    desired_clip_ms: int,
+) -> dict[str, Any]:
+    """
+    Select up to 3 non-overlapping highly engaging segments from across the video
+    to create a multi-scene montage trailer, inspired by OpenMontage and ai_trailer.
+    """
+    safe_video_duration = max(int(video_duration_ms), 600)
+    target_clip_ms = max(7000, min(int(desired_clip_ms), 22000))
+    clip_ms = max(600, min(target_clip_ms, safe_video_duration))
+
+    if not segments:
+        return select_intro_hook_window(segments, video_duration_ms=video_duration_ms, desired_clip_ms=desired_clip_ms)
+
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for idx, seg in enumerate(segments):
+        score = _score_segment_engagement(seg)
+        start_ms = int(seg.get("startMs", 0))
+        scored.append((score, start_ms, seg))
+
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+    engaging_candidates = [item for item in scored if item[0] >= 0.5]
+    if len(engaging_candidates) < 2:
+        return select_intro_hook_window(segments, video_duration_ms=video_duration_ms, desired_clip_ms=desired_clip_ms)
+
+    selected_highlights: list[dict[str, Any]] = []
+    for score, start_ms, seg in engaging_candidates:
+        seg_start = int(seg.get("startMs", 0))
+        seg_end = int(seg.get("endMs", 0))
+        overlap = False
+        for hl in selected_highlights:
+            hl_start = int(hl.get("startMs", 0))
+            hl_end = int(hl.get("endMs", 0))
+            if not (seg_end + 4000 <= hl_start or seg_start - 4000 >= hl_end):
+                overlap = True
+                break
+        if not overlap:
+            selected_highlights.append(seg)
+            if len(selected_highlights) >= 3:
+                break
+
+    if len(selected_highlights) < 2:
+        return select_intro_hook_window(segments, video_duration_ms=video_duration_ms, desired_clip_ms=desired_clip_ms)
+
+    selected_highlights.sort(key=lambda x: int(x.get("startMs", 0)))
+
+    num_clips = len(selected_highlights)
+    clip_dur = clip_ms // num_clips
+
+    clips: list[dict[str, Any]] = []
+    window_segments: list[dict[str, Any]] = []
+
+    for seg in selected_highlights:
+        seg_start = int(seg.get("startMs", 0))
+        seg_end = int(seg.get("endMs", 0))
+        seg_mid = (seg_start + seg_end) // 2
+
+        c_start = max(0, seg_mid - clip_dur // 2)
+        c_end = min(safe_video_duration, c_start + clip_dur)
+        if c_end - c_start < clip_dur:
+            c_start = max(0, c_end - clip_dur)
+
+        clips.append({
+            "startMs": c_start,
+            "endMs": c_end,
+            "durationMs": c_end - c_start,
+        })
+
+        for s in segments:
+            s_start = int(s.get("startMs", 0))
+            s_end = int(s.get("endMs", 0))
+            if s_end > c_start and s_start < c_end:
+                window_segments.append(s)
+
+    seen_ids = set()
+    dedup_segments = []
+    for s in window_segments:
+        s_id = s.get("id") or s.get("startMs")
+        if s_id not in seen_ids:
+            seen_ids.add(s_id)
+            dedup_segments.append(s)
+
+    return {
+        "mode": "montage",
+        "clips": clips,
+        "segments": dedup_segments,
+        "durationMs": sum(c["durationMs"] for c in clips),
+        "startMs": clips[0]["startMs"],
+        "endMs": clips[-1]["endMs"],
+    }
+
+
 def build_intro_hook_text(window_segments: list[dict[str, Any]]) -> str:
     """Fallback teaser generator: picks the most engaging segment and writes a direct hook."""
     # Find the most engaging segment
@@ -2273,34 +2537,15 @@ def build_intro_hook_text(window_segments: list[dict[str, Any]]) -> str:
                 break
 
     if best_segment is None:
-        return "Mở đầu video đã là đoạn đáng chú ý nhất."
+        return ""
 
     hook_text = normalize_text(
         best_segment.get("translatedText") or best_segment.get("sourceText") or ""
     )
     if not hook_text:
-        return "Mở đầu video đã là đoạn đáng chú ý nhất."
+        return ""
 
-    # Score the hook to decide what kind of opener to use
-    has_question = "?" in hook_text
-    has_exclamation = "!" in hook_text
-    has_drama = any(
-        w in hook_text.lower()
-        for w in ("không ngờ", "bất ngờ", "sốc", "tại sao", "sao ", "đợi", "nghe này", "bạn", "surprise", "wait", "what")
-    )
-
-    if has_question:
-        opener = f"Bạn có biết {hook_text.lower().rstrip('?')}"
-        if len(opener) > 80:
-            opener = f"Tại sao {hook_text.lower().rstrip('?')}"
-    elif has_exclamation:
-        opener = hook_text
-    elif has_drama:
-        opener = hook_text
-    else:
-        opener = f"Nghe câu chuyện này: {hook_text.lower().rstrip('.')}"
-
-    opener = clean_intro_fragment(opener, max_chars=90)
+    opener = clean_intro_fragment(hook_text, max_chars=90)
 
     # Collect context from other segments
     context_parts: list[str] = []
@@ -2312,16 +2557,14 @@ def build_intro_hook_text(window_segments: list[dict[str, Any]]) -> str:
             continue
         frag = clean_intro_fragment(text, max_chars=80)
         if frag and frag.lower() not in opener.lower():
-            context_parts.append(frag.lower().rstrip(".,;:!?"))
+            context_parts.append(frag.rstrip(".,;:!?"))
             if len(context_parts) >= 2:
                 break
 
     sentences: list[str] = []
     sentences.append(opener.rstrip(".,;:!?") + ".")
-    if context_parts:
-        sentences.append(f"Và đó mới chỉ là khởi đầu — phía sau còn nhiều hơn thế.")
-    elif len(hook_text) < 60:
-        sentences.append("Nghe toàn bộ câu chuyện để hiểu rõ chuyện gì đang xảy ra.")
+    for cp in context_parts:
+        sentences.append(cp.rstrip(".,;:!?") + ".")
 
     result = " ".join(sentences)
     return finalize_intro_text(result) if result else finalize_intro_text(opener)
@@ -2352,31 +2595,19 @@ def build_structured_intro_hook_text(window_segments: list[dict[str, Any]]) -> s
     context_segs = [s for _, s in scored[1:] if normalize_text(s.get("translatedText") or s.get("sourceText") or "")]
 
     hook_clean = clean_intro_fragment(hook_text, max_chars=88)
-    has_question = "?" in hook_clean
-    has_exclamation = "!" in hook_clean
-
-    # Build opening based on hook type
-    if has_question:
-        opener = hook_clean
-    elif has_exclamation:
-        opener = hook_clean
-    else:
-        opener = f"Câu chuyện bắt đầu từ: {hook_clean.lower().rstrip('.')}"
+    opener = hook_clean
 
     sentences = [opener.rstrip(".,;:!?") + "."]
 
-    # Add one context sentence
+    # Add context sentences
     for seg in context_segs[:3]:
         ctx_text = normalize_text(seg.get("translatedText") or seg.get("sourceText") or "")
         if not ctx_text or len(ctx_text) < 12:
             continue
         ctx_clean = clean_intro_fragment(ctx_text, max_chars=72)
         if ctx_clean and ctx_clean.lower() not in opener.lower():
-            sentences.append(ctx_clean.lower().rstrip(".,;:!?") + ".")
+            sentences.append(ctx_clean.rstrip(".,;:!?") + ".")
             break
-
-    # End with a hook that makes people want to keep watching
-    sentences.append("Nhưng đó chưa phải là tất cả — phần còn lại còn đáng xem hơn nhiều.")
 
     result = " ".join(sentences)
     if len(normalize_text(result)) < 40:
@@ -2432,50 +2663,22 @@ def build_intro_hook_text_with_context(
 
 
 def validate_translation_quality(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Final audit of translation results to fix common errors and artifacts."""
+    """Final audit of translation results to fix common ASR and translation artifacts."""
     for item in segments:
         text = item.get("translatedText") or ""
         if not text:
             continue
             
-        # 1. Fix literal name transliterations (Common LLM failures for this project)
-        text = text.replace("Vạn Tuân", "Wantuan")
-        text = text.replace("Vạn Tuần", "Wantuan")
-        text = text.replace("Văn Tuân", "Wantuan")
-        text = text.replace("Vằn Thầu", "Wantuan")
-        text = text.replace("Nô Mẫn", "Nuomin")
-        text = text.replace("Nhu Mễ", "Nuomin")
-        text = text.replace("Nhu Mỹ", "Nuomin")
-        text = text.replace("糯米", "Nuomin")
-        text = text.replace("Thứ Hai", "Wantuan")
-        
-        # 2. Fix audience addressing (Remnants of 'Yimen' -> 'Các dì')
-        text = text.replace("Các dì", "Các cô chú")
-        text = text.replace("dì ơi", "cô chú ơi")
-        text = text.replace("Các 姨", "Các cô chú")
-        text = text.replace("Các姨", "Các cô chú")
-        text = text.replace("dì mắng", "cô chú mắng")
-        text = text.replace("đoàn buồn", "Wantuan buồn")
-        
-        # 3. Fix weird ASR remnants
-        text = text.replace("hát hay quá", "câu này dài quá")
-        text = text.replace("ngôn ngữ khác", "câu này hơi khó")
-        
-        # 4. Enforce pronoun 'mình' consistency
+        # 1. Enforce pronoun 'mình' consistency
         if text.startswith("Tôi ") or text.startswith("Tui "):
             text = "Mình " + text[4:]
         if text.startswith("Chúng tôi"):
             text = text.replace("Chúng tôi", "Chúng mình", 1)
-        if " của 小狗" in text:
-            text = text.replace(" của 小狗", " của mình")
-        if "của 糯米" in text:
-             text = text.replace("của 糯米", "của Nuomin")
             
-        # 5. Remove any leftover hanzi or weird particles
+        # 2. Remove any leftover hanzi
         text = re.sub(r'[\u4e00-\u9fff]+', '', text)
-        text = text.replace("姨", "") # Catch-all for leftover 姨
         
-        # 6. Final cleanup of multiple spaces
+        # 3. Final cleanup of multiple spaces
         text = re.sub(r'\s+', ' ', text).strip()
         
         item["translatedText"] = text

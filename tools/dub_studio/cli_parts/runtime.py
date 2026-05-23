@@ -283,6 +283,8 @@ def ensure_ollama_runtime(
     step: str,
     progress: float,
 ) -> bool:
+    if os.getenv("DUB_AI_MODE") == "cloud":
+        return True
     if not OLLAMA_MODEL:
         return False
     binary = discover_ollama_binary()
@@ -1311,6 +1313,41 @@ def ensure_vieneu_runtime(*, phase: str, step: str, progress: float) -> None:
     get_vieneu_provider()
 
 
+def ensure_llamaindex_runtime(*, phase: str, step: str, progress: float) -> None:
+    """Ensures LlamaIndex and its Gemini-related libraries and essential dependencies are dynamically installed."""
+    ensure_python_packages(
+        [
+            ("llama_index.core", "llama-index-core"),
+            ("llama_index.llms.gemini", "llama-index-llms-gemini"),
+            ("llama_index.embeddings.gemini", "llama-index-embeddings-gemini"),
+            ("llama_index_instrumentation", "llama-index-instrumentation"),
+            ("wrapt", "wrapt"),
+            ("aiosqlite", "aiosqlite"),
+            ("banks", "banks"),
+            ("dataclasses_json", "dataclasses-json"),
+            ("deprecated", "deprecated"),
+            ("dirtyjson", "dirtyjson"),
+            ("filetype", "filetype"),
+            ("llama_index_workflows", "llama-index-workflows"),
+            ("nest_asyncio", "nest-asyncio"),
+            ("networkx", "networkx"),
+            ("nltk", "nltk"),
+            ("platformdirs", "platformdirs"),
+            ("sqlalchemy", "sqlalchemy"),
+            ("tenacity", "tenacity"),
+            ("tiktoken", "tiktoken"),
+            ("tinytag", "tinytag"),
+            ("typing_inspect", "typing-inspect"),
+            ("google.generativeai", "google-generativeai"),
+            ("setuptools", "setuptools>=80.9.0"),
+        ],
+        phase=phase,
+        step=step,
+        progress=progress,
+        message="Đang tự động kiểm tra và cài đặt LlamaIndex cùng các gói phụ trợ...",
+    )
+
+
 def prune_valtec_repo(repo_dir: Path) -> None:
     keep_names = {
         "src",
@@ -1632,12 +1669,13 @@ def prepare_runtime(target: str) -> None:
         ensure_edge_tts_runtime(phase="render", step="prepare", progress=0.03)
         # Always prepare Source Separation and Valtec-TTS during a manual prepare task to ensure all offline assets are fully loaded!
         ensure_source_separation_runtime(phase="render", step="prepare", progress=0.04)
-        ensure_valtec_runtime(
-            phase="render",
-            step="prepare",
-            progress=0.055,
-            preload_zeroshot=True,
-        )
+        if DUB_USE_VALTEC:
+            ensure_valtec_runtime(
+                phase="render",
+                step="prepare",
+                progress=0.055,
+                preload_zeroshot=True,
+            )
         if DUB_TRANSLATE_PROVIDER in {"ollama", "auto"}:
             ensure_ollama_runtime(
                 required=DUB_TRANSLATE_PROVIDER == "ollama",

@@ -1,0 +1,22 @@
+{
+  "patterns": [
+    {
+      "name": "contrarian",
+      "description": "Đi ngược lại lầm tưởng số đông để kích thích phản biện và giữ chân người xem.",
+      "hook_format": "Mọi người thường nghĩ {misconception}, nhưng thực tế là {reality}.",
+      "transition_rule": "Sử dụng từ nối chỉ quan hệ đối lập kịch tính ('nhưng', 'tuy nhiên') tiếp theo là từ nối nhân quả ('do đó', 'vì thế') để giải thích hành động tiếp theo."
+    },
+    {
+      "name": "curiosity_gap",
+      "description": "Tạo ra một khoảng trống tò mò về một sự kiện bất ngờ trong video.",
+      "hook_format": "Đây là lý do tại sao {surprise_event} lại xảy ra, và nó sẽ khiến bạn hoàn toàn kinh ngạc.",
+      "transition_rule": "Sử dụng mối quan hệ nhân quả mạnh mẽ ('nhưng', 'do đó') để kết nối câu mở đầu với kết quả hoặc bài học."
+    },
+    {
+      "name": "result_first",
+      "description": "Đưa ngay kết quả hoặc thành tựu bất ngờ nhất lên làm điểm nhấn đầu tiên.",
+      "hook_format": "Chúng mình đã đạt được {result} chỉ bằng cách {unexpected_action} cực kỳ đơn giản.",
+      "transition_rule": "Mô tả sự tương phản kịch tính giữa khó khăn ban đầu và thành quả đạt được, sử dụng từ nối đối lập ('nhưng', 'tuy thế')."
+    }
+  ]
+}

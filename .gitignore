@@ -127,3 +127,7 @@ src/pyJianYingDraft/assets/draft_meta_info.json
 !config/
 !config/*.json
 !config/**/*.json
+
+# Cloned third-party repositories
+repos/
+

@@ -11,6 +11,13 @@ from typing import Any
 from .process_utils import run, run_output
 
 def find_ffmpeg_ffprobe() -> tuple[str, str]:
+    # Try using static-ffmpeg if installed
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+    except Exception:
+        pass
+
     # 1. Search in typical PATH first
     ffm = shutil.which("ffmpeg")
     ffp = shutil.which("ffprobe")

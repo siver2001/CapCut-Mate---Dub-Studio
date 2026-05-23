@@ -1,0 +1,60 @@
+{
+  "hooks": [
+    {
+      "id": "contrarian_1",
+      "category": "contrarian",
+      "mood": "kịch tính",
+      "template": "Mọi người thường nghĩ {misconception}, nhưng sự thật đằng sau {reality} lại hoàn toàn trái ngược.",
+      "example": "Mọi người thường nghĩ làm YouTube rất dễ dàng, nhưng sự thật đằng sau hành trình 100 ngày này lại hoàn toàn trái ngược."
+    },
+    {
+      "id": "contrarian_2",
+      "category": "contrarian",
+      "mood": "tò mò",
+      "template": "Ai cũng bảo bạn phải làm {common_action}, nhưng đây mới là lý do tại sao phương pháp đó sẽ thất bại.",
+      "example": "Ai cũng bảo bạn phải dậy từ 5 giờ sáng, nhưng đây mới là lý do tại sao phương pháp đó sẽ khiến bạn kiệt sức."
+    },
+    {
+      "id": "curiosity_1",
+      "category": "curiosity_gap",
+      "mood": "bí ẩn",
+      "template": "Đây là lý do tại sao sự kiện {surprise_event} lại xảy ra, và nó sẽ thay đổi hoàn toàn suy nghĩ của bạn.",
+      "example": "Đây là lý do tại sao chiếc hộp cổ này lại trôi dạt vào bờ cát, và nó sẽ thay đổi hoàn toàn cuộc sống của chúng mình."
+    },
+    {
+      "id": "curiosity_2",
+      "category": "curiosity_gap",
+      "mood": "kịch tính",
+      "template": "Một điều bất ngờ đã xảy ra khi chúng mình {action}, một bí mật mà không ai có thể ngờ tới.",
+      "example": "Một điều bất ngờ đã xảy ra khi chúng mình đang dạo chơi trên bãi biển Nha Trang, một bí mật mà không ai có thể ngờ tới."
+    },
+    {
+      "id": "result_1",
+      "category": "result_first",
+      "mood": "ấn tượng",
+      "template": "Chúng mình đã hoàn thành mục tiêu {result} chỉ bằng cách áp dụng một mẹo cực kỳ đơn giản.",
+      "example": "Chúng mình đã khám phá toàn bộ Nha Trang chỉ bằng cách áp dụng một mẹo di chuyển cực kỳ đơn giản."
+    },
+    {
+      "id": "result_2",
+      "category": "result_first",
+      "mood": "kịch tính",
+      "template": "Đây là thành quả {result} sau chuỗi ngày nỗ lực không ngừng nghỉ, vượt qua mọi giới hạn.",
+      "example": "Đây là thành quả kho báu cổ tìm thấy sau chuỗi ngày nỗ lực tìm kiếm không ngừng nghỉ, vượt qua mọi giới hạn."
+    },
+    {
+      "id": "story_1",
+      "category": "storytelling",
+      "mood": "cảm xúc",
+      "template": "Mọi chuyện bắt đầu từ một quyết định nhỏ khi chúng mình {action}, dẫn đến một bước ngoặt lớn.",
+      "example": "Mọi chuyện bắt đầu từ một quyết định nhỏ khi chúng mình đi dạo biển chiều nay, dẫn đến một bước ngoặt lớn."
+    },
+    {
+      "id": "story_2",
+      "category": "storytelling",
+      "mood": "hài hước",
+      "template": "Đừng bao giờ coi thường những tình huống bất ngờ này khi bạn {action}, vì cái kết cực kỳ dở khóc dở cười.",
+      "example": "Đừng bao giờ coi thường những chú cún cưng khi bạn dắt chúng đi dạo, vì cái kết cực kỳ dở khóc dở cười."
+    }
+  ]
+}

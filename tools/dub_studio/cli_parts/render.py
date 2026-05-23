@@ -43,6 +43,7 @@ from .translation import (
     generate_intro_hook_via_llama_cpp,
     generate_intro_hook_via_ollama,
     select_intro_hook_window,
+    select_intro_hook_montage,
     translate_segments,
 )
 from ..subtitle_utils import renumber_subtitle_timeline
@@ -826,11 +827,19 @@ def render_intro_hook(
     global_speed: float = 1.0,
 ) -> dict[str, Any]:
     video_duration_ms = int(video_meta.get("durationMs", 0))
-    clip_window = select_intro_hook_window(
-        segments,
-        video_duration_ms=video_duration_ms,
-        desired_clip_ms=int(intro_hook.get("clipDurationMs", 13000)),
-    )
+    teaser_mode = intro_hook.get("mode") or "montage"
+    if teaser_mode == "montage":
+        clip_window = select_intro_hook_montage(
+            segments,
+            video_duration_ms=video_duration_ms,
+            desired_clip_ms=int(intro_hook.get("clipDurationMs", 13000)),
+        )
+    else:
+        clip_window = select_intro_hook_window(
+            segments,
+            video_duration_ms=video_duration_ms,
+            desired_clip_ms=int(intro_hook.get("clipDurationMs", 13000)),
+        )
     emit_progress(phase="render", step="intro_hook", progress=0.86, message="Đang soạn lời thoại intro (AI)...")
     intro_text = build_intro_hook_text_with_context(
         clip_window["segments"],
@@ -875,17 +884,162 @@ def render_intro_hook(
         rate_delta_percent=intro_rate_delta_percent,
         global_speed=global_speed,
     )
+    actual_intro_duration_ms = int(intro_clip_ms)
     
     # The video clip duration now perfectly matches the exact duration of the spoken teaser, 
     # with a tiny 600ms pause added at the end for an elegant transition.
-    actual_intro_duration_ms = min(
-        max(
-            int(intro_clip_ms) + 600, # Natural breathing pause
-            1200
-        ),
-        remaining_source_ms,
-    )
-    extract_video_clip(input_path, clip_path, clip_window["startMs"], actual_intro_duration_ms)
+    if clip_window.get("mode") == "montage":
+        import re
+        # 1. Split teaser text into sentences to match speech chunks
+        raw_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', intro_text) if s.strip()]
+        if not raw_sentences:
+            raw_sentences = [intro_text]
+            
+        num_clips = len(raw_sentences)
+        
+        # 2. Distribute actual_intro_duration_ms among the sentences by word count proportion
+        total_words = sum(len(s.split()) for s in raw_sentences)
+        if total_words <= 0:
+            total_words = 1
+            
+        clips_durations = []
+        for s in raw_sentences:
+            w_count = len(s.split())
+            s_dur = int((w_count / total_words) * actual_intro_duration_ms)
+            clips_durations.append(s_dur)
+            
+        # Adjust last clip to match exactly actual_intro_duration_ms
+        diff = actual_intro_duration_ms - sum(clips_durations)
+        if clips_durations:
+            clips_durations[-1] += diff
+            
+        # 3. Retrieve semantically matching segment for each sentence using LlamaIndex
+        temp_clips = []
+        api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+        matched_clips_info = []
+        
+        if api_key and segments:
+            try:
+                from llama_index.core import Document, VectorStoreIndex, Settings
+                from llama_index.llms.gemini import Gemini
+                from llama_index.embeddings.gemini import GeminiEmbedding
+                
+                # Make sure LlamaIndex dependencies are verified
+                from .runtime import ensure_llamaindex_runtime
+                ensure_llamaindex_runtime(phase="render", step="intro_hook", progress=0.86)
+                
+                Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
+                Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
+                
+                documents = []
+                for idx, seg in enumerate(segments):
+                    text = f"Segment {idx}: {seg.get('translatedText') or seg.get('sourceText')}"
+                    doc = Document(
+                        text=text,
+                        extra_info={
+                            "index": idx,
+                            "startMs": int(seg.get("startMs", 0)),
+                            "endMs": int(seg.get("endMs", 0))
+                        }
+                    )
+                    documents.append(doc)
+                    
+                index = VectorStoreIndex.from_documents(documents)
+                retriever = index.as_retriever(similarity_top_k=1)
+                
+                safe_print(f"[llamaindex] Aligning {num_clips} montage sentences to visual timeline semantically...", flush=True)
+                for s_idx, sentence in enumerate(raw_sentences):
+                    nodes = retriever.retrieve(sentence)
+                    best_idx = nodes[0].node.metadata["index"]
+                    best_seg = segments[best_idx]
+                    
+                    seg_start = int(best_seg.get("startMs", 0))
+                    seg_end = int(best_seg.get("endMs", 0))
+                    
+                    matched_clips_info.append({
+                        "startMs": seg_start,
+                        "endMs": seg_end,
+                    })
+                    safe_print(f"[llamaindex] Sentence {s_idx+1} matched video Segment {best_idx} ({seg_start}-{seg_end}ms): '{sentence}'", flush=True)
+            except Exception as exc:
+                safe_print(f"[llamaindex] Semantic montage alignment failed, falling back to pre-selected clips: {exc}", flush=True)
+                matched_clips_info = []
+                
+        # Fallback to pre-selected clip windows if semantic search failed or was not configured
+        if not matched_clips_info:
+            clips_info = clip_window["clips"]
+            # If the number of clips in clip_window is different from raw_sentences,
+            # we redistribute actual_intro_duration_ms evenly over clips_info
+            num_clips = len(clips_info)
+            clips_durations = [actual_intro_duration_ms // num_clips] * num_clips
+            clips_durations[-1] += actual_intro_duration_ms - sum(clips_durations)
+            matched_clips_info = clips_info
+            
+        # 4. Extract subclips using matched info and exact durations
+        for c_idx, clip_info in enumerate(matched_clips_info):
+            temp_clip_path = dirs["render"] / f"intro_hook_subclip_{c_idx}.mp4"
+            sub_duration = clips_durations[c_idx]
+            
+            seg_start = clip_info["startMs"]
+            seg_end = clip_info.get("endMs")
+            if seg_end is None:
+                seg_end = seg_start + sub_duration
+                
+            seg_len = seg_end - seg_start
+            
+            # Crop around the center of the segment to get the best visual action
+            if seg_len > sub_duration:
+                seg_mid = (seg_start + seg_end) // 2
+                c_start = max(seg_start, seg_mid - sub_duration // 2)
+            else:
+                # If segment is shorter, expand boundaries outwards
+                c_start = max(0, seg_start - (sub_duration - seg_len) // 2)
+                
+            c_end = min(video_duration_ms, c_start + sub_duration)
+            if c_end - c_start < sub_duration:
+                c_start = max(0, c_end - sub_duration)
+                
+            extract_video_clip(input_path, temp_clip_path, c_start, sub_duration)
+            temp_clips.append(temp_clip_path)
+            
+        # Concatenate temp_clips into clip_path using ffmpeg
+        has_audio = bool(video_meta.get("hasAudio"))
+        codec, codec_args = choose_video_codec()
+        concat_inputs = []
+        for temp_clip in temp_clips:
+            concat_inputs.extend(["-i", str(temp_clip)])
+        
+        if has_audio:
+            filter_complex_str = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(num_clips)) + f"concat=n={num_clips}:v=1:a=1[v][a]"
+            concat_command = [
+                "ffmpeg", "-y",
+                *concat_inputs,
+                "-filter_complex", filter_complex_str,
+                "-map", "[v]", "-map", "[a]",
+                "-c:v", codec, *codec_args,
+                "-c:a", "aac", "-b:a", "192k",
+                str(clip_path)
+            ]
+        else:
+            filter_complex_str = "".join(f"[{i}:v:0]" for i in range(num_clips)) + f"concat=n={num_clips}:v=1:a=0[v]"
+            concat_command = [
+                "ffmpeg", "-y",
+                *concat_inputs,
+                "-filter_complex", filter_complex_str,
+                "-map", "[v]",
+                "-c:v", codec, *codec_args,
+                str(clip_path)
+            ]
+        run(concat_command, cwd=ROOT)
+        
+        # Clean up temp subclips
+        for temp_clip in temp_clips:
+            try:
+                temp_clip.unlink(missing_ok=True)
+            except Exception:
+                pass
+    else:
+        extract_video_clip(input_path, clip_path, clip_window["startMs"], actual_intro_duration_ms)
     create_intro_audio(
         video_clip_path=clip_path,
         intro_voice_path=fitted_intro_voice,
