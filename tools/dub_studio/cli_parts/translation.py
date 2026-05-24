@@ -561,7 +561,7 @@ def _build_localization_prompt(
         "4. Translate every sourceText, including single words, short phrases, reactions, interjections, slang, jokes, and idioms.\n"
         "5. Do NOT leave meaningful source-language words untranslated.\n"
         "6. STRICT BAN ON CHINESE CHARACTERS: Absolutely ZERO Chinese hanzi (e.g., 堆积如山) must remain in the output. Translate EVERY single word into standard, natural Vietnamese.\n"
-        "7. PRESERVE PROPER NAMES: Do NOT translate proper names, brand names, or specific identifiers into Vietnamese unless explicitly instructed. Keep names like 'Wantuan', 'Nuomin' exactly as they are in English/Pinyin.\n"
+        "7. TRANSLATE PROPER NAMES TO SINO-VIETNAMESE: Translate all proper names, character names, and titles (especially Chinese character names and historical terms) into standard Sino-Vietnamese (Hán-Việt) for easy understanding (e.g. translate 'Zhen Huan' -> 'Chân Hoàn', 'Chunyuan' -> 'Thuần Nguyên', 'Duan' or 'Duan Fei' -> 'Đoan Phi', 'Jing' or 'Jing Fei' -> 'Kính Phi', 'Longyue' -> 'Long Nguyệt', 'Eniang' -> 'Ngạch nương', 'Wei Lin' -> 'Ngụy Lâm', etc.). Do not keep them in Pinyin/English.\n"
         "\n"
         "Each item must be a JSON object with exactly these keys:\n"
         '- "translatedText": natural, concise, captivating Vietnamese subtitle text. It MUST fit within the provided "maxSubtitleChars" or "maxSpokenChars" limits.\n'
@@ -1197,7 +1197,6 @@ def _load_copywriting_patterns(video_theme: str = "") -> list[dict[str, Any]]:
             text = f"Category: {hook.get('category')}\nMood: {hook.get('mood')}\nTemplate: {hook.get('template')}\nExample: {hook.get('example')}"
             doc = Document(text=text, extra_info={"id": hook.get("id"), "category": hook.get("category"), "template": hook.get("template")})
             documents.append(doc)
-
         index = VectorStoreIndex.from_documents(documents)
         retriever = index.as_retriever(similarity_top_k=3)
         retrieved_nodes = retriever.retrieve(video_theme)
@@ -1224,7 +1223,7 @@ def _score_teaser_copy(text: str) -> float:
     """
     Algorithmic NLP Copywriting Scorer:
     Evaluates a teaser draft based on word count, audience engagement, kịch tính (but-therefore),
-    and direct addressing words.
+    direct addressing words, and strong viral starting hook phrases.
     """
     if not text or len(text.strip()) < 10:
         return 0.0
@@ -1262,6 +1261,16 @@ def _score_teaser_copy(text: str) -> float:
     for pw in power_words:
         if pw in lower:
             score += 3.0
+
+    # 5. High-Retention Hook Sentence (first 7 words)
+    first_sentence = re.split(r'[.!?…]+', text)[0].strip().lower() if text else ""
+    first_words = first_sentence.split()[:7]
+    first_phrase = " ".join(first_words)
+    
+    viral_hooks = ("đừng bao giờ", "sự thật", "bất ngờ", "lý do tại sao", "tiết lộ", "bí mật", "cảnh báo", "tin được không", "chưa từng", "ai cũng nghĩ", "mọi người thường")
+    for hook in viral_hooks:
+        if hook in first_phrase:
+            score += 8.0
             
     return max(0.0, score)
 
@@ -1269,6 +1278,7 @@ def _score_teaser_copy(text: str) -> float:
 def _build_intro_teaser_prompt(
     window_segments: list[dict[str, Any]],
     *,
+    all_segments: list[dict[str, Any]] | None = None,
     source_language: str,
     clip_duration_ms: int,
     video_theme: str = "",
@@ -1279,6 +1289,11 @@ def _build_intro_teaser_prompt(
     patterns = _load_copywriting_patterns(video_theme)
     patterns_str = json.dumps(patterns, ensure_ascii=False, indent=2)
     
+    # Format the full timeline context if available
+    full_timeline = all_segments if all_segments is not None else window_segments
+    full_timeline_payload = _build_intro_generation_payload(full_timeline)
+    highlight_timeline_payload = _build_intro_generation_payload(window_segments)
+    
     retry_block = (
         f"\nPrevious attempt failed because of this issue: {retry_reason}. "
         "Remember, do NOT use generic sentences or cliches. Write a concrete story with concrete facts!\n"
@@ -1288,17 +1303,23 @@ def _build_intro_teaser_prompt(
     
     return (
         "You are an expert Vietnamese social media copywriter and storytelling strategist.\n"
-        "Your task is to analyze the provided video timeline segments and draft exactly THREE distinct "
-        "variations of a short, high-retention teaser script in Vietnamese (about 3-4 sentences, 35-70 words total).\n"
+        "Your task is to analyze the full video kịch bản/timeline and draft exactly THREE distinct "
+        "variations of a short, highly engaging, high-retention teaser script in Vietnamese (about 3-4 sentences, 35-70 words total).\n"
         "\n"
-        "Each variation MUST strictly follow one of the three copywriting frameworks retrieved semantically below:\n"
-        f"{patterns_str}\n"
+        "CONTEXT:\n"
+        f"- Full Video Timeline (The entire story): {json.dumps(full_timeline_payload, ensure_ascii=False)}\n"
+        f"- Highlight Scenes to show during teaser: {json.dumps(highlight_timeline_payload, ensure_ascii=False)}\n"
         "\n"
         "STORYTELLING REQUIREMENTS:\n"
-        "- Explain the actual event clearly and engagingly using facts from the timeline (names, actions, places).\n"
-        "- The teaser must be easy to understand, crystal clear, and sound like a natural enthusiastic human storyteller.\n"
+        "- The teaser MUST be 100% true and accurate to the full video timeline. Use names, facts, and concrete actions from the kịch bản.\n"
+        "- Focus on grabbing the audience's attention by highlighting the main conflict/climax described in the timeline.\n"
+        "- Open with a strong, punchy hook sentence (first 6 words / under 1.5 seconds) designed to instantly trigger curiosity (e.g. 'Đừng bao giờ...', 'Sự thật bất ngờ về...', 'Đây là lý do tại sao...').\n"
+        "- Write in a conversational, enthusiastic spoken Vietnamese tone. Avoid formal, robotic, or direct translations. Use natural pronouns ('mình', 'các bạn', 'chúng mình').\n"
         f"- Target word count: Write exactly between {min_words} and {max_words} spoken Vietnamese words per version.\n"
         "- Never use hashtags, emojis, or markdown formatting.\n"
+        "\n"
+        "Each variation should be inspired by one of the three copywriting frameworks retrieved semantically below:\n"
+        f"{patterns_str}\n"
         "\n"
         "OUTPUT FORMAT:\n"
         "You MUST return a single JSON object containing a list of the three candidates exactly like this:\n"
@@ -1318,20 +1339,14 @@ def _build_intro_teaser_prompt(
         '    }\n'
         '  ]\n'
         '}\n'
-        f"{retry_block}\n"
-        + json.dumps(
-            {
-                "sourceLanguage": source_language or "auto",
-                "timeline": _build_intro_generation_payload(window_segments),
-            },
-            ensure_ascii=False,
-        )
+        f"{retry_block}"
     )
 
 
 def generate_intro_hook_via_ollama(
     window_segments: list[dict[str, Any]],
     *,
+    all_segments: list[dict[str, Any]] | None = None,
     source_language: str,
     clip_duration_ms: int,
 ) -> str:
@@ -1340,7 +1355,8 @@ def generate_intro_hook_via_ollama(
     api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
     
     # Step 1: Use LlamaIndex to query the climax/theme of the segments
-    if api_key and window_segments:
+    full_timeline = all_segments if all_segments is not None else window_segments
+    if api_key and full_timeline:
         try:
             from .runtime import ensure_llamaindex_runtime
             ensure_llamaindex_runtime(phase="render", step="intro_hook", progress=0.86)
@@ -1352,12 +1368,12 @@ def generate_intro_hook_via_ollama(
             Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
             Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
 
-            docs = [Document(text=f"Time: {s.get('startMs')}-{s.get('endMs')}ms. Context: {s.get('translatedText') or s.get('sourceText')}") for s in window_segments]
+            docs = [Document(text=f"Time: {s.get('startMs')}-{s.get('endMs')}ms. Context: {s.get('translatedText') or s.get('sourceText')}") for s in full_timeline]
             summary_index = SummaryIndex.from_documents(docs)
             query_engine = summary_index.as_query_engine()
             
-            # Semantic narrative analysis
-            response = query_engine.query("Tóm tắt ngắn gọn chủ đề chính, mâu thuẫn chính hoặc điểm cao trào kịch tính nhất của các phân cảnh này bằng một câu ngắn tiếng Việt.")
+            # Semantic narrative analysis of the whole video kịch bản
+            response = query_engine.query("Tóm tắt ngắn gọn chủ đề chính, mâu thuẫn chính hoặc điểm cao trào kịch tính nhất của kịch bản video này bằng một câu ngắn tiếng Việt.")
             video_theme = str(response).strip()
             safe_print(f"[llamaindex] Extracted video story theme: '{video_theme}'", flush=True)
         except Exception as exc:
@@ -1367,6 +1383,7 @@ def generate_intro_hook_via_ollama(
     for attempt in range(2):
         prompt = _build_intro_teaser_prompt(
             window_segments,
+            all_segments=all_segments,
             source_language=source_language,
             clip_duration_ms=clip_duration_ms,
             video_theme=video_theme,
@@ -1461,6 +1478,7 @@ def localize_batch_via_llama_cpp(
 def generate_intro_hook_via_llama_cpp(
     window_segments: list[dict[str, Any]],
     *,
+    all_segments: list[dict[str, Any]] | None = None,
     source_language: str,
     clip_duration_ms: int,
 ) -> str:
@@ -1468,6 +1486,7 @@ def generate_intro_hook_via_llama_cpp(
     for attempt in range(2):
         prompt = _build_intro_teaser_prompt(
             window_segments,
+            all_segments=all_segments,
             source_language=source_language,
             clip_duration_ms=clip_duration_ms,
             retry_reason=("too_short" if attempt else ""),
@@ -2618,6 +2637,7 @@ def build_structured_intro_hook_text(window_segments: list[dict[str, Any]]) -> s
 def build_intro_hook_text_with_context(
     window_segments: list[dict[str, Any]],
     *,
+    all_segments: list[dict[str, Any]] | None = None,
     source_language: str,
     clip_duration_ms: int,
 ) -> str:
@@ -2633,6 +2653,7 @@ def build_intro_hook_text_with_context(
         try:
             generated = generate_intro_hook_via_ollama(
                 window_segments,
+                all_segments=all_segments,
                 source_language=source_language,
                 clip_duration_ms=clip_duration_ms,
             )
@@ -2644,6 +2665,7 @@ def build_intro_hook_text_with_context(
         try:
             generated = generate_intro_hook_via_llama_cpp(
                 window_segments,
+                all_segments=all_segments,
                 source_language=source_language,
                 clip_duration_ms=clip_duration_ms,
             )

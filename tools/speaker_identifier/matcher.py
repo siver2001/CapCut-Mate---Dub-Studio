@@ -65,6 +65,8 @@ def match_speakers_and_extract_features(
             score_sum = 0.0
             overlap_count = 0
             for fidx, abs_frame in enumerate(track["frame"]):
+                if fidx >= len(scores):
+                    break
                 if abs_frame in audio_frames:
                     score_sum += scores[fidx]
                     overlap_count += 1
@@ -83,7 +85,8 @@ def match_speakers_and_extract_features(
             scores = talknet_scores[best_track_idx]
             
             # Find the frame in the track where the active speaker score is highest
-            best_frame_idx = np.argmax(scores)
+            best_frame_idx = int(np.argmax(scores))
+            best_frame_idx = min(best_frame_idx, len(track["frame"]) - 1) if len(track["frame"]) > 0 else 0
             abs_frame_num = int(track["frame"][best_frame_idx])
             bbox = track["bbox"][best_frame_idx].astype(int).tolist() # [x1, y1, x2, y2]
             

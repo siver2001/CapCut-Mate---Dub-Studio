@@ -162,26 +162,6 @@ def extract_speaker_samples(video_path: Path, segments: list[dict[str, Any]], ou
     return result
 
 
-def estimate_gender_from_sample_audio(sample_path: Path | str | None) -> dict[str, Any]:
-    """Gender estimation disabled — always returns unknown."""
-    return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-
-
-def _estimate_gender_from_audio_array(audio: Any, sr: int = 16000) -> dict[str, Any]:
-    """Gender estimation disabled — always returns unknown."""
-    return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-
-
-def estimate_gender_from_audio_slice(
-    audio: Any,
-    *,
-    sr: int,
-    start_ms: int,
-    end_ms: int,
-) -> dict[str, Any]:
-    """Gender estimation disabled — always returns unknown."""
-    return {"gender": "unknown", "confidence": 0.0, "medianPitchHz": None}
-
 
 def build_speaker_stats_from_segments(
     segments: list[dict[str, Any]],
@@ -242,7 +222,7 @@ def collapse_segments_to_gender_buckets(
     ]
     speaker_stats, main_speaker_id = build_speaker_stats_from_segments(remapped_segments)
     speaker_count = max(len(speaker_stats), 1)
-    voice_layout = "single_voice"
+    voice_layout = "multi_character" if speaker_count > 1 else "single_voice"
     return remapped_segments, speaker_stats, main_speaker_id, speaker_count, 0.42, voice_layout
 
 
@@ -324,17 +304,23 @@ def analyze_with_whisperx(
     )
     aligned_segments = aligned_result.get("segments") or []
     diarization_used = False
+    diarization_model_path = str(WHISPERX_DIARIZATION_MODEL).strip()
+    # Support relative paths resolved relative to ROOT
+    resolved_model_path = ROOT / diarization_model_path
+    if not os.path.isabs(diarization_model_path) and resolved_model_path.exists():
+        diarization_model_path = resolved_model_path.resolve().as_posix()
+    is_local_config = diarization_model_path.endswith((".yaml", ".yml")) or os.path.exists(diarization_model_path)
     hf_token = resolve_hf_token()
-    diarization_repo_id = normalize_text(WHISPERX_DIARIZATION_MODEL)
-    if hf_token or hf_repo_cached(diarization_repo_id):
+
+    if is_local_config or hf_token or hf_repo_cached(diarization_model_path):
         try:
-            if not diarization_repo_id or not hf_repo_cached(diarization_repo_id):
-                raise RuntimeError("model diarization local chua san sang")
-            cli_log("analyze_with_whisperx: Loading diarization model (PyAnnote)")
+            cli_log(f"analyze_with_whisperx: Loading diarization model ({diarization_model_path})")
             emit_progress(phase="analysis", step="diarize", progress=0.55, message="Đang tải mô hình nhận diện người nói (PyAnnote Diarization)...")
-            diarize_model = whisperx.DiarizationPipeline(
-                model_name=diarization_repo_id,
-                token=hf_token,
+            from whisperx.diarize import DiarizationPipeline
+            token_to_use = hf_token if not is_local_config else None
+            diarize_model = DiarizationPipeline(
+                model_name=diarization_model_path,
+                token=token_to_use,
                 device=device,
                 cache_dir=str(HUGGINGFACE_HUB_CACHE),
             )
@@ -350,9 +336,7 @@ def analyze_with_whisperx(
             aligned_segments = aligned_result.get("segments") or []
             diarization_used = True
         except Exception as exc:
-            warnings.append(f"WhisperX diarization không chạy được, sẽ fallback heuristic speaker: {exc}")
-    else:
-        warnings.append("Chưa có HF token cho WhisperX diarization, sẽ fallback heuristic speaker.")
+            warnings.append(f"WhisperX diarization không chạy được, sẽ chuyển sang bộ nhận diện LLM/Heuristic: {exc}")
 
     normalized_segments = [
         {
@@ -398,7 +382,7 @@ def analyze_with_whisperx(
                 "voiceLayout": voice_layout,
                 "warnings": warnings,
             }
-        warnings.append("WhisperX diarization không gán được speaker ổn định, sẽ fallback heuristic speaker.")
+        warnings.append("WhisperX diarization không gán được speaker ổn định, sẽ chuyển sang bộ nhận diện LLM/Heuristic.")
 
     merged_subtitles = merge_short_subtitles(raw_subtitles)
     merged_srt_path.write_text(compose_srt(merged_subtitles), encoding="utf-8")
@@ -413,6 +397,25 @@ def analyze_with_whisperx(
         }
         for subtitle, speaker_id in zip(merged_subtitles, assignments)
     ]
+
+    # Upgrade speaker assignments using LLM-based context diarization if available
+    try:
+        cli_log("Running LLM-based speaker diarization...")
+        llm_assignments = infer_speaker_assignments_with_llm(
+            merged_segments,
+            provider=DUB_TRANSLATE_PROVIDER,
+            max_speakers=5,
+        )
+        if llm_assignments is not None:
+            llm_ids, inferred_count, inferred_confidence = llm_assignments
+            for idx, spk_id in enumerate(llm_ids):
+                merged_segments[idx]["speakerId"] = spk_id
+            speaker_count = inferred_count
+            speaker_confidence = inferred_confidence
+            cli_log(f"LLM-based diarization successful. Detected {speaker_count} speakers.")
+    except Exception as exc:
+        warnings.append(f"LLM speaker diarization failed, fallback to heuristic: {exc}")
+
     (
         merged_segments,
         speaker_stats,
@@ -1012,55 +1015,7 @@ def build_speakers(
     return speakers
 
 
-def refine_speakers_with_ollama(
-    segments: list[dict[str, Any]],
-    speaker_ids: list[str],
-) -> dict[str, dict[str, Any]]:
-    """Use Gemma 4 to identify speaker roles and genders from context."""
-    if not segments or not speaker_ids:
-        return {}
-        
-    context_samples = []
-    for sid in speaker_ids:
-        # Get a few lines for this speaker
-        lines = [s["sourceText"] for s in segments if s.get("speakerId") == sid][:5]
-        if lines:
-            context_samples.append(f"{sid}: {' | '.join(lines)}")
-            
-    if not context_samples:
-        return {}
 
-    prompt = (
-        "You are a script analyst for video dubbing.\n"
-        "Identify the role and gender for each speaker ID based on their dialogue context.\n"
-        "Return ONLY a valid JSON object where keys are speaker IDs and values are objects with:\n"
-        '- "displayName": a short descriptive name in Vietnamese (e.g., "Người dẫn chuyện", "Khách hàng nam").\n'
-        '- "gender": "male", "female", or "unknown".\n'
-        '- "suggestedVoice": a generic voice type (e.g., "female_young", "male_deep").\n'
-        "Dialogue Samples:\n"
-        f"{chr(10).join(context_samples)}"
-    )
-    
-    try:
-        response = run_ollama_prompt(prompt, temperature=0.2)
-        refinement = parse_json_response_payload(response)
-        if isinstance(refinement, dict):
-            return refinement
-    except Exception:
-        pass
-    if should_use_llama_cpp("auto"):
-        try:
-            response = run_llama_cpp_prompt(
-                prompt,
-                max_tokens=max(256, len(speaker_ids) * 96),
-                temperature=max(0.15, min(LLAMA_CPP_TEMP, 0.35)),
-            )
-            refinement = parse_json_response_payload(response)
-            if isinstance(refinement, dict):
-                return refinement
-        except Exception:
-            pass
-    return {}
 
 
 def _usable_local_llm_backends(provider: str) -> tuple[bool, bool]:
@@ -1132,7 +1087,7 @@ def infer_speaker_assignments_with_llm(
     provider: str,
     max_speakers: int = 4,
 ) -> tuple[list[str], int, float] | None:
-    if len(segments) < 4 or len(segments) > 72:
+    if len(segments) < 4 or len(segments) > 400:
         return None
 
     transcript_lines: list[str] = []
@@ -1148,9 +1103,10 @@ def infer_speaker_assignments_with_llm(
     if len(transcript_lines) != len(segments):
         return None
 
+    allowed_speaker_ids = [f"speaker_{i + 1}" for i in range(max_speakers)]
     prompt = (
         "You are assigning recurring speakers for a dubbing transcript.\n"
-        "Decide whether the transcript is narration/monologue or a dialogue with 2-4 recurring speakers.\n"
+        f"Decide whether the transcript is narration/monologue or a dialogue with up to {max_speakers} recurring speakers.\n"
         "Return JSON only with this schema:\n"
         '{'
         '"speakerCount": 1, '
@@ -1160,7 +1116,7 @@ def infer_speaker_assignments_with_llm(
         "Rules:\n"
         f"- speakerCount must be between 1 and {max_speakers}.\n"
         "- assignments must include every transcript index exactly once.\n"
-        "- speakerId values must be speaker_1, speaker_2, speaker_3, or speaker_4.\n"
+        f"- speakerId values must be one of: {', '.join(allowed_speaker_ids)}.\n"
         "- Reuse the same speakerId consistently across the whole transcript.\n"
         "- Prefer fewer speakers unless the dialogue clearly alternates between people.\n"
         "- If the transcript looks like one narrator, use only speaker_1.\n"
@@ -1271,121 +1227,7 @@ def estimate_speaker_count_with_llm(
     return speaker_count, max(0.45, min(confidence, 0.88))
 
 
-def maybe_upgrade_speaker_segmentation_with_llm(
-    segments: list[dict[str, Any]],
-    *,
-    speaker_count: int,
-    speaker_confidence: float,
-    voice_layout: str,
-    provider: str,
-) -> tuple[list[dict[str, Any]], int, float, str, dict[str, dict[str, Any]], str, str]:
-    if not segments:
-        return segments, speaker_count, speaker_confidence, voice_layout, {}, "speaker_1", ""
 
-    should_try = (
-        speaker_count <= 1
-        or voice_layout == "single_voice"
-        or speaker_confidence < 0.56
-    )
-    if not should_try:
-        return segments, speaker_count, speaker_confidence, voice_layout, {}, "speaker_1", ""
-
-    subtitles = speaker_subtitles_from_segments(segments)
-    if len(subtitles) < 4:
-        return segments, speaker_count, speaker_confidence, voice_layout, {}, "speaker_1", ""
-
-    llm_assignments = infer_speaker_assignments_with_llm(
-        segments,
-        provider=provider,
-    )
-    note = ""
-    if llm_assignments is not None:
-        assignments, inferred_count, inferred_confidence = llm_assignments
-        updated_segments = [
-            {
-                **segment,
-                "speakerId": assignments[index],
-            }
-            for index, segment in enumerate(segments)
-        ]
-        assigned_like_segments = [
-            {
-                "startMs": item["startMs"],
-                "endMs": item["endMs"],
-                "text": item.get("sourceText") or "",
-                "speaker": item.get("speakerId") or "speaker_1",
-            }
-            for item in updated_segments
-        ]
-        remapped_segments, remapped_stats, main_speaker_id = remap_speaker_segments(
-            assigned_like_segments
-        )
-        if len(remapped_stats) > 1:
-            normalized_segments = []
-            for segment, mapped in zip(updated_segments, remapped_segments):
-                normalized_segments.append(
-                    {
-                        **segment,
-                        "speakerId": mapped.get("speakerId") or segment.get("speakerId") or "speaker_1",
-                    }
-                )
-            boosted_confidence = max(speaker_confidence, inferred_confidence)
-            boosted_layout = classify_voice_layout(
-                subtitles,
-                max(len(remapped_stats), inferred_count),
-                boosted_confidence,
-            )
-            note = (
-                f"Gemma 4 suy luận transcript có {len(remapped_stats)} speaker thay vì {speaker_count}. "
-                "Nên kiểm tra lại mapping giọng nếu video có nhiều cảnh chuyển nhanh."
-            )
-            return (
-                normalized_segments,
-                max(len(remapped_stats), 1),
-                boosted_confidence,
-                boosted_layout,
-                remapped_stats,
-                main_speaker_id,
-                note,
-            )
-
-    llm_count = estimate_speaker_count_with_llm(
-        segments,
-        provider=provider,
-    )
-    if llm_count is None:
-        return segments, speaker_count, speaker_confidence, voice_layout, {}, "speaker_1", ""
-
-    inferred_count, inferred_confidence = llm_count
-    if inferred_count <= max(speaker_count, 1):
-        return segments, speaker_count, speaker_confidence, voice_layout, {}, "speaker_1", ""
-
-    assignments, inferred_stats, main_speaker_id = assign_speakers(subtitles, inferred_count)
-    if len(inferred_stats) <= 1:
-        return segments, speaker_count, speaker_confidence, voice_layout, {}, "speaker_1", ""
-
-    updated_segments = [
-        {
-            **segment,
-            "speakerId": assignments[index],
-        }
-        for index, segment in enumerate(segments)
-    ]
-    boosted_confidence = max(speaker_confidence, inferred_confidence)
-    boosted_layout = classify_voice_layout(subtitles, inferred_count, boosted_confidence)
-    note = (
-        f"Gemma 4 suy luận transcript có khoảng {inferred_count} speaker và đã ép tách vai thoại. "
-        "Nên kiểm tra lại mapping giọng nếu clip có độc thoại hoặc voice-over."
-    )
-    return (
-        updated_segments,
-        inferred_count,
-        boosted_confidence,
-        boosted_layout,
-        inferred_stats,
-        main_speaker_id,
-        note,
-    )
 
 
 def smooth_signal(values: list[float], radius: int = 2) -> list[float]:

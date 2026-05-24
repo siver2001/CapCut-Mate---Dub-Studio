@@ -843,20 +843,24 @@ def render_intro_hook(
     emit_progress(phase="render", step="intro_hook", progress=0.86, message="Đang soạn lời thoại intro (AI)...")
     intro_text = build_intro_hook_text_with_context(
         clip_window["segments"],
+        all_segments=segments,
         source_language=source_language,
         clip_duration_ms=clip_window["durationMs"],
     )
     tts_profile = estimate_tts_text_profile(intro_text)
     # Adaptive teaser duration constraint to deliver punchy, energetic pacing.
-    # We target a duration between 11 and 16 seconds. If AI writes a longer story, 
-    # the target duration forces a faster reading rate so speech stays snappy and 
-    # the video clip never drags out beyond the core highlights (16 seconds max).
+    # We scale the target duration limits dynamically based on the selected clip window duration.
+    # This prevents short videos from having excessively long or stretched teasers, ensuring perfect audio-visual match.
+    clip_dur_ms = clip_window["durationMs"]
+    min_teaser_limit = max(4000, int(clip_dur_ms * 0.92))
+    max_teaser_limit = max(6000, int(clip_dur_ms * 1.38))
+    
     natural_tts_duration_ms = min(
         max(
-            int(tts_profile.get("expectedSeconds", 0.0) * 1000 / 1.3), 
-            11000
+            int(tts_profile.get("expectedSeconds", 0.0) * 1000 / 1.05), 
+            min_teaser_limit
         ), 
-        16000
+        max_teaser_limit
     )
     remaining_source_ms = max(video_duration_ms - clip_window["startMs"], clip_window["durationMs"])
     
@@ -945,12 +949,27 @@ def render_intro_hook(
                     documents.append(doc)
                     
                 index = VectorStoreIndex.from_documents(documents)
-                retriever = index.as_retriever(similarity_top_k=1)
+                retriever = index.as_retriever(similarity_top_k=5)
                 
-                safe_print(f"[llamaindex] Aligning {num_clips} montage sentences to visual timeline semantically...", flush=True)
+                safe_print(f"[llamaindex] Aligning {num_clips} montage sentences to visual timeline semantically with deduplication...", flush=True)
+                selected_indices = set()
                 for s_idx, sentence in enumerate(raw_sentences):
                     nodes = retriever.retrieve(sentence)
-                    best_idx = nodes[0].node.metadata["index"]
+                    best_idx = None
+                    if nodes:
+                        # Find the first retrieved node that hasn't been selected yet
+                        for node in nodes:
+                            candidate_idx = node.node.metadata["index"]
+                            if candidate_idx not in selected_indices:
+                                best_idx = candidate_idx
+                                break
+                        # Fallback: if all retrieved nodes are already selected, use the best-scoring one
+                        if best_idx is None:
+                            best_idx = nodes[0].node.metadata["index"]
+                    else:
+                        best_idx = min(s_idx, len(segments) - 1)
+                    
+                    selected_indices.add(best_idx)
                     best_seg = segments[best_idx]
                     
                     seg_start = int(best_seg.get("startMs", 0))
@@ -2014,178 +2033,6 @@ def persist_analysis_cache(*, cache_key: str, analysis: dict[str, Any]) -> None:
             shutil.copy2(candidate, cache_speaker_dir / candidate.name)
 
 
-def do_analyze(
-    job_id: str,
-    input_path: Path,
-    output_json: Path,
-    *,
-    target_language: str = "vi",
-    localization_mode: str = "creative",
-) -> dict[str, Any]:
-    if whisperx_disabled():
-        return do_analyze_resilient(job_id, input_path, output_json, target_language=target_language, localization_mode=localization_mode)
-    dirs = ensure_job_dirs(job_id)
-    video_meta = get_video_meta(input_path)
-    thumbnail_path = dirs["analysis"] / "thumbnail.jpg"
-    raw_srt_path = dirs["analysis"] / "transcript_raw.srt"
-    merged_srt_path = dirs["analysis"] / "transcript_merged.srt"
-    whisperx_audio_path = dirs["analysis"] / "transcript_whisperx.wav"
-
-    emit_progress(phase="analysis", step="prepare", progress=0.05, message="Đang đọc thông tin video")
-    extract_thumbnail(input_path, thumbnail_path)
-    emit_progress(phase="analysis", step="transcribe", progress=0.24, message=f"Đang nhận diện lời nói bằng WhisperX {WHISPERX_MODEL}")
-    whisperx_analysis = analyze_with_whisperx(
-        video_path=input_path,
-        audio_path=whisperx_audio_path,
-        raw_srt_path=raw_srt_path,
-        merged_srt_path=merged_srt_path,
-        language=None,
-    )
-    
-    raw_subtitles = whisperx_analysis["rawSubtitles"]
-    if not raw_subtitles:
-        raise RuntimeError("No speech segments were detected from the input video.")
-    transcript_text = " ".join(item.content for item in raw_subtitles[:24])
-    detected_language = whisperx_analysis.get("sourceLanguage") or ""
-    heuristic_language, heuristic_confidence, alternatives = detect_source_language(transcript_text)
-    source_language = detected_language if detected_language in LANGUAGE_OPTIONS else heuristic_language
-    language_confidence = 0.92 if detected_language == heuristic_language else max(0.74, heuristic_confidence)
-    emit_progress(phase="analysis", step="language", progress=0.52, message="Đang xác nhận ngôn ngữ nguồn")
-    speaker_count = max(int(whisperx_analysis.get("speakerCount", 1)), 1)
-    speaker_confidence = float(whisperx_analysis.get("speakerConfidence", 0.42))
-    voice_layout = str(whisperx_analysis.get("voiceLayout") or "single_voice")
-    speaker_stats = whisperx_analysis.get("speakerStats") or {}
-    main_speaker_id = whisperx_analysis.get("mainSpeakerId") or "speaker_1"
-    segments = _split_segments_into_sentences(whisperx_analysis.get("mergedSegments") or [])
-
-    refinement = {}
-
-    sample_paths: Any = {}
-    if segments:
-        emit_progress(phase="analysis", step="samples", progress=0.68, message="Đang tách mẫu giọng từng nhân vật")
-        sample_paths = extract_speaker_samples(input_path, segments, dirs["analysis"] / "speakers")
-
-    speakers = build_speakers(
-        speaker_count,
-        speaker_stats=speaker_stats,
-        main_speaker_id=main_speaker_id,
-        refinement=refinement,
-        sample_paths=sample_paths,
-    )
-    emit_progress(phase="analysis", step="speaker", progress=0.70, message="Đang gom nhóm người nói theo WhisperX")
-
-    # ----------------------------------------------------
-    # Tích hợp nhận diện speaker đa phương thức (TalkNet + InsightFace)
-    # ----------------------------------------------------
-    try:
-        from tools.dub_studio.cli_parts.runtime import ensure_speaker_identification_runtime
-        ensure_speaker_identification_runtime(phase="analysis", step="speaker", progress=0.72)
-        
-        from tools.speaker_identifier import run_talknet_asd, match_speakers_and_extract_features
-        talknet_res = run_talknet_asd(input_path, dirs["analysis"], sys.executable)
-        if talknet_res:
-            talknet_tracks, talknet_scores = talknet_res
-            pyannote_segs = []
-            for seg in segments:
-                pyannote_segs.append({
-                    "start": float(seg.get("startMs", 0)) / 1000.0,
-                    "end": float(seg.get("endMs", 0)) / 1000.0,
-                    "speaker": seg.get("speakerId", "speaker_1")
-                })
-            
-            visual_speaker_data = match_speakers_and_extract_features(
-                video_path=input_path,
-                pyannote_segments=pyannote_segs,
-                talknet_tracks=talknet_tracks,
-                talknet_scores=talknet_scores,
-                output_speakers_dir=dirs["analysis"] / "speakers",
-                use_gpu=bool(DUB_USE_GPU)
-            )
-            
-            visual_map = {item["speakerId"]: item for item in visual_speaker_data}
-            for spk_dict in speakers:
-                spk_id = spk_dict.get("speakerId")
-                vis_info = visual_map.get(spk_id)
-                if vis_info:
-                    spk_dict["faceThumbnail"] = vis_info["faceThumbnail"]
-                    spk_dict["gender"] = vis_info["gender"]
-                    spk_dict["age"] = vis_info["age"]
-                    spk_dict["voicePreset"] = vis_info["voicePreset"]
-                    spk_dict["memoryName"] = vis_info["memoryName"]
-                    spk_dict["embedding"] = vis_info["embedding"]
-                    if vis_info["memoryName"]:
-                        spk_dict["displayName"] = f"Người quen: {vis_info['memoryName']}"
-                    else:
-                        gender_lbl = "Nam" if vis_info["gender"] == "M" else "Nữ"
-                        spk_dict["displayName"] = f"{spk_id} ({gender_lbl}, ~{vis_info['age']} tuổi)"
-    except Exception as e:
-        warnings.append(f"Không thể chạy nhận diện khuôn mặt đa phương thức: {e}")
-
-
-    subtitle_region = default_subtitle_region(video_meta)
-    warnings: list[str] = list(whisperx_analysis.get("warnings") or [])
-    if language_confidence < 0.58:
-        warnings.append("Độ tự tin ngôn ngữ nguồn đang thấp. Nên kiểm tra và sửa tay trước khi render.")
-    if voice_layout == "single_voice":
-        warnings.append("Audio gốc hiện tại giống một giọng chung. Hệ thống sẽ ưu tiên dùng một giọng để tránh nhầm nhân vật.")
-    elif speaker_confidence < 0.52:
-        warnings.append("Số speaker được ước lượng theo heuristic. Nếu video là hội thoại, nên kiểm tra lại mapping giọng.")
-
-    translated_cache_path = dirs["analysis"] / "translated.json"
-    emit_progress(
-        phase="analyze",
-        step="translate",
-        progress=0.81,
-        message=f"Đang dịch subtitle sang {target_language.upper()}",
-    )
-    segments = translate_segments(
-        segments,
-        source_language,
-        translated_cache_path,
-        target_language=target_language,
-        phase="analyze",
-        localization_mode=localization_mode,
-    )
-    segments = _split_translated_segments_by_sentence(segments)
-    subtitle_timeline = build_subtitle_timeline(segments)
-
-    analysis = {
-        "jobId": job_id,
-        "inputPath": str(input_path),
-        "thumbnailPath": str(thumbnail_path),
-        "analysisDir": str(dirs["analysis"]),
-        "videoMeta": video_meta,
-        "sourceLanguage": source_language,
-        "targetLanguage": target_language,
-        "languageConfidence": language_confidence,
-        "languageAlternatives": alternatives,
-        "speakers": speakers,
-        "speakerConfidence": speaker_confidence,
-        "mainSpeakerId": main_speaker_id,
-        "detectedSpeakerCountRaw": speaker_count,
-        "voiceLayout": voice_layout,
-        "segments": segments,
-        "transcriptionProvider": f"whisperx:{WHISPERX_MODEL}",
-        "alignmentProvider": "whisperx",
-        "diarizationProvider": "whisperx" if not any("fallback heuristic speaker" in item for item in warnings) else "heuristic_fallback",
-        "subtitleRegion": subtitle_region,
-        "subtitleTimeline": subtitle_timeline,
-        "subtitleSrt": compose_srt_from_timeline(subtitle_timeline),
-        "subtitleTimelineSource": "ai_generated",
-        "warnings": warnings,
-        "renderDefaults": build_default_render_options(
-            {
-                "speakers": speakers,
-                "subtitleRegion": subtitle_region,
-                "voiceLayout": voice_layout,
-                "targetLanguage": target_language,
-            }
-        ),
-    }
-    write_json(output_json, analysis)
-    emit_progress(phase="analysis", step="done", progress=1.0, message="Phân tích xong", status="success")
-    emit("RESULT", {"analysisPath": str(output_json), "thumbnailPath": str(thumbnail_path)})
-    return analysis
 
 
 def do_analyze_resilient(
@@ -2336,10 +2183,59 @@ def do_analyze_resilient(
         refinement=refinement,
         sample_paths=sample_paths,
     )
+    
+    # ----------------------------------------------------
+    # Tích hợp nhận diện speaker đa phương thức (TalkNet + InsightFace)
+    # ----------------------------------------------------
+    warnings: list[str] = []
+    try:
+        from tools.dub_studio.cli_parts.runtime import ensure_speaker_identification_runtime
+        ensure_speaker_identification_runtime(phase="analyze", step="speaker_id", progress=0.72)
+        
+        from tools.speaker_identifier import run_talknet_asd, match_speakers_and_extract_features
+        talknet_res = run_talknet_asd(input_path, dirs["analysis"], sys.executable)
+        if talknet_res:
+            talknet_tracks, talknet_scores = talknet_res
+            pyannote_segs = []
+            for seg in segments:
+                pyannote_segs.append({
+                    "start": float(seg.get("startMs", 0)) / 1000.0,
+                    "end": float(seg.get("endMs", 0)) / 1000.0,
+                    "speaker": seg.get("speakerId", "speaker_1")
+                })
+            
+            visual_speaker_data = match_speakers_and_extract_features(
+                video_path=input_path,
+                pyannote_segments=pyannote_segs,
+                talknet_tracks=talknet_tracks,
+                talknet_scores=talknet_scores,
+                output_speakers_dir=dirs["analysis"] / "speakers",
+                use_gpu=bool(DUB_USE_GPU)
+            )
+            
+            visual_map = {item["speakerId"]: item for item in visual_speaker_data}
+            for spk_dict in speakers:
+                spk_id = spk_dict.get("speakerId")
+                vis_info = visual_map.get(spk_id)
+                if vis_info:
+                    spk_dict["faceThumbnail"] = vis_info["faceThumbnail"]
+                    spk_dict["gender"] = vis_info["gender"]
+                    spk_dict["age"] = vis_info["age"]
+                    spk_dict["voicePreset"] = vis_info["voicePreset"]
+                    spk_dict["memoryName"] = vis_info["memoryName"]
+                    spk_dict["embedding"] = vis_info["embedding"]
+                    if vis_info["memoryName"]:
+                        spk_dict["displayName"] = f"Người quen: {vis_info['memoryName']}"
+                    else:
+                        gender_lbl = "Nam" if vis_info["gender"] == "M" else "Nữ"
+                        spk_dict["displayName"] = f"{spk_id} ({gender_lbl}, ~{vis_info['age']} tuổi)"
+    except Exception as e:
+        warnings.append(f"Không thể chạy nhận diện khuôn mặt đa phương thức: {e}")
+
     emit_progress(phase="analyze", step="cluster", progress=0.75, message="Đang gom nhóm người nói")
 
     subtitle_region = default_subtitle_region(video_meta)
-    warnings: list[str] = list(transcription.get("warnings") or [])
+    warnings.extend(list(transcription.get("warnings") or []))
     if language_confidence < 0.58:
         warnings.append("Độ tự tin ngôn ngữ nguồn đang thấp. Nên kiểm tra và sửa tay trước khi render.")
     if voice_layout == "single_voice":

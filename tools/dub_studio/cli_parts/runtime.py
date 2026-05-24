@@ -749,140 +749,6 @@ def apply_localized_result(
     }
 
 
-def fallback_translate_items(
-    batch: list[dict[str, Any]],
-    *,
-    texts: list[str],
-    source_hint: str,
-    use_llama_cpp: bool,
-) -> list[dict[str, str]]:
-    from .translation import localize_batch_via_llama_cpp, translate_via_microsoft
-
-    if use_llama_cpp:
-        try:
-            return localize_batch_via_llama_cpp(batch, source_hint, "vi")
-        except Exception:
-            pass
-    localized_items: list[dict[str, str]] = []
-    for text, source_item in zip(texts, batch):
-        try:
-            translated = translate_via_microsoft(text, source_hint, "vi") if text else ""
-        except Exception:
-            translated = ""
-        source_text = source_item.get("sourceText") or ""
-        translated_seed = pick_best_localized_text(
-            translated,
-            "",
-            source_text,
-        )
-        translated = prefer_minh_cau_pair(translated_seed, source_text)
-        localized_items.append(
-            {
-                "translatedText": translated,
-                "delivery": "neutral",
-            }
-        )
-    return localized_items
-
-
-def localize_batch_via_ollama_resilient(
-    batch: list[dict[str, Any]],
-    *,
-    source_hint: str,
-    target_language: str,
-    llama_cpp_available: bool,
-    label: str,
-    phase: str,
-    progress_hint: float,
-) -> list[dict[str, str]]:
-    from .translation import localize_batch_via_ollama
-
-    texts = [normalize_text(item.get("sourceText") or "") for item in batch]
-    try:
-        return localize_batch_via_ollama(batch, source_hint, target_language)
-    except OllamaResourceError as exc:
-        # Non-retriable: model cannot fit in memory. Skip all retries, go to fallback.
-        safe_print(
-            f"[warn] Ollama không đủ tài nguyên cho cụm {label}, chuyển sang fallback: "
-            f"{str(exc)[:200]}",
-            flush=True,
-        )
-        emit_progress(
-            phase=phase,
-            step="translate",
-            progress=progress_hint,
-            message=f"Ollama hết RAM ở cụm {label}, đang dùng Microsoft Translator thay thế",
-            extra={"warning": normalize_text(str(exc))[:180]},
-        )
-        return fallback_translate_items(
-            batch,
-            texts=texts,
-            source_hint=source_hint,
-            use_llama_cpp=llama_cpp_available,
-        )
-    except Exception as exc:
-        if len(batch) == 1:
-            extended_timeout = min(
-                OLLAMA_MAX_TIMEOUT,
-                max(estimate_ollama_timeout(texts[0], max_tokens=OLLAMA_TOKENS_MIN, attempt=2), OLLAMA_TIMEOUT + 90),
-            )
-            if extended_timeout > OLLAMA_TIMEOUT:
-                emit_progress(
-                    phase=phase,
-                    step="translate",
-                    progress=progress_hint,
-                    message=f"Ollama chậm ở cụm {label}, thử lại riêng cụm này với timeout={extended_timeout}s",
-                )
-                try:
-                    return localize_batch_via_ollama(
-                        batch,
-                        source_hint,
-                        target_language,
-                        timeout=extended_timeout,
-                    )
-                except Exception as retry_exc:
-                    exc = retry_exc
-        if len(batch) > 1:
-            emit_progress(
-                phase=phase,
-                step="translate",
-                progress=progress_hint,
-                message=f"Ollama chậm ở cụm {label}, đang tách nhỏ để tránh đứng tiến trình",
-            )
-            midpoint = max(len(batch) // 2, 1)
-            left = localize_batch_via_ollama_resilient(
-                batch[:midpoint],
-                source_hint=source_hint,
-                target_language=target_language,
-                llama_cpp_available=llama_cpp_available,
-                label=f"{label}.1",
-                phase=phase,
-                progress_hint=progress_hint,
-            )
-            right = localize_batch_via_ollama_resilient(
-                batch[midpoint:],
-                source_hint=source_hint,
-                target_language=target_language,
-                llama_cpp_available=llama_cpp_available,
-                label=f"{label}.2",
-                phase=phase,
-                progress_hint=progress_hint,
-            )
-            return left + right
-        emit_progress(
-            phase=phase,
-            step="translate",
-            progress=progress_hint,
-            message=f"Ollama lỗi ở cụm {label}, đang fallback cục bộ cho cụm này",
-            extra={"warning": normalize_text(str(exc))[:180]},
-        )
-        return fallback_translate_items(
-            batch,
-            texts=texts,
-            source_hint=source_hint,
-            use_llama_cpp=llama_cpp_available,
-        )
-
 
 def parse_json_response_payload(output_text: str) -> Any:
     text = str(output_text or "").strip()
@@ -1219,18 +1085,7 @@ def ensure_whisperx_runtime(*, phase: str, step: str, progress: float) -> None:
             step=step,
             progress=min(progress + 0.01 + index * 0.005, 0.995),
         )
-    if resolve_hf_token():
-        try:
-            ensure_whisperx_diarization_cache(
-                phase=phase,
-                step=step,
-                progress=min(progress + 0.04, 0.998),
-            )
-        except Exception as exc:
-            safe_print(
-                f"[warn] WhisperX diarization cache chưa sẵn sàng, sẽ tiếp tục với ASR/alignment và fallback speaker nếu cần: {normalize_text(str(exc))[:220]}",
-                flush=True,
-            )
+    pass
 
 
 def ensure_edge_tts_runtime(*, phase: str, step: str, progress: float) -> None:
@@ -1724,6 +1579,44 @@ def whisperx_audio_waveform(audio: Any) -> dict[str, Any]:
     }
 
 
+def download_file_with_fallback(dest_path: Path, urls: list[str], description: str, *, phase: str, step: str, progress: float) -> bool:
+    import requests
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    if dest_path.exists() and dest_path.stat().st_size > 1024 * 1024:
+        return True
+
+    emit_progress(
+        phase=phase,
+        step=step,
+        progress=progress,
+        message=f"Đang tải {description}..."
+    )
+
+    for url in urls:
+        try:
+            print(f"[download] Trying to download {description} from {url}...")
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            response = requests.get(url, stream=True, timeout=60, headers=headers)
+            if response.status_code == 200:
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) < 1024 * 1024:
+                    print(f"[download] Skipping URL {url} because content-length is too small ({content_length} bytes)")
+                    continue
+                with open(dest_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+                if dest_path.exists() and dest_path.stat().st_size > 1024 * 1024:
+                    print(f"[download] SUCCESS downloading {description}")
+                    return True
+            else:
+                print(f"[download] Failed with status code {response.status_code}")
+        except Exception as e:
+            print(f"[download] Error downloading from {url}: {e}")
+            continue
+    return False
+
+
 def ensure_speaker_identification_runtime(*, phase: str, step: str, progress: float) -> None:
     """Ensures dependencies for active speaker detection and facial analysis are installed and models are downloaded."""
     ensure_python_packages(
@@ -1739,34 +1632,34 @@ def ensure_speaker_identification_runtime(*, phase: str, step: str, progress: fl
     )
     
     pretrain_model = ROOT / "repos" / "TalkNet-ASD" / "pretrain_TalkSet.model"
-    if not pretrain_model.exists():
-        emit_progress(
-            phase=phase,
-            step=step,
-            progress=min(progress + 0.05, 1.0),
-            message="Đang tải file trọng số TalkNet (pretrain_TalkSet.model)..."
-        )
-        import requests
-        url = "https://docs.google.com/uc?export=download"
-        session = requests.Session()
-        try:
-            response = session.get(url, params={"id": "1AbN9fCf9IexMxEKXLQY2KYBlb-IhSEea"}, stream=True)
-            token = None
-            for key, value in response.cookies.items():
-                if key.startswith("download_warning"):
-                    token = value
-                    break
-            if token:
-                response = session.get(url, params={"id": "1AbN9fCf9IexMxEKXLQY2KYBlb-IhSEea", "confirm": token}, stream=True)
-                
-            pretrain_model.parent.mkdir(parents=True, exist_ok=True)
-            with open(pretrain_model, "wb") as f:
-                for chunk in response.iter_content(chunk_size=32768):
-                    if chunk:
-                        f.write(chunk)
-        except Exception as e:
-            # Fallback if connection fails, letting subprocess try gdown
-            pass
+    pretrain_urls = [
+        "https://huggingface.co/Hyathi/Preprocess/resolve/main/pretrain_TalkSet.model",
+        "https://docs.google.com/uc?export=download&id=1AbN9fCf9IexMxEKXLQY2KYBlb-IhSEea&confirm=t"
+    ]
+    download_file_with_fallback(
+        pretrain_model,
+        pretrain_urls,
+        "trọng số TalkNet (pretrain_TalkSet.model)",
+        phase=phase,
+        step=step,
+        progress=min(progress + 0.04, 1.0)
+    )
+
+    sfd_face_model = ROOT / "repos" / "TalkNet-ASD" / "model" / "faceDetector" / "s3fd" / "sfd_face.pth"
+    sfd_urls = [
+        "https://huggingface.co/Hyathi/Preprocess/resolve/main/sfd_face.pth",
+        "https://huggingface.co/lithiumice/syncnet/resolve/main/sfd_face.pth",
+        "https://huggingface.co/ByteDance/LatentSync-1.6/resolve/main/auxiliary/sfd_face.pth"
+    ]
+    download_file_with_fallback(
+        sfd_face_model,
+        sfd_urls,
+        "trọng số sfd_face.pth",
+        phase=phase,
+        step=step,
+        progress=min(progress + 0.08, 1.0)
+    )
+
 
 
 

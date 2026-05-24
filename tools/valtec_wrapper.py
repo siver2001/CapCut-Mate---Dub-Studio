@@ -90,8 +90,8 @@ class ValtecProvider:
         except ImportError:
             use_gpu = os.environ.get("DUB_USE_GPU") == "True"
             gpu_idx = os.environ.get("DUB_GPU_DEVICE", "0")
-            
-        self.device = f"cuda:{gpu_idx}" if use_gpu else "cpu"
+        import torch
+        self.device = f"cuda:{gpu_idx}" if (use_gpu and torch.cuda.is_available()) else "cpu"
         
         # Setup runtime temp dir
         temp_root = self.model_dir / "runtime_tmp"

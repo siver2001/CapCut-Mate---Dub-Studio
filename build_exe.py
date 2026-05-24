@@ -13,7 +13,7 @@ APP_NAME = "CapCutMate"
 ENTRY_POINT = "main.py"
 
 DATA_DIRS = ("assets", "config", "tools")
-RUNTIME_MODEL_DIRS = ("valtec", "vieneu")
+RUNTIME_MODEL_DIRS = ("valtec", "vieneu", "pyannote")
 
 REQUIRED_IMPORTS = {
     "PyInstaller": "pyinstaller",
