@@ -169,7 +169,7 @@ def whisperx_align_repo_id(language_code: str) -> str:
 
 def ensure_whisperx_model_cache(*, phase: str, step: str, progress: float) -> None:
     repo_id = WHISPERX_ASR_REPO or whisperx_asr_repo_id(WHISPERX_MODEL)
-    if not repo_id:
+    if not repo_id or "/" not in repo_id or os.path.exists(repo_id):
         return
     ensure_hf_snapshot(
         repo_id,
@@ -196,9 +196,18 @@ def ensure_whisperx_align_cache(*, language_code: str, phase: str, step: str, pr
 
 def ensure_whisperx_diarization_cache(*, phase: str, step: str, progress: float) -> str:
     repo_id = normalize_text(WHISPERX_DIARIZATION_MODEL)
-    hf_token = resolve_hf_token()
-    if not repo_id or not hf_token:
+    if not repo_id:
         return ""
+    # Skip HF download if it points to a local file or config
+    resolved_path = ROOT / repo_id
+    if (
+        repo_id.endswith((".yaml", ".yml"))
+        or os.path.exists(repo_id)
+        or resolved_path.exists()
+        or "/" not in repo_id
+    ):
+        return ""
+    hf_token = resolve_hf_token()
     ensure_hf_snapshot(
         repo_id,
         phase=phase,
@@ -1007,12 +1016,23 @@ def temporarily_use_workspace_torch_home():
 def temporarily_use_workspace_hf_home():
     original_hf_home = os.environ.get("HF_HOME")
     original_disable_xet = os.environ.get("HF_HUB_DISABLE_XET")
+    original_disable_symlinks = os.environ.get("HF_HUB_DISABLE_SYMLINKS")
 
     class _HfHomeContext:
         def __enter__(self):
             hf_home = ensure_dir(HUGGINGFACE_HUB_CACHE.parent.parent)
             os.environ["HF_HOME"] = str(hf_home)
             os.environ["HF_HUB_DISABLE_XET"] = "1"
+            os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+            try:
+                import huggingface_hub.constants
+                self.old_hf_home_const = getattr(huggingface_hub.constants, "HF_HOME", None)
+                self.old_hf_hub_cache_const = getattr(huggingface_hub.constants, "HF_HUB_CACHE", None)
+                huggingface_hub.constants.HF_HOME = str(hf_home)
+                from pathlib import Path
+                huggingface_hub.constants.HF_HUB_CACHE = str(Path(hf_home) / "hub")
+            except Exception:
+                pass
             return self
 
         def __exit__(self, exc_type, exc, tb) -> bool:
@@ -1024,6 +1044,18 @@ def temporarily_use_workspace_hf_home():
                 os.environ.pop("HF_HUB_DISABLE_XET", None)
             else:
                 os.environ["HF_HUB_DISABLE_XET"] = original_disable_xet
+            if original_disable_symlinks is None:
+                os.environ.pop("HF_HUB_DISABLE_SYMLINKS", None)
+            else:
+                os.environ["HF_HUB_DISABLE_SYMLINKS"] = original_disable_symlinks
+            try:
+                import huggingface_hub.constants
+                if hasattr(self, "old_hf_home_const") and self.old_hf_home_const is not None:
+                    huggingface_hub.constants.HF_HOME = self.old_hf_home_const
+                if hasattr(self, "old_hf_hub_cache_const") and self.old_hf_hub_cache_const is not None:
+                    huggingface_hub.constants.HF_HUB_CACHE = self.old_hf_hub_cache_const
+            except Exception:
+                pass
             return False
 
     return _HfHomeContext()
@@ -1146,8 +1178,38 @@ def ensure_omnivoice_runtime(*, phase: str, step: str, progress: float) -> None:
         progress=progress,
         message="Đang khởi động OmniVoice-TTS...",
     )
-    from tools.omnivoice_wrapper import get_omnivoice_provider
-    get_omnivoice_provider()
+    with temporarily_use_workspace_hf_home():
+        from tools.omnivoice_wrapper import get_omnivoice_provider
+        get_omnivoice_provider()
+
+
+def ensure_local_translation_models(*, phase: str, step: str, progress: float) -> None:
+    from ..config import (
+        DUB_TRANSLATE_PROVIDER,
+        DUB_MT5_EN2VI_MODEL,
+        DUB_MT5_ZH2VI_MODEL,
+        DUB_MT5_JA2VI_MODEL,
+        DUB_MT5_KO2VI_MODEL,
+    )
+    if DUB_TRANSLATE_PROVIDER != "mt5":
+        return
+    models_to_download = [
+        DUB_MT5_EN2VI_MODEL,
+        DUB_MT5_ZH2VI_MODEL,
+        DUB_MT5_JA2VI_MODEL,
+        DUB_MT5_KO2VI_MODEL,
+    ]
+    step_progress = 0.005
+    for i, model in enumerate(models_to_download):
+        if not model:
+            continue
+        ensure_hf_snapshot(
+            model,
+            phase=phase,
+            step=step,
+            progress=progress + i * step_progress,
+            message=f"Đang tải mô hình dịch thô {model}...",
+        )
 
 
 def ensure_llamaindex_runtime(*, phase: str, step: str, progress: float) -> None:
@@ -1493,32 +1555,55 @@ def prepare_runtime(target: str) -> None:
     if normalized in {"analysis", "all"}:
         if not whisperx_disabled():
             ensure_whisperx_runtime(phase="analysis", step="prepare", progress=0.02)
-        ensure_local_whisper_model(phase="analysis", step="prepare", progress=0.03)
+            # Tải đầy đủ mô hình WhisperX chính, mô hình căn chỉnh (zh, en, vi) và mô hình phân biệt người nói PyAnnote
+            ensure_whisperx_model_cache(phase="analysis", step="prepare", progress=0.025)
+            ensure_whisperx_align_cache(language_code="zh", phase="analysis", step="prepare", progress=0.03)
+            ensure_whisperx_align_cache(language_code="en", phase="analysis", step="prepare", progress=0.035)
+            ensure_whisperx_align_cache(language_code="vi", phase="analysis", step="prepare", progress=0.04)
+            ensure_whisperx_diarization_cache(phase="analysis", step="prepare", progress=0.045)
+            
+        ensure_local_whisper_model(phase="analysis", step="prepare", progress=0.05)
         if DUB_TRANSLATE_PROVIDER in {"ollama", "auto"}:
             ensure_ollama_runtime(
                 required=DUB_TRANSLATE_PROVIDER == "ollama",
                 phase="analysis",
                 step="prepare",
-                progress=0.04,
+                progress=0.055,
             )
             
     if normalized in {"render", "all"}:
         ensure_edge_tts_runtime(phase="render", step="prepare", progress=0.03)
-        # Always prepare Source Separation and Valtec-TTS during a manual prepare task to ensure all offline assets are fully loaded!
+        # Always prepare Source Separation, OmniVoice-TTS, and Valtec-TTS during a manual prepare task to ensure all offline assets are fully loaded!
         ensure_source_separation_runtime(phase="render", step="prepare", progress=0.04)
+        
+        if DUB_USE_OMNIVOICE:
+            ensure_omnivoice_runtime(
+                phase="render",
+                step="prepare",
+                progress=0.05,
+            )
+            
         if DUB_USE_VALTEC:
             ensure_valtec_runtime(
                 phase="render",
                 step="prepare",
-                progress=0.055,
+                progress=0.06,
                 preload_zeroshot=True,
             )
+            
+        if DUB_TRANSLATE_PROVIDER == "mt5":
+            ensure_local_translation_models(
+                phase="render",
+                step="prepare",
+                progress=0.07,
+            )
+            
         if DUB_TRANSLATE_PROVIDER in {"ollama", "auto"}:
             ensure_ollama_runtime(
                 required=DUB_TRANSLATE_PROVIDER == "ollama",
                 phase="render",
                 step="prepare",
-                progress=0.06,
+                progress=0.08,
             )
 
 
