@@ -263,8 +263,10 @@ def create_desktop_shortcut(root: Path) -> None:
 
 def copy_runtime_models(root: Path, output_dir: Path) -> None:
     source_models = root / "temp" / "models"
-    if not source_models.exists():
-        print("[!] Khong tim thay temp/models nen ban build se tai model tren may nguoi dung khi can.", flush=True)
+    source_cache = root / "temp" / ".cache"
+    
+    if not source_models.exists() and not source_cache.exists():
+        print("[!] Khong tim thay temp/models va temp/.cache nen ban build se tai model tren may nguoi dung khi can.", flush=True)
         return
 
     target_models = output_dir / "temp" / "models"
@@ -286,6 +288,22 @@ def copy_runtime_models(root: Path, output_dir: Path) -> None:
                 "__pycache__",
                 "runtime_tmp",
                 "tmp",
+                "*.lock",
+                "*.tmp",
+            ),
+        )
+        copied_any = True
+
+    # Copy HuggingFace offline cache (OmniVoice, PyAnnote) if exists
+    if source_cache.exists():
+        target_cache = output_dir / "temp" / ".cache"
+        if target_cache.exists():
+            shutil.rmtree(target_cache, ignore_errors=True)
+        print(f"Copy HuggingFace cache: temp/.cache -> dist/{APP_NAME}/temp/.cache", flush=True)
+        shutil.copytree(
+            source_cache,
+            target_cache,
+            ignore=shutil.ignore_patterns(
                 "*.lock",
                 "*.tmp",
             ),
