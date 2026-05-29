@@ -7,11 +7,110 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import QTimer, Qt
 from gui.utils import apply_app_theme
 from gui.main_window import DubStudioWindow
+
+
+class ShortcutPromptDialog(QDialog):
+    def __init__(self, parent=None, logo_path: str = None):
+        super().__init__(parent)
+        self.setWindowTitle("Thiết lập lối tắt")
+        self.setFixedSize(420, 240)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+        
+        # Header / Icon + Title layout
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+        
+        self.logo_label = QLabel()
+        if logo_path and os.path.exists(logo_path):
+            pixmap = QPixmap(logo_path).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.logo_label.setPixmap(pixmap)
+        else:
+            self.logo_label.setText("🚀")
+            self.logo_label.setStyleSheet("font-size: 32px;")
+        header_layout.addWidget(self.logo_label)
+        
+        title_label = QLabel("Tạo lối tắt ứng dụng")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #f8fafc;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+        
+        # Message description
+        msg_label = QLabel("Bạn có muốn tạo biểu tượng lối tắt (Desktop Shortcut) để truy cập nhanh CapCut-Mate Dub Studio từ màn hình máy tính không?")
+        msg_label.setWordWrap(True)
+        msg_label.setStyleSheet("font-size: 13px; line-height: 1.5; color: #cbd5e1;")
+        layout.addWidget(msg_label)
+        
+        layout.addStretch()
+        
+        # Buttons layout
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        btn_layout.addStretch()
+        
+        self.no_btn = QPushButton("Để sau")
+        self.no_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.no_btn.setFixedSize(100, 36)
+        self.no_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #334155;
+                color: #f1f5f9;
+                border: 1px solid #475569;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border-color: #64748b;
+            }
+            QPushButton:pressed {
+                background-color: #1e293b;
+            }
+        """)
+        
+        self.yes_btn = QPushButton("Đồng ý và Tạo")
+        self.yes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.yes_btn.setFixedSize(140, 36)
+        self.yes_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #db2777;
+                color: #ffffff;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #ec4899;
+            }
+            QPushButton:pressed {
+                background-color: #be185d;
+            }
+        """)
+        
+        btn_layout.addWidget(self.no_btn)
+        btn_layout.addWidget(self.yes_btn)
+        layout.addLayout(btn_layout)
+        
+        self.yes_btn.clicked.connect(self.accept)
+        self.no_btn.clicked.connect(self.reject)
+        
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0f172a;
+                border: 1px solid #1e293b;
+            }
+        """)
 
 
 
@@ -77,14 +176,8 @@ def main() -> int:
                 except Exception:
                     pass
 
-            ans = QMessageBox.question(
-                window,
-                "Tạo lối tắt Desktop",
-                "Bạn có muốn tạo biểu tượng ứng dụng trên màn hình Desktop để truy cập nhanh không?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
-            )
-            if ans == QMessageBox.StandardButton.Yes:
+            dialog = ShortcutPromptDialog(window, logo_path)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
                 try:
                     import subprocess
                     desktop = os.path.join(os.environ["USERPROFILE"], "Desktop")
