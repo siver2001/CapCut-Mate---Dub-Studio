@@ -9,14 +9,15 @@ from .common import *
 from .analysis import (
     is_valtec_reference_voice,
     is_valtec_voice_preset,
-    is_vieneu_voice_preset,
+    is_omnivoice_voice_preset,
     resolve_edge_voice_name,
     resolve_tts_output_extension,
     resolve_valtec_prompt_audio,
     resolve_valtec_reference_audio,
+    resolve_omnivoice_reference_audio,
     resolve_voice_preset,
     should_use_valtec_voice,
-    should_use_vieneu_voice,
+    should_use_omnivoice_voice,
 )
 from .runtime import (
     ensure_edge_tts_runtime,
@@ -942,31 +943,43 @@ def synthesize_tts(
             f"Valtec-TTS did not create audio for {speaker_id} with voice {selected_voice}."
         )
 
-    if is_vieneu_voice_preset(selected_voice):
+    if is_omnivoice_voice_preset(selected_voice):
         try:
             import unicodedata, re
-            clean_vieneu_text = unicodedata.normalize("NFC", str(edge_text).strip())
-            clean_vieneu_text = re.sub(r"\.{2,}", ".", clean_vieneu_text)
-            clean_vieneu_text = re.sub(r"\s+", " ", clean_vieneu_text)
-            if clean_vieneu_text and not clean_vieneu_text[-1] in (".", "!", "?", ",", ";", ":"):
-                clean_vieneu_text += "."
+            clean_omnivoice_text = unicodedata.normalize("NFC", str(edge_text).strip())
+            clean_omnivoice_text = re.sub(r"\.{2,}", ".", clean_omnivoice_text)
+            clean_omnivoice_text = re.sub(r"\s+", " ", clean_omnivoice_text)
+            if clean_omnivoice_text and not clean_omnivoice_text[-1] in (".", "!", "?", ",", ";", ":"):
+                clean_omnivoice_text += "."
 
-            from tools.vieneu_wrapper import get_vieneu_provider
-            provider = get_vieneu_provider()
+            ref_audio_path = None
+            ref_text_val = ""
+            custom_ref_wav, custom_ref_text = resolve_omnivoice_reference_audio(selected_voice)
+            if custom_ref_wav is not None:
+                ref_audio_path = custom_ref_wav
+                ref_text_val = custom_ref_text
+            elif selected_voice == OMNIVOICE_CLONE_PRESET:
+                from .analysis import resolve_omnivoice_prompt_audio
+                ref_audio_path = resolve_omnivoice_prompt_audio(speaker_id=speaker_id, job_id=job_id)
+
+            from tools.omnivoice_wrapper import get_omnivoice_provider
+            provider = get_omnivoice_provider()
             success = provider.synthesize(
-                text=clean_vieneu_text,
+                text=clean_omnivoice_text,
                 output_path=output_path,
                 voice_name=selected_voice,
+                ref_audio=ref_audio_path,
+                ref_text=ref_text_val,
             )
             if success:
-                validate_generated_audio_file(output_path, context="VieNeu-TTS synthesis")
+                validate_generated_audio_file(output_path, context="OmniVoice-TTS synthesis")
                 return
         except Exception as e:
             raise RuntimeError(
-                f"VieNeu-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {e}"
+                f"OmniVoice-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {e}"
             ) from e
         raise RuntimeError(
-            f"VieNeu-TTS did not create audio for {speaker_id} with voice {selected_voice}."
+            f"OmniVoice-TTS did not create audio for {speaker_id} with voice {selected_voice}."
         )
 
     requested_edge_text = ensure_edge_tts_terminal_punctuation(_normalize_edge_tts_text(text, preserve_pauses=True))
@@ -1648,12 +1661,12 @@ def _tts_provider_for_voice(voice: str) -> str:
     selected_voice = resolve_voice_preset(voice)
     if selected_voice.startswith("cloud:"):
         return "cloud"
-    if is_vieneu_voice_preset(selected_voice):
-        if not DUB_USE_VIENEU:
+    if is_omnivoice_voice_preset(selected_voice):
+        if not DUB_USE_OMNIVOICE:
             raise RuntimeError(
-                f"Voice {selected_voice} requires VieNeu-TTS, but DUB_USE_VIENEU is disabled."
+                f"Voice {selected_voice} requires OmniVoice-TTS, but DUB_USE_OMNIVOICE is disabled."
             )
-        return "vieneu"
+        return "omnivoice"
     if is_valtec_voice_preset(selected_voice):
         if not DUB_USE_VALTEC:
             raise RuntimeError(
@@ -1985,10 +1998,10 @@ def create_dub_audio(
     if prepared_items:
         provider_limits = {
             "edge": EDGE_TTS_CONCURRENCY,
-            "vieneu": VIENEU_TTS_CONCURRENCY,
+            "omnivoice": OMNIVOICE_TTS_CONCURRENCY,
             "valtec": 1,
         }
-        for provider in ("edge", "vieneu", "valtec"):
+        for provider in ("edge", "omnivoice", "valtec"):
             provider_items = [item for item in prepared_items if item["provider"] == provider]
             if not provider_items:
                 continue
@@ -2180,6 +2193,8 @@ def create_dub_audio(
 
 
 def normalize_audio_mix_mode(value: str | None, *, keep_original_audio: bool) -> str:
+    if not keep_original_audio:
+        return "dub_only"
     normalized = normalize_text(value or "").lower().replace("-", "_")
     if normalized in {"preserve_background", "background_only", "music_only"}:
         return "preserve_background"
@@ -2187,7 +2202,7 @@ def normalize_audio_mix_mode(value: str | None, *, keep_original_audio: bool) ->
         return "preserve_original_low"
     if normalized in {"dub_only", "replace"}:
         return "dub_only"
-    return "preserve_background" if keep_original_audio else "dub_only"
+    return "preserve_background"
 
 
 def extract_audio_for_background_mix(video_path: Path, audio_path: Path) -> None:
@@ -2452,7 +2467,7 @@ def create_final_audio(
         )
         mix_inputs.append("[bed]")
         input_index += 1
-    elif normalized_mode == "preserve_original_low" and keep_original_audio:
+    elif (normalized_mode == "preserve_original_low" or (normalized_mode == "preserve_background" and keep_original_audio)) and keep_original_audio:
         has_video_audio = False
         try:
             has_video_audio = bool(get_video_meta(video_path).get("hasAudio"))

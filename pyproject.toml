@@ -33,7 +33,7 @@ ai_local = [
     "soundfile>=0.13.1",
     "torchaudio>=2.8.0",
     "valtec-tts @ git+https://github.com/tronghieuit/valtec-tts.git",
-    "vieneu>=2.4.3",
+    "omnivoice",
 ]
 windows = [
     "pywin32>=311; sys_platform == 'win32'",

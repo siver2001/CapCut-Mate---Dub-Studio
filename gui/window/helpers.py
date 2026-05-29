@@ -334,7 +334,7 @@ class WindowHelpersMixin:
             return SHORT_VOICE_LABELS[value]
         if value in VOICE_LABELS:
             return repair_mojibake_text(VOICE_LABELS[value])
-        if value.startswith("vieneu:"):
+        if value.startswith("omnivoice:"):
             return repair_mojibake_text(value.split(":", 1)[-1].replace("_", " ").title())
         if value.startswith("edge:") or value.endswith("Neural"):
             return repair_mojibake_text(value.split(":", 1)[-1].replace("_", " ").title())

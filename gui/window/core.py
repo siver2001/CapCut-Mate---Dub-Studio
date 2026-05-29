@@ -28,11 +28,13 @@ from .refresh import WindowRefreshMixin
 from .voice import WindowVoiceMixin
 from .workflow import WindowWorkflowMixin
 from .batch import WindowBatchMixin
+from .clone_voice import WindowCloneVoiceMixin
 
 
 class DubStudioWindow(
     WindowBatchMixin,
     WindowVoiceMixin,
+    WindowCloneVoiceMixin,
     WindowRefreshMixin,
     WindowWorkflowMixin,
     WindowLayoutMixin,

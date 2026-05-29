@@ -822,13 +822,17 @@ def assign_speakers(subtitles: list[SubtitleLine], speaker_count: int) -> tuple[
     return remapped_assignments, remapped_stats, "speaker_1"
 
 
-VIENEU_CLONE_PRESET = "vieneu:clone"
+OMNIVOICE_CLONE_PRESET = "omnivoice:clone"
 VALTEC_CLONE_PRESET = "valtec:clone"
 
 
-def is_vieneu_voice_preset(candidate: str) -> bool:
+def is_omnivoice_voice_preset(candidate: str) -> bool:
     value = str(candidate or "").strip()
-    return value == VIENEU_CLONE_PRESET or value in VIENEU_PRESET_VOICE_IDS
+    return (
+        value == OMNIVOICE_CLONE_PRESET
+        or value in OMNIVOICE_PRESET_VOICE_IDS
+        or value in CUSTOM_OMNIVOICE_VOICES
+    )
 
 
 def is_valtec_reference_voice(candidate: str) -> bool:
@@ -845,7 +849,7 @@ def is_valtec_voice_preset(candidate: str) -> bool:
     )
 
 
-def resolve_vieneu_prompt_audio(*, speaker_id: str = "speaker_1", job_id: str = "") -> Path | None:
+def resolve_omnivoice_prompt_audio(*, speaker_id: str = "speaker_1", job_id: str = "") -> Path | None:
     if not job_id:
         return None
     sample_path = (
@@ -857,7 +861,7 @@ def resolve_vieneu_prompt_audio(*, speaker_id: str = "speaker_1", job_id: str = 
 
 
 def resolve_valtec_prompt_audio(*, speaker_id: str = "speaker_1", job_id: str = "") -> Path | None:
-    return resolve_vieneu_prompt_audio(speaker_id=speaker_id, job_id=job_id)
+    return resolve_omnivoice_prompt_audio(speaker_id=speaker_id, job_id=job_id)
 
 
 def resolve_valtec_reference_audio(voice: str) -> Path | None:
@@ -869,13 +873,23 @@ def resolve_valtec_reference_audio(voice: str) -> Path | None:
     return reference_path if reference_path.exists() else None
 
 
-def should_use_vieneu_voice(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> bool:
+def resolve_omnivoice_reference_audio(voice: str) -> tuple[Path | None, str]:
     selected_voice = resolve_voice_preset(voice)
-    if not DUB_USE_VIENEU or not is_vieneu_voice_preset(selected_voice):
+    meta = CUSTOM_OMNIVOICE_VOICES.get(selected_voice)
+    if not meta:
+        return None, ""
+    reference_path = OMNIVOICE_REFERENCE_DIR / str(meta.get("filename") or "")
+    ref_text = str(meta.get("ref_text") or "").strip()
+    return (reference_path if reference_path.exists() else None), ref_text
+
+
+def should_use_omnivoice_voice(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> bool:
+    selected_voice = resolve_voice_preset(voice)
+    if not DUB_USE_OMNIVOICE or not is_omnivoice_voice_preset(selected_voice):
         return False
-    if selected_voice != VIENEU_CLONE_PRESET:
+    if selected_voice != OMNIVOICE_CLONE_PRESET:
         return True
-    return resolve_vieneu_prompt_audio(speaker_id=speaker_id, job_id=job_id) is not None
+    return resolve_omnivoice_prompt_audio(speaker_id=speaker_id, job_id=job_id) is not None
 
 
 def should_use_valtec_voice(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> bool:
@@ -892,7 +906,7 @@ def should_use_valtec_voice(*, voice: str, speaker_id: str = "speaker_1", job_id
 def resolve_tts_output_extension(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "", global_speed: float = 1.0) -> str:
     return (
         ".wav"
-        if should_use_vieneu_voice(voice=voice, speaker_id=speaker_id, job_id=job_id)
+        if should_use_omnivoice_voice(voice=voice, speaker_id=speaker_id, job_id=job_id)
         or should_use_valtec_voice(voice=voice, speaker_id=speaker_id, job_id=job_id)
         else ".mp3"
     )
@@ -914,7 +928,7 @@ def is_custom_edge_voice_name(candidate: str) -> bool:
     if (
         not value
         or value in EDGE_VOICE_PRESETS
-        or is_vieneu_voice_preset(value)
+        or is_omnivoice_voice_preset(value)
         or is_valtec_voice_preset(value)
     ):
         return False
@@ -1333,18 +1347,14 @@ def validate_gray_roi_as_text(roi, is_top_area: bool = False) -> bool:
         return False
     import numpy as np
     import cv2
-    
-    std_val = float(np.std(roi))
-    min_std = 25.0 if is_top_area else 14.0
-    if std_val < min_std:
-        return False
-        
     edges = cv2.Canny(roi, 30, 90)
     edge_density = float(np.count_nonzero(edges)) / roi.size
     
-    # Text characters must have sharp, dense borders (at least 2.4% edge density).
-    # If the candidate lies in the top screen, raise constraints to 4.5% to suppress sky/ceiling borders.
-    min_density = 0.045 if is_top_area else 0.024
+    # Text characters must have sharp, dense borders (at least 8.5% edge density).
+    # If the candidate lies in the top screen, raise constraints to 12.0% to suppress sky/ceiling borders.
+    # We raise these limits significantly to guarantee that smooth solid clothes/robes/collars
+    # (which lack internal character vertical/horizontal stroke transitions) are completely rejected.
+    min_density = 0.12 if is_top_area else 0.085
     if edge_density < min_density:
         return False
         
@@ -1366,91 +1376,169 @@ def detect_subtitle_region_in_frame(
     import cv2
 
     im = np.frombuffer(frame, dtype=np.uint8).reshape((sample_height, sample_width))
-    blur = cv2.GaussianBlur(im, (3, 3), 0)
-    thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 15)
-    edges = cv2.Canny(blur, 20, 80)
-    comb = cv2.bitwise_or(edges, thresh)
-
-    # Tighten horizontal kernel to connect close letters without ballooning into background details
-    kw = max(int(sample_width * 0.15), 24)
-    kh = max(int(sample_height * 0.035), 6)
+    
+    # Calculate vertical search region of interest (ROI) dynamically from expected fallback_region
+    fallback_y = fallback_region.get("y", 0)
+    fallback_h = fallback_region.get("h", 0)
+    
+    fallback_y_norm = fallback_y / max(video_meta.get("height", 1), 1)
+    fallback_h_norm = fallback_h / max(video_meta.get("height", 1), 1)
+    
+    # Add a 12% vertical padding around fallback region for robust scanning, restricted to 0.0 - 1.0 range
+    margin_y_norm = 0.12
+    roi_start_y_norm = max(0.0, fallback_y_norm - margin_y_norm)
+    roi_end_y_norm = min(1.0, fallback_y_norm + fallback_h_norm + margin_y_norm)
+    
+    roi_start_y = int(sample_height * roi_start_y_norm)
+    roi_end_y = int(sample_height * roi_end_y_norm)
+    
+    # Safety fallback to bottom 30% if the computed height is invalid
+    if roi_end_y - roi_start_y < 10:
+        roi_start_y = int(sample_height * 0.70)
+        roi_end_y = sample_height
+        
+    roi_img = im[roi_start_y:roi_end_y, :]
+    roi_height = roi_img.shape[0]
+    
+    blur = cv2.GaussianBlur(roi_img, (3, 3), 0)
+    
+    # Adaptive thresholding based on the 99.5th percentile of pixel intensity in ROI
+    max_intensity = float(np.percentile(roi_img, 99.5)) if roi_img.size > 0 else 0.0
+    if max_intensity > 180.0:
+        thresh_val = int(max_intensity - 25)
+        thresh_val = max(165, min(205, thresh_val))
+    else:
+        thresh_val = 165
+        
+    _, thresh = cv2.threshold(blur, thresh_val, 255, cv2.THRESH_BINARY)
+    
+    # Zero out left and right margins (6% of width on each side) in the binary thresh image
+    # to completely eliminate watermark, edge logos, and circular avatar pollution.
+    edge_margin = int(sample_width * 0.06)
+    thresh[:, :edge_margin] = 0
+    thresh[:, -edge_margin:] = 0
+    
+    # Tighten horizontal kernel to connect close letters with ZERO vertical dilation (kh=1)
+    # to completely prevent the subtitle text from merging vertically with robe collars or chests.
+    kw = max(int(sample_width * 0.12), 24)
+    kh = 1  
     ker = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
-    dil = cv2.dilate(comb, ker, iterations=2)
-
+    dil = cv2.dilate(thresh, ker, iterations=1)
+    
     cnts, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+    # 1. Extract raw candidates that pass basic height & noise filters
+    raw_candidates = []
+    for c in cnts:
+        xx, yy, ww, hh = cv2.boundingRect(c)
+        actual_y = roi_start_y + yy
+        cx = xx + ww // 2
+        cy = actual_y + hh // 2
+        
+        # Filter out obvious noise and thin lines
+        # Subtitle characters at this resolution are at least 5 pixels high.
+        # Thin border lines (clothes, tables) have hh < 5.
+        # Also reject large scenery blocks (hh > 18 pixels)
+        if hh < 5 or hh > 18:
+            continue
+            
+        # Reject thin wide scenery lines (e.g. clothes borders, shelf edges)
+        if hh < 6 and ww > sample_width * 0.15:
+            continue
+            
+        y_center_norm = cy / max(sample_height, 1)
+        if y_center_norm < 0.04 or y_center_norm > 0.96:
+            continue
+        raw_candidates.append((xx, actual_y, ww, hh, cx, cy))
+
+    # 2. Group candidates that are on the same horizontal line (Y-centers within 4% of screen height)
+    line_groups = []
+    y_tolerance = max(6, int(sample_height * 0.04))
+    for cand in raw_candidates:
+        xx, yy, ww, hh, cx, cy = cand
+        placed = False
+        for group in line_groups:
+            # Calculate representative Y-center of the group
+            group_cy = sum(item[5] for item in group) / len(group)
+            if abs(cy - group_cy) <= y_tolerance:
+                group.append(cand)
+                placed = True
+                break
+        if not placed:
+            line_groups.append([cand])
+
+    # 3. Merge contours in each group and evaluate merged candidates
     best_cv_candidate = None
     best_cv_score = -1.0
 
     scale_x = video_meta["width"] / sample_width
     scale_y = video_meta["height"] / sample_height
 
-    pref_y_scaled = None
-    pref_y = fallback_region.get("preferred_y")
-    if pref_y is not None:
-        pref_y_scaled = int(pref_y * (sample_height / max(video_meta["height"], 1)))
+    fallback_cy_norm = (fallback_y + fallback_h / 2) / max(video_meta.get("height", 1), 1)
 
-    for c in cnts:
-        xx, yy, ww, hh = cv2.boundingRect(c)
-        cx = xx + ww // 2
-        cy = yy + hh // 2
+    for group in line_groups:
+        # Compute bounding box union for the group
+        min_x = min(item[0] for item in group)
+        max_x = max(item[0] + item[2] for item in group)
+        min_y = min(item[1] for item in group)
+        max_y = max(item[1] + item[3] for item in group)
+        
+        ww = max_x - min_x
+        hh = max_y - min_y
+        cx = min_x + ww // 2
+        cy = min_y + hh // 2
 
-        # Subtitles are horizontally centered - strictly filter out off-center objects
+        # Evaluate the merged candidate against subtitle geometry constraints
         dx_center = abs(cx - sample_width // 2)
-        if ww < sample_width * 0.06 or dx_center > sample_width * 0.24:
+        if ww < sample_width * 0.05 or dx_center > sample_width * 0.24:
             continue
-
-        # Subtitles are wider than tall - filter out squares and vertical blocks (e.g. face/ears)
         aspect_ratio = ww / max(hh, 1)
-        if aspect_ratio < 1.15:
+        if aspect_ratio < 1.0:
             continue
-
-        # Filter out elements that are too small or excessively large vertical containers
-        if hh < max(int(sample_height * 0.02), 4) or hh > sample_height * 0.25:
-            continue
-
+            
+        # Cap aspect ratio impact to prevent extremely wide, thin lines from distorting the score
+        score_aspect = min(aspect_ratio, 10.0)
+        
+        # Adaptive Candidate Scoring based on vertical proximity to fallback region
         y_center_norm = cy / max(sample_height, 1)
-        # Avoid thin edge lines at extreme borders of the screen
-        if y_center_norm < 0.04 or y_center_norm > 0.96:
-            continue
-
-        # Score fairly across all regions, prioritizing bottom dialogue plane over top decorative stickers
-        vertical_score = 0.5  # Heavy penalty for upper half to avoid dynamic stickers
-        if 0.55 <= y_center_norm <= 0.95:  # Lower third plane (standard dialogue)
+        dy_norm = abs(y_center_norm - fallback_cy_norm)
+        
+        vertical_score = 0.5
+        if dy_norm <= 0.08:
             vertical_score = 2.8
-        elif 0.05 <= y_center_norm <= 0.40:  # Upper third plane (e.g. dynamic top titles/lyrics)
-            vertical_score = 0.65
+        elif dy_norm <= 0.18:
+            vertical_score = 1.2
 
-        roi = im[yy:yy+hh, xx:xx+ww]
+        roi = im[min_y:min_y+hh, min_x:min_x+ww]
         contrast = float(np.std(roi)) if roi.size > 0 else 0.0
 
-        # Score based on geometry, aspect ratio, and local contrast
-        score = ww * aspect_ratio * (contrast + 1.0) * vertical_score
-
+        score = ww * score_aspect * (contrast + 1.0) * vertical_score
         if score > best_cv_score:
             best_cv_score = score
-            best_cv_candidate = (xx, yy, ww, hh, cx, cy)
+            best_cv_candidate = (min_x, min_y, ww, hh, cx, cy)
 
     if best_cv_candidate and best_cv_score > 5.0:
         xx, yy, ww, hh, cx, cy = best_cv_candidate
         
-        # Apply strict high-contrast text validation to eliminate non-text contours (sky, sidewalk, animals)
+        # Apply strict high-contrast text validation to eliminate non-text contours
         roi = im[yy:yy+hh, xx:xx+ww]
         y_center_norm = cy / max(sample_height, 1)
         is_top = y_center_norm < 0.48
         
         if validate_gray_roi_as_text(roi, is_top_area=is_top):
-            # Calculate width dynamically based on detected text bounding box + 5% buffer
-            region_w = int((ww + 20) * scale_x * 1.05)
-            # Snug, minimal vertical overlay to prevent obstructing views - reduced from 0.075 to 0.035
-            region_h = int(max((hh + 6) * scale_y, video_meta["height"] * 0.035))
+            # Calculate dynamic width with safety margin
+            region_w = int((ww + 10) * scale_x)
             
-            # Exact horizontal center of the video
-            centerX = int(video_meta["width"] // 2)
-            region_y = int(max((yy - 4) * scale_y, 0))
-            centerY = int(region_y + region_h // 2)
+            # Keep height snug and clean at 7.5% of screen height for absolute visual stability
+            region_h = int(video_meta["height"] * 0.075)
+            
+            # Preserve actual horizontal center and vertical center of detected subtitles
+            centerX = int(cx * scale_x)
+            centerY = int(cy * scale_y)
             
             region_x = max(0, int(centerX - region_w // 2))
+            region_y = max(0, int(centerY - region_h // 2))
+            
             region_w = min(region_w, video_meta["width"] - region_x)
             region_h = min(region_h, video_meta["height"] - region_y)
 
@@ -1933,12 +2021,14 @@ def build_dynamic_subtitle_regions(
                 if len(cluster) > len(best_cluster):
                     best_cluster = cluster
                     
-            # Golden Rule of Safety: Purge any cluster whose Y coordinates lie outside the standard bottom dialogue plane (Norm Y < 0.75)
-            # to guarantee absolutely zero false positives on upper half layers (the dog's body, background decorations)
+            # Golden Rule of Safety: Validate that the detected subtitle lines reside within proximity of the expected vertical position.
+            # We purge any cluster whose vertical centers deviate too much (more than 18% of video height) from the expected fallback center
+            # to guarantee absolutely zero false positives on other layers (sky, body, scenery elements).
             if best_cluster:
                 mean_y = sum(int(r.get("centerY", 0)) for pt, r in best_cluster) / len(best_cluster)
-                mean_y_norm = mean_y / max(video_meta.get("height", 720), 1)
-                if mean_y_norm < 0.75:
+                fallback_cy = int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2
+                y_deviation_limit = int(video_meta.get("height", 720) * 0.18)
+                if abs(mean_y - fallback_cy) > y_deviation_limit:
                     best_cluster = []
             
             # Majority rule filters
@@ -2002,12 +2092,22 @@ def build_dynamic_subtitle_regions(
     total_segments = len(subtitles)
     detected_count = sum(1 for r in dynamic_regions if r.get("detected"))
     if detected_count > 0:
-        valid_centers = [r["centerY"] for r in dynamic_regions if r.get("detected") and r["centerY"] / max(video_meta["height"], 1) >= 0.75]
-        valid_heights = [r["h"] for r in dynamic_regions if r.get("detected") and r["centerY"] / max(video_meta["height"], 1) >= 0.75]
+        fallback_cy = int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2
+        y_deviation_limit = int(video_meta.get("height", 720) * 0.18)
+        valid_centers = [
+            r["centerY"] 
+            for r in dynamic_regions 
+            if r.get("detected") and abs(r["centerY"] - fallback_cy) <= y_deviation_limit
+        ]
+        valid_heights = [
+            r["h"] 
+            for r in dynamic_regions 
+            if r.get("detected") and abs(r["centerY"] - fallback_cy) <= y_deviation_limit
+        ]
         
         # Determine global dialogue plane Y and height
         global_centerY = int(_median(valid_centers)) if valid_centers else (int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2)
-        global_h = int(_median(valid_heights)) if valid_heights else int(video_meta["height"] * 0.055)
+        global_h = int(_median(valid_heights)) if valid_heights else int(video_meta["height"] * 0.075)
         
         for r in dynamic_regions:
             if not r.get("detected"):
@@ -2033,19 +2133,19 @@ def build_dynamic_subtitle_regions(
         video_meta=video_meta,
     )
 
-    # 6. Align horizontal center exactly, and calculate final bounding box coordinates
+    # 6. Preserve detected dynamic horizontal center, and calculate final bounding box coordinates
     fallback_center_y = int(fallback_region.get("y", 0)) + int(fallback_region.get("h", 0)) // 2
     for r in dynamic_regions:
         r["w"] = min(int(r["w"]), int(video_meta["width"]))
-        r["centerX"] = video_meta["width"] // 2
         
-        # If text is not detected, default the mask Y plane to fallback position
+        # If text is not detected, default the mask center plane to fallback position
         if not r.get("detected"):
+            r["centerX"] = video_meta["width"] // 2
             r["centerY"] = fallback_center_y
             r["x"] = max(0, int(r["centerX"] - r["w"] // 2))
             r["y"] = max(0, int(r["centerY"] - r["h"] // 2))
         else:
-            # Keep the exact detected centerY plane (which supports subtitles at any height)
+            # Preserve actual detected horizontal center and vertical center
             r["x"] = max(0, int(r["centerX"] - r["w"] // 2))
             r["y"] = max(0, int(r["centerY"] - r["h"] // 2))
 
@@ -2053,7 +2153,7 @@ def build_dynamic_subtitle_regions(
     for subtitle, pos in zip(subtitles, subtitle_positions):
         matching_r = choose_region_for_subtitle(subtitle, dynamic_regions)
         if matching_r is not None and matching_r.get("detected"):
-            pos["centerX"] = video_meta["width"] // 2
+            pos["centerX"] = matching_r["centerX"]
             pos["centerY"] = matching_r["centerY"]
 
     return dynamic_regions, subtitle_positions

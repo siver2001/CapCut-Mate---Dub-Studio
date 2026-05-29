@@ -7,7 +7,7 @@
 ## ✨ Tính năng nổi bật
 
 ### 🎤 Lồng tiếng AI Chuyên nghiệp
-*   **Đa dạng giọng đọc:** Tích hợp các công cụ TTS hàng đầu như **Valtec-TTS**, **VieNeu-TTS** (giọng đọc tự nhiên như người thật) và **Edge-TTS**.
+*   **Đa dạng giọng đọc:** Tích hợp các công cụ TTS hàng đầu như **Valtec-TTS**, **OmniVoice-TTS** (giọng đọc tự nhiên như người thật) và **Edge-TTS**.
 *   **Gán giọng theo nhân vật:** Tự động nhận diện và gán giọng đọc riêng biệt cho từng nhân vật trong video.
 *   **Điều chỉnh thông minh:** Tự động điều chỉnh tốc độ đọc (speed/pitch) để khớp chính xác với thời gian nói trong video gốc.
 

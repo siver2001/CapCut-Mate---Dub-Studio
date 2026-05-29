@@ -157,11 +157,7 @@ EDGE_VOICE_OPTIONS = [
     ("edge:female", "Hoài My"),
 ]
 
-VIENEU_PRESET_OPTIONS = [
-    ("vieneu:ngoc", "Bích Ngọc"),
-    ("vieneu:tuyen", "Phạm Tuyên"),
-    ("vieneu:doan", "Thục Đoan"),
-]
+OMNIVOICE_PRESET_OPTIONS = []
 
 VALTEC_PRESET_OPTIONS = [
     ("valtec:nf", "Nữ miền Bắc"),
@@ -198,14 +194,14 @@ if not VALTEC_ZEROSHOT_AVAILABLE:
 VOICE_OPTIONS = [
     *VALTEC_PRESET_OPTIONS,
     *VALTEC_REFERENCE_OPTIONS,
-    *VIENEU_PRESET_OPTIONS,
+    *OMNIVOICE_PRESET_OPTIONS,
     *EDGE_VOICE_OPTIONS,
 ]
 
 INTRO_TTS_OPTIONS = [
     *VALTEC_PRESET_OPTIONS,
     *VALTEC_REFERENCE_OPTIONS,
-    *VIENEU_PRESET_OPTIONS,
+    *OMNIVOICE_PRESET_OPTIONS,
     *EDGE_VOICE_OPTIONS,
 ]
 
@@ -221,9 +217,6 @@ SHORT_VOICE_LABELS = {
     "valtec:quang_huy": "Quang Huy",
     "valtec:ngoc_anh": "Ngọc Ánh",
     "valtec:hoang_nam": "Hoàng Nam",
-    "vieneu:ngoc": "Bích Ngọc",
-    "vieneu:tuyen": "Phạm Tuyên",
-    "vieneu:doan": "Thục Đoan",
     "edge:male": "Nam Minh",
     "edge:female": "Hoài My",
 }
@@ -594,7 +587,7 @@ LOCALIZATION_MODE_OPTIONS = [
 VOICE_OPTIONS = [
     *VALTEC_PRESET_OPTIONS,
     *VALTEC_REFERENCE_OPTIONS,
-    *VIENEU_PRESET_OPTIONS,
+    *OMNIVOICE_PRESET_OPTIONS,
     *EDGE_VOICE_OPTIONS,
 ]
 INTRO_TTS_OPTIONS = list(VOICE_OPTIONS)

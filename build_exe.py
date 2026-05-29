@@ -13,7 +13,7 @@ APP_NAME = "CapCutMate"
 ENTRY_POINT = "main.py"
 
 DATA_DIRS = ("assets", "config", "tools")
-RUNTIME_MODEL_DIRS = ("valtec", "vieneu", "pyannote")
+RUNTIME_MODEL_DIRS = ("valtec", "omnivoice", "pyannote")
 
 REQUIRED_IMPORTS = {
     "PyInstaller": "pyinstaller",
@@ -61,6 +61,7 @@ OPTIONAL_COLLECT_MODULES = (
     "onnxruntime",
     "llama_cpp",
     "valtec_tts",
+    "omnivoice",
 )
 
 METADATA_PACKAGES = (
@@ -106,6 +107,7 @@ METADATA_PACKAGES = (
     "onnxruntime",
     "llama-cpp-python",
     "valtec-tts",
+    "omnivoice",
 )
 
 
@@ -291,7 +293,7 @@ def copy_runtime_models(root: Path, output_dir: Path) -> None:
         copied_any = True
 
     if not copied_any:
-        print("[!] Khong co Valtec/VieNeu model local de copy vao ban build.", flush=True)
+        print("[!] Khong co Valtec/OmniVoice model local de copy vao ban build.", flush=True)
 
 
 def copy_vc_redist(output_dir: Path) -> None:
@@ -371,7 +373,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-models",
         action="store_true",
-        help="Khong copy model Valtec/VieNeu local vao dist sau khi build.",
+        help="Khong copy model Valtec/OmniVoice local vao dist sau khi build.",
     )
     parser.add_argument(
         "--no-validate",

@@ -109,7 +109,7 @@ MICROSOFT_TRANSLATOR_TIMEOUT = max(
     5,
 )
 DUB_USE_GPU = True
-DUB_USE_VIENEU = env_bool("DUB_USE_VIENEU", default=True)
+DUB_USE_OMNIVOICE = env_bool("DUB_USE_OMNIVOICE", default=True)
 DUB_USE_VALTEC = env_bool("DUB_USE_VALTEC", default=True)
 DUB_VALTEC_PRELOAD_ZEROSHOT = env_bool("DUB_VALTEC_PRELOAD_ZEROSHOT", default=False)
 DUB_TTS_ENABLE_PARALLEL = env_bool("DUB_TTS_ENABLE_PARALLEL", default=True)
@@ -155,10 +155,10 @@ EDGE_TTS_CONCURRENCY = max(
     1,
 )
 DUB_SUBTITLE_REGION_SAMPLES = 2
-VIENEU_TTS_CONCURRENCY = max(
+OMNIVOICE_TTS_CONCURRENCY = max(
     int(
         env_value(
-            "DUB_VIENEU_TTS_CONCURRENCY",
+            "DUB_OMNIVOICE_TTS_CONCURRENCY",
             default=("1" if DUB_USE_GPU else "2"),
         )
     ),
@@ -223,12 +223,7 @@ EDGE_VOICE_PRESETS = {
 }
 EDGE_VOICE_NAME_PATTERN = re.compile(r"^[a-z]{2,5}-[A-Z]{2,5}-.+Neural$")
 # Cloning presets removed
-VIENEU_PRESET_VOICE_IDS = {
-    "vieneu:ngoc": "Bích Ngọc (Nữ - Miền Bắc)",
-    "vieneu:tuyen": "Phạm Tuyên (Nam - Miền Bắc)",
-    "vieneu:doan": "Thục Đoan (Nữ - Miền Nam)",
-    "vieneu:vinh": "Xuân Vĩnh (Nam - Miền Nam)",
-}
+OMNIVOICE_PRESET_VOICE_IDS = {}
 VALTEC_PRESET_SPEAKER_IDS = {
     "valtec:nf": "NF",
     "valtec:sf": "SF",
@@ -255,21 +250,26 @@ if CUSTOM_VALTEC_VOICES_FILE.exists():
     except Exception:
         pass
 
+OMNIVOICE_CLONE_PRESET = "omnivoice:clone"
+# OmniVoice models are managed by the omnivoice library and downloaded dynamically.
+OMNIVOICE_MODEL_DIR = ROOT / "temp" / "models" / "omnivoice"
+
+CUSTOM_OMNIVOICE_VOICES_FILE = ROOT / "config" / "custom_omnivoice_voices.json"
+OMNIVOICE_REFERENCE_DIR = ROOT / "config" / "voices" / "omnivoice"
+CUSTOM_OMNIVOICE_VOICES = {}
+if CUSTOM_OMNIVOICE_VOICES_FILE.exists():
+    try:
+        import json
+        custom_data = json.loads(CUSTOM_OMNIVOICE_VOICES_FILE.read_text(encoding="utf-8"))
+        for k, v in custom_data.items():
+            CUSTOM_OMNIVOICE_VOICES[k] = v
+    except Exception:
+        pass
+
 VALTEC_CLONE_PRESET = "valtec:clone"
-VIENEU_CLONE_PRESET = "vieneu:clone"
 VALTEC_REPO_URL = env_value("DUB_VALTEC_REPO_URL", default="https://github.com/tronghieuit/valtec-tts.git")
 VALTEC_ZEROSHOT_REPO = env_value("DUB_VALTEC_ZEROSHOT_REPO", default="valtecAI-team/valtec-zeroshot-voice-cloning")
-VIENEU_BACKBONE_REPO = env_value("DUB_VIENEU_BACKBONE_REPO", default="pnnbao-ump/VieNeu-TTS-v2-Turbo-GGUF")
-VIENEU_CODEC_REPO = env_value("DUB_VIENEU_CODEC_REPO", default="pnnbao-ump/VieNeu-Codec")
-VIENEU_BACKBONE_FILENAME = env_value("DUB_VIENEU_BACKBONE_FILENAME", default="vieneu-tts-v2-turbo.gguf")
-VIENEU_DECODER_FILENAME = env_value("DUB_VIENEU_DECODER_FILENAME", default="vieneu_decoder.onnx")
-VIENEU_ENCODER_FILENAME = env_value("DUB_VIENEU_ENCODER_FILENAME", default="vieneu_encoder.onnx")
-VIENEU_PIP_EXTRA_INDEX = env_value(
-    "DUB_VIENEU_LLAMA_CPP_EXTRA_INDEX",
-    default="https://pnnbao97.github.io/llama-cpp-python-v0.3.16/cpu/",
-)
 LOCAL_TRANSCRIBE_PROVIDERS = {"ffmpeg", "ffmpeg_whisper", "ffmpeg-whisper", "local"}
-VIENEU_MODEL_DIR = ROOT / "temp" / "models" / "vieneu"
 VALTEC_MODEL_DIR = ROOT / "temp" / "models" / "valtec"
 VALTEC_ZEROSHOT_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "zeroshot-vietnamese"
 VALTEC_HASP_MODEL_DIR = VALTEC_MODEL_DIR / "models" / "hasp"
@@ -278,12 +278,6 @@ VALTEC_ZEROSHOT_CODE_PATH = CODE_ROOT / "tools" / "valtec_repo" / "valtec_tts" /
 VALTEC_ZEROSHOT_AVAILABLE = VALTEC_ZEROSHOT_CODE_PATH.exists()
 if not VALTEC_ZEROSHOT_AVAILABLE:
     VALTEC_REFERENCE_VOICES = {}
-VIENEU_REQUIRED_FILES = (
-    VIENEU_BACKBONE_FILENAME,
-    "voices.json",
-    VIENEU_DECODER_FILENAME,
-    VIENEU_ENCODER_FILENAME,
-)
 
 DEFAULT_VOICES = (
     [
@@ -307,10 +301,6 @@ DEFAULT_VOICES = (
 VOICE_LABELS = {
     "edge:female": "EdgeTTS • Nữ Hoài My",
     "edge:male": "EdgeTTS • Nam Nam Minh",
-    "vieneu:ngoc": "VieNeu-TTS • Bích Ngọc (Nữ - Miền Bắc)",
-    "vieneu:tuyen": "VieNeu-TTS • Phạm Tuyên (Nam - Miền Bắc)",
-    "vieneu:doan": "VieNeu-TTS • Thục Đoan (Nữ - Miền Nam)",
-    "vieneu:vinh": "VieNeu-TTS • Xuân Vĩnh (Nam - Miền Nam)",
     "valtec:nf": "Valtec-TTS • NF Nu Bac",
     "valtec:sf": "Valtec-TTS • SF Nu Nam",
     "valtec:nm1": "Valtec-TTS • NM1 Nam Bac",
@@ -334,6 +324,7 @@ VOICE_LABELS.update(
         "valtec:nm2": "Valtec-TTS • NM2 (Northern Male / Nam miền Bắc)",
     }
 )
+VOICE_LABELS.update({k: v.get("label", k) for k, v in CUSTOM_OMNIVOICE_VOICES.items()})
 if not VALTEC_ZEROSHOT_AVAILABLE:
     for _voice_key in (
         "valtec:thu_ha",
@@ -364,8 +355,9 @@ def whisperx_disabled() -> bool:
     return DUB_TRANSCRIBE_PROVIDER in LOCAL_TRANSCRIBE_PROVIDERS
 
 
-def vieneu_model_ready(model_dir: Path = VIENEU_MODEL_DIR) -> bool:
-    return model_dir.exists() and all((model_dir / filename).exists() for filename in VIENEU_REQUIRED_FILES)
+def omnivoice_model_ready(model_dir: Path = OMNIVOICE_MODEL_DIR) -> bool:
+    # OmniVoice downloads models directly from HuggingFace and manages them internally
+    return True
 
 
 # Cấu hình các mô hình dịch local cho 4 ngôn ngữ

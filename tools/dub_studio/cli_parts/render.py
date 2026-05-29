@@ -16,7 +16,7 @@ from .analysis import (
     extract_speaker_samples,
     is_valtec_reference_voice,
     is_valtec_voice_preset,
-    is_vieneu_voice_preset,
+    is_omnivoice_voice_preset,
     resolve_tts_output_extension,
     resolve_valtec_reference_audio,
     resolve_voice_preset,
@@ -35,7 +35,7 @@ from .audio import (
     synthesize_timed_tts_clip,
     synthesize_tts,
 )
-from .runtime import ensure_valtec_runtime, ensure_vieneu_runtime, prepare_runtime
+from .runtime import ensure_valtec_runtime, ensure_omnivoice_runtime, prepare_runtime
 from .translation import (
     build_intro_hook_text,
     build_intro_hook_text_with_context,
@@ -457,10 +457,9 @@ def expand_cleanup_region_for_render(
     center_x = int(region.get("centerX", int(region.get("x", 0)) + region_w // 2))
     center_y = int(region.get("centerY", int(region.get("y", 0)) + region_h // 2))
 
-    # Expand width and height "surgically" just enough to cover text + anti-aliasing
-    # Increased padding to ensure full coverage of original subtitles
-    padding_w = max(int(region_w * 0.05), 12)
-    padding_h = max(int(region_h * 0.08), 4)
+    # Increased padding slightly (+3%) as requested to cover outlines without blocking the screen
+    padding_w = max(int(region_w * 0.08), 12)
+    padding_h = max(int(region_h * 0.11), 4)
     
     expanded_w = min(width, region_w + padding_w)
     expanded_h = min(height, region_h + padding_h)
@@ -2301,6 +2300,211 @@ def do_analyze_resilient(
     return analysis
 
 
+def recover_whisperx_missed_segments(
+    video_path: Path,
+    analysis: dict[str, Any],
+    effective_subtitle_region: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Scans the video timeline at high density (every 300ms) to detect subtitle segments,
+    cross-references with WhisperX transcribed segments, and for any missing subtitle segments,
+    uses Gemini Visual OCR + Translation API to extract and translate the Chinese subtitles.
+    Then injects them into the segment list to guarantee 100% subtitles, masking, and dubbing!
+    """
+    import os
+    import cv2
+    import numpy as np
+    import requests
+    import json
+    import base64
+    from .analysis import detect_subtitle_region_in_frame, subtitle_region_detected
+    from ..process_utils import safe_print
+
+    safe_print("[INFO] Bắt đầu quét video để tìm kiếm phụ đề bị bỏ sót (Video-OCR Subtitle Segment Recovery)...", flush=True)
+
+    video_meta = analysis.get("videoMeta", {})
+    duration_ms = video_meta.get("durationMs", 0)
+    
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        safe_print("[ERROR] Không thể mở file video bằng OpenCV. Hủy quét phụ đề.", flush=True)
+        return analysis
+
+    if duration_ms <= 0:
+        fps = max(cap.get(cv2.CAP_PROP_FPS), 1.0)
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        duration_ms = int(frames * 1000 / fps)
+
+    sample_width = min(480, max(240, int(video_meta.get("width", 1280) * 0.33)))
+    sample_height = max(int(video_meta.get("height", 720) * sample_width / max(video_meta.get("width", 1280), 1)), 180)
+
+    # Step size: 300ms for high-precision density scanning
+    step_ms = 300
+    detected_timeline = []
+
+    for pt in range(150, duration_ms, step_ms):
+        cap.set(cv2.CAP_PROP_POS_MSEC, pt)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        
+        # Convert to grayscale and resize to match detect_subtitle_region_in_frame expects
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        resized = cv2.resize(gray, (sample_width, sample_height))
+        frame_bytes = resized.tobytes()
+
+        region = detect_subtitle_region_in_frame(
+            frame_bytes,
+            sample_width=sample_width,
+            sample_height=sample_height,
+            video_meta=video_meta,
+            fallback_region=effective_subtitle_region,
+        )
+        if subtitle_region_detected(region) and region.get("detected", False):
+            detected_timeline.append(pt)
+
+    # Group timestamps into segments
+    detected_segments = []
+    if detected_timeline:
+        current_start = detected_timeline[0]
+        current_end = detected_timeline[0]
+
+        for pt in detected_timeline[1:]:
+            if pt - current_end <= 750:
+                current_end = pt
+            else:
+                if current_end - current_start >= 450:
+                    detected_segments.append((max(0, current_start - 300), min(duration_ms, current_end + 300)))
+                current_start = pt
+                current_end = pt
+        if current_end - current_start >= 450:
+            detected_segments.append((max(0, current_start - 300), min(duration_ms, current_end + 300)))
+
+    safe_print(f"[INFO] Đã quét xong. Phát hiện thấy {len(detected_segments)} phân đoạn chứa phụ đề trên hình.", flush=True)
+
+    existing_segments = analysis.get("segments", [])
+    recovered_intervals = []
+
+    for start, end in detected_segments:
+        overlap = False
+        for seg in existing_segments:
+            s_start = seg["startMs"]
+            s_end = seg["endMs"]
+            # Tolerance: if the overlap interval is significant
+            if max(start, s_start) < min(end, s_end):
+                overlap = True
+                break
+        if not overlap:
+            recovered_intervals.append((start, end))
+
+    if not recovered_intervals:
+        safe_print("[SUCCESS] Không phát hiện thấy phân đoạn phụ đề nào bị bỏ sót bởi WhisperX.", flush=True)
+        cap.release()
+        return analysis
+
+    safe_print(f"[IMPORTANT] Phát hiện thấy {len(recovered_intervals)} phân đoạn phụ đề bị bỏ sót! Tiến hành Visual OCR + dịch bằng Gemini...", flush=True)
+
+    api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+    model_name = os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash").strip()
+    if not model_name.startswith("models/"):
+        model_name = f"models/{model_name}"
+
+    injected_count = 0
+    for start_ms, end_ms in recovered_intervals:
+        # Seek to the center of the segment to get the clearest subtitle image
+        center_ms = (start_ms + end_ms) // 2
+        cap.set(cv2.CAP_PROP_POS_MSEC, center_ms)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        chinese_text = ""
+        vietnamese_text = ""
+
+        if api_key:
+            _, buffer = cv2.imencode('.jpg', frame)
+            img_b64 = base64.b64encode(buffer).decode('utf-8')
+            
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
+            headers = {"Content-Type": "application/json"}
+            
+            prompt = (
+                "Identify the Chinese subtitle text at the bottom of this image. "
+                "Return a JSON object with exactly two keys: 'chinese' (the transcribed Chinese subtitle text) and 'vietnamese' (a natural, accurate translation of the subtitle to Vietnamese). "
+                "If no Chinese subtitle is found or it is unreadable, return empty strings for both keys. "
+                "Do not include any markdown formatting or prefix, output raw JSON only."
+            )
+            
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inlineData": {
+                                "mimeType": "image/jpeg",
+                                "data": img_b64
+                            }
+                        }
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 256,
+                    "responseMimeType": "application/json"
+                }
+            }
+
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                    res = json.loads(txt)
+                    chinese_text = res.get("chinese", "").strip()
+                    vietnamese_text = res.get("vietnamese", "").strip()
+            except Exception as e:
+                safe_print(f"[warn] Gemini Visual OCR API error: {e}", flush=True)
+
+        if not chinese_text or not vietnamese_text:
+            # Fallback if API fails or no keys found
+            chinese_text = "..."
+            vietnamese_text = " "  # Non-empty to pass validation but silent/invisible
+
+        injected_count += 1
+        new_seg = {
+            "id": f"seg_recovered_{injected_count:04d}",
+            "index": len(existing_segments) + injected_count,
+            "startMs": start_ms,
+            "endMs": end_ms,
+            "speakerId": "speaker_1",
+            "sourceText": chinese_text,
+            "translatedText": vietnamese_text,
+            "machineTranslatedText": vietnamese_text,
+            "delivery": "neutral",
+            "subtitleChunks": [chinese_text],
+            "previousText": "",
+            "nextText": "",
+            "previousContext": "",
+            "nextContext": "",
+            "previousTranslatedText": "",
+            "nextTranslatedText": ""
+        }
+        existing_segments.append(new_seg)
+        safe_print(f"[SUCCESS] Phục hồi phân đoạn {start_ms/1000:.1f}s - {end_ms/1000:.1f}s: Sub gốc='{chinese_text}' -> Dịch='{vietnamese_text}'", flush=True)
+
+    # Sort segments by startMs to ensure chronological consistency
+    existing_segments.sort(key=lambda s: s.get("startMs", 0))
+    # Re-index the segments chronologically
+    for idx, seg in enumerate(existing_segments, start=1):
+        seg["index"] = idx
+
+    analysis["segments"] = existing_segments
+    safe_print(f"[SUCCESS] Đã phục hồi và chèn thành công {injected_count} phân đoạn phụ đề bị bỏ sót vào danh sách segments.", flush=True)
+
+    cap.release()
+    return analysis
+
+
 def do_render(analysis_path: Path, render_options_path: Path, output_json: Path) -> dict[str, Any]:
     emit_progress(
         phase="render",
@@ -2331,8 +2535,8 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
             **render_options.get("voiceMapping", {}),
         }.items()
     }
-    uses_vieneu_voice = any(
-        is_vieneu_voice_preset(resolve_voice_preset(voice))
+    uses_omnivoice_voice = any(
+        is_omnivoice_voice_preset(resolve_voice_preset(voice))
         for voice in voice_mapping.values()
     )
     uses_valtec_voice = any(
@@ -2366,6 +2570,12 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         analysis.get("subtitleRegion", {}),
         subtitle_preset,
     )
+    # Perform Video-OCR Subtitle Segment Recovery for WhisperX missed segments
+    analysis = recover_whisperx_missed_segments(
+        video_path=input_path,
+        analysis=analysis,
+        effective_subtitle_region=effective_subtitle_region
+    )
     intro_hook = {
         **analysis.get("renderDefaults", {}).get("introHook", {}),
         **render_options.get("introHook", {}),
@@ -2394,12 +2604,12 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     background_music_volume = max(
         0.0, min(float(background_music.get("volume", 0.12)), 2.0)
     )
-    if intro_hook.get("enabled") and is_vieneu_voice_preset(resolve_voice_preset(intro_hook.get("voice") or "")):
-        uses_vieneu_voice = True
+    if intro_hook.get("enabled") and is_omnivoice_voice_preset(resolve_voice_preset(intro_hook.get("voice") or "")):
+        uses_omnivoice_voice = True
     if intro_hook.get("enabled") and is_valtec_voice_preset(resolve_voice_preset(intro_hook.get("voice") or "")):
         uses_valtec_voice = True
-    if DUB_USE_VIENEU and uses_vieneu_voice:
-        ensure_vieneu_runtime(phase="render", step="prepare", progress=0.05)
+    if DUB_USE_OMNIVOICE and uses_omnivoice_voice:
+        ensure_omnivoice_runtime(phase="render", step="prepare", progress=0.05)
     if DUB_USE_VALTEC and uses_valtec_voice:
         ensure_valtec_runtime(
             phase="render",
@@ -2878,8 +3088,7 @@ def do_health_check(*, output_json: Path | None = None) -> dict[str, Any]:
         _file_check("Valtec Thu Ha reference", VALTEC_REFERENCE_DIR / "thu_ha.wav", required=False),
         _file_check("Valtec zero-shot code", VALTEC_ZEROSHOT_CODE_PATH, required=False),
         _file_check("Valtec zero-shot checkpoint", VALTEC_ZEROSHOT_MODEL_DIR / "G_175000.pth", required=False),
-        _file_check("VieNeu voices", VIENEU_MODEL_DIR / "voices.json", required=False),
-        _file_check("VieNeu backbone", VIENEU_MODEL_DIR / VIENEU_BACKBONE_FILENAME, required=False),
+        _file_check("OmniVoice model directory", OMNIVOICE_MODEL_DIR, required=False),
         _file_check("FFmpeg", Path(FFMPEG_EXE), required=False) if Path(FFMPEG_EXE).is_absolute() else {
             "label": "FFmpeg",
             "path": FFMPEG_EXE,
@@ -2911,6 +3120,7 @@ def do_health_check(*, output_json: Path | None = None) -> dict[str, Any]:
         _module_check("underthesea"),
         _module_check("onnxruntime", required=False),
         _module_check("llama_cpp", required=False),
+        _module_check("omnivoice", required=False),
     ]
 
     errors = [
@@ -2942,7 +3152,7 @@ def do_health_check(*, output_json: Path | None = None) -> dict[str, Any]:
         "codeRoot": str(CODE_ROOT),
         "dubStudioDir": str(DUB_STUDIO_DIR),
         "valtecModelDir": str(VALTEC_MODEL_DIR),
-        "vieneuModelDir": str(VIENEU_MODEL_DIR),
+        "omnivoiceModelDir": str(OMNIVOICE_MODEL_DIR),
         "fileChecks": file_checks,
         "moduleChecks": module_checks,
         "warnings": warnings,

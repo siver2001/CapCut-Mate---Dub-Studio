@@ -75,11 +75,11 @@ def run_test_render():
         "sourceSubtitleCleanupMode": "localized_blur",
         "videoCodecMode": "cpu_stable",
         "voiceMapping": {
-            "speaker_1": "valtec:thanh_tam",  # Người kể chuyện (Nam chính)
-            "speaker_2": "valtec:sf",         # Chân Hoàn / Đoan Phi (Nữ chính)
-            "speaker_3": "valtec:nf",         # Long Nguyệt (Nữ trẻ)
-            "speaker_4": "valtec:nm1",        # Cận Tịch (Nữ trung niên)
-            "speaker_5": "valtec:nm2"         # Thái y Ngụy Lâm (Nam từ tốn)
+            "speaker_1": "valtec:nm1",      # Người kể chuyện (Nam miền Bắc)
+            "speaker_2": "valtec:nf",       # Chân Hoàn / Đoan Phi (Nữ miền Bắc)
+            "speaker_3": "valtec:sf",       # Long Nguyệt (Nữ miền Nam)
+            "speaker_4": "valtec:nm2",      # Cận Tịch (Nam miền Bắc 2)
+            "speaker_5": "valtec:sm"        # Thái y Ngụy Lâm (Nam miền Nam)
         },
         "introHook": {
             "enabled": True,

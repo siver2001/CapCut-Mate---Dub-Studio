@@ -423,7 +423,7 @@ class WindowLayoutMixin:
         self.intro_voice_combo.setEditable(True)
         if self.intro_voice_combo.lineEdit() is not None:
             self.intro_voice_combo.lineEdit().setPlaceholderText(
-                "Chọn giọng EdgeTTS/VieNeu hoặc nhập Edge voice, ví dụ en-US-AvaNeural"
+                "Chọn giọng EdgeTTS/OmniVoice hoặc nhập Edge voice, ví dụ en-US-AvaNeural"
             )
             self.intro_voice_combo.lineEdit().returnPressed.connect(
                 self.on_basic_settings_changed
@@ -432,7 +432,7 @@ class WindowLayoutMixin:
         self.intro_background_check.stateChanged.connect(self.on_basic_settings_changed)
         if self.intro_voice_combo.lineEdit() is not None:
             self.intro_voice_combo.lineEdit().setPlaceholderText(
-                "Chọn giọng Edge/VieNeu/Valtec hoặc nhập Edge voice, ví dụ en-US-AvaNeural"
+                "Chọn giọng Edge/OmniVoice/Valtec hoặc nhập Edge voice, ví dụ en-US-AvaNeural"
             )
         self.intro_voice_test_btn = self._make_button("Nghe thử", "ghost")
         self.intro_voice_test_btn.clicked.connect(self.on_test_intro_voice_clicked)
@@ -729,11 +729,13 @@ class WindowLayoutMixin:
         self._nav_preview_btn = self._make_button("Preview", "ghost")
         self._nav_batch_btn = self._make_button("Batch", "ghost")
         self._nav_config_btn = self._make_button("Cấu hình", "ghost")
+        self._nav_clone_btn = self._make_button("Clone giọng", "ghost")
         
         self._nav_edit_btn.clicked.connect(lambda: self._switch_page(0))
         self._nav_preview_btn.clicked.connect(lambda: self._switch_page(1))
         self._nav_config_btn.clicked.connect(lambda: self._switch_page(2))
         self._nav_batch_btn.clicked.connect(lambda: self._switch_page(3))
+        self._nav_clone_btn.clicked.connect(lambda: self._switch_page(4))
 
         self.mode_chip = self._make_chip("Chờ phân tích")
         self.subtitle_chip = self._make_chip("Vietsub: Bật")
@@ -742,6 +744,7 @@ class WindowLayoutMixin:
         nav_bar.addWidget(self._nav_preview_btn)
         nav_bar.addWidget(self._nav_batch_btn)
         nav_bar.addWidget(self._nav_config_btn)
+        nav_bar.addWidget(self._nav_clone_btn)
         nav_bar.addSpacing(12)
         nav_bar.addWidget(self.mode_chip)
         nav_bar.addWidget(self.subtitle_chip)
@@ -886,10 +889,10 @@ class WindowLayoutMixin:
         self.main_intro_voice_combo = self._make_combo(INTRO_TTS_OPTIONS, self.on_basic_settings_changed)
         self.main_intro_voice_combo.setEditable(True)
         if self.main_intro_voice_combo.lineEdit() is not None:
-            self.main_intro_voice_combo.lineEdit().setPlaceholderText("Chọn giọng EdgeTTS/VieNeu")
+            self.main_intro_voice_combo.lineEdit().setPlaceholderText("Chọn giọng EdgeTTS/OmniVoice")
             self.main_intro_voice_combo.lineEdit().returnPressed.connect(self.on_basic_settings_changed)
         if self.main_intro_voice_combo.lineEdit() is not None:
-            self.main_intro_voice_combo.lineEdit().setPlaceholderText("Chon giong Edge/VieNeu/Valtec")
+            self.main_intro_voice_combo.lineEdit().setPlaceholderText("Chon giong Edge/OmniVoice/Valtec")
         self.main_intro_voice_test_btn = self._make_button("Nghe thu", "ghost")
         self.main_intro_voice_test_btn.clicked.connect(self.on_test_intro_voice_clicked)
         self.main_intro_voice_status_label = QLabel(
@@ -1819,6 +1822,11 @@ class WindowLayoutMixin:
 
         self._page_stack.addWidget(config_page)
         self._page_stack.addWidget(batch_page)
+        
+        # PAGE 4: CLONE VOICE
+        if hasattr(self, "_build_clone_page"):
+            clone_page = self._build_clone_page()
+            self._page_stack.addWidget(clone_page)
 
         # Page navigation
         self.main_tabs = None
@@ -1835,7 +1843,8 @@ class WindowLayoutMixin:
         for btn, active in [(self._nav_edit_btn, index == 0),
                               (self._nav_preview_btn, index == 1),
                               (self._nav_config_btn, index == 2),
-                              (self._nav_batch_btn, index == 3)]:
+                              (self._nav_batch_btn, index == 3),
+                              (self._nav_clone_btn, index == 4)]:
             if btn:
                 btn.setObjectName("NavActive" if active else "")
                 btn.style().unpolish(btn)

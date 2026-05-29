@@ -360,8 +360,8 @@ class WindowVoiceMixin:
         ).strip()
         if not selected_voice:
             return
-        if selected_voice.startswith(("vieneu:", "valtec:")):
-            provider_label = "Valtec-TTS" if selected_voice.startswith("valtec:") else "VieNeu-TTS"
+        if selected_voice.startswith(("omnivoice:", "valtec:")):
+            provider_label = "Valtec-TTS" if selected_voice.startswith("valtec:") else "OmniVoice-TTS"
             status_message = (
                 f"Đang nghe thử {self._format_voice_label(selected_voice)}. "
                 f"{provider_label} local sẽ phát bằng preset đã chọn."
@@ -414,7 +414,7 @@ class WindowVoiceMixin:
         self._voice_preview_timed_out = False
         self._set_voice_test_buttons_enabled(False)
         status_label = self.voice_status_label_map.get(speaker_id)
-        if status_label is not None and not selected_voice.startswith(("vieneu:", "valtec:")):
+        if status_label is not None and not selected_voice.startswith(("omnivoice:", "valtec:")):
             status_label.setText("Đang tạo mẫu nghe thử...")
         process.start()
         QTimer.singleShot(120000, lambda p=process: self._timeout_voice_preview_process(p))

@@ -1122,50 +1122,32 @@ def ensure_source_separation_runtime(*, phase: str, step: str, progress: float) 
         )
 
 
-def ensure_vieneu_runtime(*, phase: str, step: str, progress: float) -> None:
-    if importlib.util.find_spec("vieneu") is None:
+def ensure_omnivoice_runtime(*, phase: str, step: str, progress: float) -> None:
+    if importlib.util.find_spec("omnivoice") is None:
         emit_progress(
             phase=phase,
             step=step,
             progress=max(progress - 0.02, 0.0),
-            message="Đang cài VieNeu-TTS SDK từ repo local...",
+            message="Đang cài OmniVoice-TTS SDK...",
         )
-        vieneu_repo_dir = ROOT / "tools" / "vieneu_repo"
         install_cmd = [
             sys.executable,
             "-m",
             "pip",
             "install",
             "--disable-pip-version-check",
+            "omnivoice",
         ]
-        if vieneu_repo_dir.exists():
-            install_cmd.extend(
-                [
-                    "-e",
-                    str(vieneu_repo_dir),
-                    "--extra-index-url",
-                    VIENEU_PIP_EXTRA_INDEX,
-                ]
-            )
-        else:
-            install_cmd.extend(
-                [
-                    "vieneu",
-                    "--extra-index-url",
-                    VIENEU_PIP_EXTRA_INDEX,
-                ]
-            )
         run(install_cmd)
         importlib.invalidate_caches()
     emit_progress(
         phase=phase,
         step=step,
         progress=progress,
-        message="Đang khởi động VieNeu-TTS và đồng bộ model local...",
+        message="Đang khởi động OmniVoice-TTS...",
     )
-    from tools.vieneu_wrapper import get_vieneu_provider
-
-    get_vieneu_provider()
+    from tools.omnivoice_wrapper import get_omnivoice_provider
+    get_omnivoice_provider()
 
 
 def ensure_llamaindex_runtime(*, phase: str, step: str, progress: float) -> None:
