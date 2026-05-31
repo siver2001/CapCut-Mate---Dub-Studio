@@ -86,10 +86,10 @@ class WindowCloneVoiceMixin:
 
         # 3. Văn bản của file mẫu (Reference Text)
         grid.addWidget(self._field_label("Văn bản tệp mẫu:"), 2, 0)
-        self.clone_ref_text_edit = QLineEdit()
-        self.clone_ref_text_edit.setPlaceholderText("Nhập nội dung tương ứng của tệp âm thanh mẫu (khuyên dùng để tăng độ chính xác)...")
+        self.clone_ref_text_edit = QPlainTextEdit()
+        self.clone_ref_text_edit.setPlaceholderText("Nhập nội dung tương ứng của tệp âm thanh mẫu (khuyên dùng để tăng độ chính xác, bỏ trống để tự nghe tự phân tích)...")
         self.clone_ref_text_edit.setStyleSheet("""
-            QLineEdit {
+            QPlainTextEdit {
                 background: rgba(15, 23, 42, 0.4);
                 border: 1px solid rgba(255, 255, 255, 0.15);
                 border-radius: 8px;
@@ -97,6 +97,7 @@ class WindowCloneVoiceMixin:
                 padding: 8px 12px;
             }
         """)
+        self.clone_ref_text_edit.setMaximumHeight(60)
         grid.addWidget(self.clone_ref_text_edit, 2, 1)
 
         # 4. Câu kiểm thử (Test Text)
@@ -212,7 +213,7 @@ class WindowCloneVoiceMixin:
     def on_test_clone_voice_clicked(self) -> None:
         ref_path = self.clone_wav_path_edit.text().strip()
         test_text = self.clone_test_text_edit.toPlainText().strip()
-        ref_text = self.clone_ref_text_edit.text().strip()
+        ref_text = self.clone_ref_text_edit.toPlainText().strip()
 
         if not ref_path or not os.path.exists(ref_path):
             QMessageBox.warning(self, "Thiếu tệp tin", "Vui lòng chọn tệp âm thanh mẫu (.wav) trước khi nghe thử.")
@@ -300,6 +301,12 @@ class WindowCloneVoiceMixin:
             try:
                 payload = json.loads(result_path.read_text(encoding="utf-8-sig"))
                 audio_path = payload.get("outputPath")
+                
+                # Check for auto-transcribed reference text
+                ref_text_transcribed = payload.get("refText")
+                if ref_text_transcribed and not self.clone_ref_text_edit.toPlainText().strip():
+                    self.clone_ref_text_edit.setPlainText(ref_text_transcribed)
+
                 if audio_path and os.path.exists(audio_path):
                     self.clone_status_label.setText("Đang phát âm thanh clone...")
                     self._play_voice_preview_audio(audio_path, "Giọng clone của bạn", self.clone_status_label)
@@ -315,7 +322,7 @@ class WindowCloneVoiceMixin:
     def on_save_clone_voice_clicked(self) -> None:
         name = self.clone_name_edit.text().strip()
         ref_path = self.clone_wav_path_edit.text().strip()
-        ref_text = self.clone_ref_text_edit.text().strip()
+        ref_text = self.clone_ref_text_edit.toPlainText().strip()
 
         if not name:
             QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng nhập tên giọng clone.")
@@ -324,6 +331,67 @@ class WindowCloneVoiceMixin:
             QMessageBox.warning(self, "Thiếu tệp tin", "Vui lòng chọn tệp âm thanh mẫu (.wav) trước khi lưu.")
             return
 
+        if not ref_text:
+            self.clone_status_label.setText("Đang tự động phân tích và nhận diện văn bản từ tệp mẫu...")
+            self.clone_test_btn.setEnabled(False)
+            self.clone_save_btn.setEnabled(False)
+            
+            from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, is_frozen
+            preview_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "voice_preview")
+            transcribe_result_path = preview_dir / "transcribe_result.json"
+            if transcribe_result_path.exists():
+                try: transcribe_result_path.unlink()
+                except Exception: pass
+
+            process = QProcess(self)
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("PYTHONIOENCODING", "utf-8")
+            process.setProcessEnvironment(env)
+            process.setProgram(str(PIPELINE_PYTHON))
+            
+            args = []
+            if not is_frozen:
+                args.extend(["-u", str(PIPELINE_PATH)])
+            else:
+                args.extend(["pipeline"])
+                
+            args.extend([
+                "transcribe-audio",
+                "--audio", ref_path,
+                "--output-json", str(transcribe_result_path)
+            ])
+            
+            process.setArguments(args)
+            process.setWorkingDirectory(str(ROOT))
+            
+            def on_transcribe_finished(code: int):
+                self.clone_test_btn.setEnabled(True)
+                self.clone_save_btn.setEnabled(True)
+                
+                transcribed_text = ""
+                if code == 0 and transcribe_result_path.exists():
+                    try:
+                        payload = json.loads(transcribe_result_path.read_text(encoding="utf-8-sig"))
+                        transcribed_text = payload.get("text", "").strip()
+                    except Exception as e:
+                        self.clone_status_label.setText(f"Lỗi đọc kết quả phân tích: {e}")
+                
+                if not transcribed_text:
+                    self.clone_status_label.setText("Không thể tự động nhận dạng văn bản mẫu.")
+                else:
+                    self.clone_ref_text_edit.setPlainText(transcribed_text)
+                    self.clone_status_label.setText("Đã tự động nhận diện văn bản mẫu thành công!")
+                
+                self._proceed_save_clone_voice(name, ref_path, transcribed_text)
+
+            process.finished.connect(on_transcribe_finished)
+            process.start()
+            QTimer.singleShot(180000, process.kill)
+            return
+
+        self._proceed_save_clone_voice(name, ref_path, ref_text)
+
+    def _proceed_save_clone_voice(self, name: str, ref_path: str, ref_text: str) -> None:
         # Tạo tên an toàn (chỉ giữ chữ cái và số)
         safe_name = re.sub(r"[^a-zA-Z0-9_]", "", name.replace(" ", "_").lower())
         if not safe_name:

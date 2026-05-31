@@ -3000,6 +3000,11 @@ def do_preview_voice(
         else "shared"
     )
     output_path = preview_dir / f"{preview_file_prefix}_{cache_key}{extension}"
+    ref_text_val = ""
+    if is_omnivoice_voice_preset(selected_voice):
+        from .analysis import resolve_omnivoice_reference_audio
+        _, ref_text_val = resolve_omnivoice_reference_audio(selected_voice)
+
     result = {
         "voice": selected_voice,
         "speakerId": speaker_id or "speaker_1",
@@ -3007,6 +3012,7 @@ def do_preview_voice(
         "text": preview_text,
         "inputText": input_text,
         "textRepaired": preview_text != input_text,
+        "refText": ref_text_val,
     }
     if output_path.exists() and output_path.stat().st_size > 0:
         write_json(output_json, result)
@@ -3048,6 +3054,52 @@ def do_preview_voice(
         message="Đã tạo xong audio nghe thử.",
         status="success",
     )
+    emit("RESULT", result)
+    return result
+
+
+def do_transcribe_audio(audio_path: Path, output_json: Path) -> dict[str, Any]:
+    from .analysis import transcribe_reference_audio_file
+    
+    emit_progress(
+        phase="transcribe",
+        step="transcribe",
+        progress=0.1,
+        message="Đang phân tích và nhận dạng giọng nói..."
+    )
+    
+    result = {"text": "", "success": False}
+    try:
+        if audio_path.exists():
+            text = transcribe_reference_audio_file(audio_path)
+            result = {"text": text, "success": True}
+            emit_progress(
+                phase="transcribe",
+                step="done",
+                progress=1.0,
+                message="Đã nhận dạng xong giọng nói.",
+                status="success",
+            )
+        else:
+            result["error"] = f"Không tìm thấy tệp tin âm thanh: {audio_path}"
+            emit_progress(
+                phase="transcribe",
+                step="error",
+                progress=1.0,
+                message="Không tìm thấy tệp tin âm thanh.",
+                status="error",
+            )
+    except Exception as e:
+        result["error"] = str(e)
+        emit_progress(
+            phase="transcribe",
+            step="error",
+            progress=1.0,
+            message=f"Lỗi nhận dạng: {e}",
+            status="error",
+        )
+        
+    write_json(output_json, result)
     emit("RESULT", result)
     return result
 
@@ -3194,6 +3246,10 @@ def parse_args() -> argparse.Namespace:
     preview_voice.add_argument("--job-id", default="")
     preview_voice.add_argument("--output-json", required=True)
 
+    transcribe_audio = subparsers.add_parser("transcribe-audio")
+    transcribe_audio.add_argument("--audio", required=True)
+    transcribe_audio.add_argument("--output-json", required=True)
+
     health_check = subparsers.add_parser("health-check")
     health_check.add_argument("--output-json", default="")
 
@@ -3226,6 +3282,11 @@ def main() -> int:
             text=args.text,
             speaker_id=args.speaker_id,
             job_id=args.job_id,
+            output_json=Path(args.output_json).resolve(),
+        )
+    elif args.command == "transcribe-audio":
+        do_transcribe_audio(
+            audio_path=Path(args.audio).resolve(),
             output_json=Path(args.output_json).resolve(),
         )
     elif args.command == "health-check":

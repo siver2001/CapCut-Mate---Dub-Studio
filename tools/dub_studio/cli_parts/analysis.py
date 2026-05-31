@@ -873,14 +873,65 @@ def resolve_valtec_reference_audio(voice: str) -> Path | None:
     return reference_path if reference_path.exists() else None
 
 
+def transcribe_reference_audio_file(audio_path: Path) -> str:
+    if not audio_path.exists():
+        return ""
+    import tempfile
+    
+    temp_dir = Path(tempfile.gettempdir())
+    temp_srt = temp_dir / f"transcribe_ref_{audio_path.stem}_{time.time_ns()}.srt"
+    
+    try:
+        transcribe_to_srt(audio_path, temp_srt, language="vi", max_len=999)
+        if temp_srt.exists():
+            content = temp_srt.read_text(encoding="utf-8-sig")
+            segments = parse_srt(content)
+            text = " ".join(seg.content for seg in segments).strip()
+            text = re.sub(r"\s+", " ", text)
+            return text
+    except Exception as e:
+        cli_log(f"Error in transcribe_reference_audio_file: {e}")
+    finally:
+        if temp_srt.exists():
+            try:
+                temp_srt.unlink()
+            except Exception:
+                pass
+    return ""
+
+
 def resolve_omnivoice_reference_audio(voice: str) -> tuple[Path | None, str]:
     selected_voice = resolve_voice_preset(voice)
     meta = CUSTOM_OMNIVOICE_VOICES.get(selected_voice)
     if not meta:
         return None, ""
     reference_path = OMNIVOICE_REFERENCE_DIR / str(meta.get("filename") or "")
+    if not reference_path.exists():
+        return None, ""
     ref_text = str(meta.get("ref_text") or "").strip()
-    return (reference_path if reference_path.exists() else None), ref_text
+    if not ref_text:
+        try:
+            cli_log(f"Auto-transcribing empty reference text for voice: {selected_voice} ({reference_path.name})")
+            transcribed = transcribe_reference_audio_file(reference_path)
+            if transcribed:
+                ref_text = transcribed
+                # Update runtime state
+                meta["ref_text"] = ref_text
+                # Save to custom_omnivoice_voices.json
+                from tools.dub_studio.config import CUSTOM_OMNIVOICE_VOICES_FILE
+                if CUSTOM_OMNIVOICE_VOICES_FILE.exists():
+                    try:
+                        import json
+                        data = json.loads(CUSTOM_OMNIVOICE_VOICES_FILE.read_text(encoding="utf-8"))
+                        if selected_voice in data:
+                            data[selected_voice]["ref_text"] = ref_text
+                            CUSTOM_OMNIVOICE_VOICES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                            cli_log(f"Successfully saved auto-transcribed text to custom_omnivoice_voices.json: '{ref_text}'")
+                    except Exception as e:
+                        cli_log(f"Warning: Failed to save auto-transcribed ref_text to config file: {e}")
+        except Exception as e:
+            cli_log(f"Error auto-transcribing reference audio {reference_path.name}: {e}")
+    return reference_path, ref_text
 
 
 def should_use_omnivoice_voice(*, voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> bool:

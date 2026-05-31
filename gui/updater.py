@@ -19,28 +19,67 @@ class UpdateThread(QThread):
         self.root_path = root_path
 
     def run(self):
+        # 1. Try to update via Git if running from source (has .git directory)
+        if (self.root_path / ".git").exists():
+            try:
+                self.progress_signal.emit(20, "Phát hiện thư mục git. Đang fetch từ GitHub...")
+                # Run git fetch
+                fetch_res = subprocess.run(
+                    ["git", "fetch", "origin"],
+                    cwd=str(self.root_path),
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                if fetch_res.returncode != 0:
+                    raise RuntimeError(fetch_res.stderr or fetch_res.stdout)
+
+                self.progress_signal.emit(60, "Đang pull mã nguồn mới nhất từ GitHub...")
+                # Run git pull
+                pull_res = subprocess.run(
+                    ["git", "pull", "origin", "main"],
+                    cwd=str(self.root_path),
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                if pull_res.returncode != 0:
+                    raise RuntimeError(pull_res.stderr or pull_res.stdout)
+
+                self.progress_signal.emit(100, "Hoàn tất cập nhật.")
+                self.finished_signal.emit(True, "Cập nhật thành công qua Git! Vui lòng khởi động lại ứng dụng.")
+                return
+            except Exception as git_err:
+                # If git fails (e.g. because of local changes conflict), we log it and try zip
+                self.progress_signal.emit(35, f"Git pull thất bại ({str(git_err).strip()}). Đang thử cách tải Zip...")
+
+        # 2. Traditional ZIP download method
         try:
-            self.progress_signal.emit(10, "Đang kiểm tra kết nối tới server...")
-            # For now we pull main.zip from GitHub as a universal patch since source changes are standard.
-            # Repo: siver2001/CapCut-Mate---Dub-Studio
+            self.progress_signal.emit(40, "Đang kiểm tra kết nối tới server...")
             zip_url = "https://github.com/siver2001/CapCut-Mate---Dub-Studio/archive/refs/heads/main.zip"
             
-            # Using custom temporary directories within workspace
             with tempfile.TemporaryDirectory(dir=str(self.root_path)) as tmp_dir:
                 tmp_zip = Path(tmp_dir) / "main.zip"
                 
-                self.progress_signal.emit(30, "Đang tải gói cập nhật mới nhất từ GitHub...")
-                # Download with chunk tracking if possible, or simple urlretrieve
-                urllib.request.urlretrieve(zip_url, str(tmp_zip))
+                self.progress_signal.emit(50, "Đang tải gói cập nhật mới nhất từ GitHub...")
+                try:
+                    urllib.request.urlretrieve(zip_url, str(tmp_zip))
+                except urllib.error.HTTPError as http_err:
+                    if http_err.code == 404:
+                        raise RuntimeError(
+                            "HTTP Error 404: Not Found.\n"
+                            "Kho lưu trữ GitHub hiện tại là riêng tư (private).\n"
+                            "Vui lòng cài đặt Git và cấu hình quyền để cập nhật ứng dụng tự động."
+                        ) from http_err
+                    raise
                 
-                self.progress_signal.emit(60, "Đang trích xuất dữ liệu cập nhật...")
+                self.progress_signal.emit(70, "Đang trích xuất dữ liệu cập nhật...")
                 extract_path = Path(tmp_dir) / "extracted"
                 extract_path.mkdir(exist_ok=True)
                 
                 with zipfile.ZipFile(tmp_zip, 'r') as zip_ref:
                     zip_ref.extractall(extract_path)
                 
-                # The GitHub ZIP contains a folder like CapCut-Mate---Dub-Studio-main
                 extracted_folders = [p for p in extract_path.iterdir() if p.is_dir()]
                 if not extracted_folders:
                     self.finished_signal.emit(False, "Không tìm thấy nội dung cập nhật sau khi giải nén.")
@@ -48,26 +87,20 @@ class UpdateThread(QThread):
                 
                 update_src = extracted_folders[0]
                 
-                self.progress_signal.emit(80, "Đang cài đặt các thay đổi...")
+                self.progress_signal.emit(85, "Đang cài đặt các thay đổi...")
                 
-                # Walk through update source and copy files selectively
-                # We skip: temp/, output/, config/, .git/
                 skip_dirs = {"temp", "output", "config", ".git", "__pycache__", ".github", ".gemini"}
                 
                 for src_item in update_src.rglob("*"):
                     if src_item.is_file():
-                        # Compute relative path to copy to target
                         rel_path = src_item.relative_to(update_src)
                         
-                        # Check if any skip directory is in the rel_path parts
                         if any(skip_dir in rel_path.parts for skip_dir in skip_dirs):
                             continue
                             
                         target_file = self.root_path / rel_path
-                        # Create parent directories if they don't exist
                         target_file.parent.mkdir(parents=True, exist_ok=True)
                         
-                        # Overwrite target file
                         shutil.copy2(src_item, target_file)
                 
                 self.progress_signal.emit(100, "Hoàn tất cập nhật.")
