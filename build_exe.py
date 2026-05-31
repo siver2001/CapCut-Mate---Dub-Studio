@@ -345,6 +345,64 @@ def copy_vc_redist(output_dir: Path) -> None:
             shutil.copy2(p_dll, capi_dir / dll)
 
 
+def cleanup_build_files(output_dir: Path) -> None:
+    print("Dang toi uu hoa va lam nhe bo cai dat (xoa file rac, file dev)...", flush=True)
+    internal_dir = output_dir / "_internal"
+    if not internal_dir.exists():
+        return
+
+    # Extensions that are safe to delete at runtime (development and compiler artifacts)
+    development_extensions = {
+        ".lib",  # Static libraries / import libraries
+        ".h",    # C header files
+        ".hpp",  # C++ header files
+        ".cpp",  # C++ source files
+        ".c",    # C source files
+        ".a",    # Unix static libraries
+    }
+
+    deleted_count = 0
+    deleted_bytes = 0
+
+    for root, dirs, files in os.walk(internal_dir):
+        for file in files:
+            file_path = Path(root) / file
+            ext = file_path.suffix.lower()
+            
+            should_delete = False
+            if ext in development_extensions:
+                should_delete = True
+            elif ext == ".so" or ".so." in file:
+                should_delete = True
+            elif file.startswith("libicudata.so"):
+                should_delete = True
+
+            if should_delete:
+                try:
+                    file_size = file_path.stat().st_size
+                    file_path.unlink()
+                    deleted_count += 1
+                    deleted_bytes += file_size
+                except Exception as e:
+                    print(f"  [warn] Khong the xoa {file}: {e}", flush=True)
+
+    # Clean up empty directories
+    empty_dirs_removed = 0
+    for root, dirs, files in os.walk(internal_dir, topdown=False):
+        for dir_name in dirs:
+            dir_path = Path(root) / dir_name
+            try:
+                if not any(dir_path.iterdir()):
+                    dir_path.rmdir()
+                    empty_dirs_removed += 1
+            except Exception:
+                pass
+
+    print(f"[+] Da xoa {deleted_count} file lap trinh/rac du thua, tiet kiem {deleted_bytes / 1024 / 1024:.2f} MB.", flush=True)
+    if empty_dirs_removed > 0:
+        print(f"[+] Da xoa {empty_dirs_removed} thu muc trong.", flush=True)
+
+
 def validate_built_app(root: Path, output_dir: Path) -> None:
     exe_path = output_dir / f"{APP_NAME}.exe"
     health_json = root / "temp" / "build_health_check.json"
@@ -439,6 +497,9 @@ def build() -> None:
 
     copy_vc_redist(output_dir)
 
+    # Perform post-build optimization to prune unnecessary static files and dev headers
+    cleanup_build_files(output_dir)
+
     if not args.no_models:
         copy_runtime_models(root, output_dir)
 
@@ -453,3 +514,4 @@ def build() -> None:
 
 if __name__ == "__main__":
     build()
+

@@ -154,8 +154,60 @@ class WindowCloneVoiceMixin:
             "",
             "Audio files (*.wav)"
         )
-        if file_path:
-            self.clone_wav_path_edit.setText(file_path)
+        if not file_path:
+            return
+
+        # Check WAV duration
+        duration = 0.0
+        err_msg = None
+        try:
+            import wave
+            with wave.open(file_path, "rb") as f:
+                frames = f.getnframes()
+                rate = f.getframerate()
+                duration = frames / float(rate)
+        except Exception as e:
+            try:
+                import soundfile as sf
+                info = sf.info(file_path)
+                duration = info.duration
+            except Exception as e2:
+                err_msg = f"Không thể đọc thông tin tệp âm thanh (.wav): {e2}"
+
+        if err_msg:
+            QMessageBox.warning(
+                self,
+                "Lỗi đọc file",
+                f"Đã xảy ra lỗi khi phân tích tệp âm thanh:\n{err_msg}\n\nVui lòng đảm bảo đây là tệp WAV chuẩn PCM."
+            )
+            return
+
+        # Enforce 3 to 10 seconds limit for OmniVoice reference
+        MIN_DURATION = 3.0
+        MAX_DURATION = 10.0
+
+        if duration < MIN_DURATION:
+            QMessageBox.warning(
+                self,
+                "Thời lượng không hợp lệ",
+                f"Tệp âm thanh quá ngắn ({duration:.2f} giây)!\n\n"
+                f"Vui lòng chọn tệp .wav có độ dài từ {MIN_DURATION} đến {MAX_DURATION} giây để đảm bảo mô hình AI clone giọng đọc được chính xác."
+            )
+            return
+        elif duration > MAX_DURATION:
+            QMessageBox.warning(
+                self,
+                "Thời lượng không hợp lệ",
+                f"Tệp âm thanh quá dài ({duration:.2f} giây)!\n\n"
+                f"Vui lòng chọn tệp .wav có độ dài từ {MIN_DURATION} đến {MAX_DURATION} giây để tránh lỗi và tối ưu độ chính xác."
+            )
+            return
+
+        self.clone_wav_path_edit.setText(file_path)
+        self.clone_status_label.setText(
+            f"Đã chọn tệp: {os.path.basename(file_path)} ({duration:.2f} giây). Sẵn sàng để Nghe thử hoặc Lưu."
+        )
+
 
     def on_test_clone_voice_clicked(self) -> None:
         ref_path = self.clone_wav_path_edit.text().strip()
