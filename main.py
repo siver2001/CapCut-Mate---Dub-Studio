@@ -113,7 +113,9 @@ def main():
     if root not in sys.path:
         sys.path.insert(0, root)
     
-    print("CapCut-Mate Dub Studio - Use 'pipeline' mode for dubbing.")
+    from gui.main import main as run_gui
+    sys.exit(run_gui())
+
 
 if __name__ == "__main__":
     main()
