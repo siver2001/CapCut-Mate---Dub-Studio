@@ -1078,7 +1078,7 @@ def resolve_hf_token() -> str:
 def ensure_whisperx_runtime(*, phase: str, step: str, progress: float) -> None:
     # Auto-upgrade to PyTorch with CUDA if an NVIDIA GPU is available but PyTorch is CPU-only
     torch_mod = whisperx_torch_runtime()
-    if torch_mod is not None and not torch_mod.cuda.is_available():
+    if torch_mod is not None and not torch_mod.cuda.is_available() and not getattr(sys, "frozen", False):
         import shutil, subprocess
         if shutil.which("nvidia-smi"):
             emit_progress(
@@ -1162,6 +1162,15 @@ def ensure_source_separation_runtime(*, phase: str, step: str, progress: float) 
 
 def ensure_omnivoice_runtime(*, phase: str, step: str, progress: float) -> None:
     if importlib.util.find_spec("omnivoice") is None:
+        if getattr(sys, "frozen", False):
+            safe_print("[warn] Thiếu thư viện 'omnivoice' trong gói đóng gói độc lập (.exe). Bỏ qua khởi tạo OmniVoice-TTS...")
+            emit_progress(
+                phase=phase,
+                step=step,
+                progress=progress,
+                message="Cảnh báo: Thiếu thư viện 'omnivoice', bỏ qua OmniVoice-TTS...",
+            )
+            return
         emit_progress(
             phase=phase,
             step=step,
