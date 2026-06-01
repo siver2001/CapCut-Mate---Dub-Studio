@@ -309,6 +309,20 @@ class WindowWorkflowMixin:
             return "chưa cài"
 
     def update_ytdlp(self) -> None:
+        if is_frozen:
+            QMessageBox.information(
+                self,
+                "Cập nhật yt-dlp",
+                repair_mojibake_text(
+                    "Bạn đang sử dụng phiên bản ứng dụng đóng gói độc lập (.exe).\n\n"
+                    "Trong phiên bản đóng gói độc lập, thư viện yt-dlp đã được nén sẵn bên trong và không thể cập nhật trực tiếp qua pip được.\n\n"
+                    "Để cập nhật yt-dlp:\n"
+                    "1. Hãy cập nhật yt-dlp trên môi trường Python gốc của bạn (chạy lệnh 'pip install -U yt-dlp' trong cmd/terminal của máy).\n"
+                    "2. Chạy lại file đóng gói 'python build_exe.py' để biên dịch ra bản .exe mới chứa yt-dlp mới nhất."
+                ),
+            )
+            return
+
         if getattr(self, "video_download_process", None) is not None:
             QMessageBox.information(
                 self,

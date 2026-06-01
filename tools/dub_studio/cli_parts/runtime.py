@@ -208,14 +208,20 @@ def ensure_whisperx_diarization_cache(*, phase: str, step: str, progress: float)
     ):
         return ""
     hf_token = resolve_hf_token()
-    ensure_hf_snapshot(
-        repo_id,
-        phase=phase,
-        step=step,
-        progress=progress,
-        message="Đang tải model diarization WhisperX vào cache local...",
-        token=hf_token,
-    )
+    if not hf_token:
+        safe_print(f"[warn] Chưa có HF_TOKEN trong .env. Bỏ qua tự động tải model diarization gated '{repo_id}'. Hệ thống sẽ dùng bộ nhận diện LLM/Heuristic dự phòng.")
+        return ""
+    try:
+        ensure_hf_snapshot(
+            repo_id,
+            phase=phase,
+            step=step,
+            progress=progress,
+            message="Đang tải model diarization WhisperX vào cache local...",
+            token=hf_token,
+        )
+    except Exception as exc:
+        safe_print(f"[warn] Không tải được model diarization gated '{repo_id}' (Lỗi: {exc}). Hệ thống sẽ chuyển sang dùng bộ nhận diện LLM/Heuristic dự phòng.")
     return repo_id
 
 

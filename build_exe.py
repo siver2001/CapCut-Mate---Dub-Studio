@@ -62,6 +62,10 @@ OPTIONAL_COLLECT_MODULES = (
     "llama_cpp",
     "valtec_tts",
     "omnivoice",
+    "vocos",
+    "x_transformers",
+    "einops",
+    "soxr",
 )
 
 METADATA_PACKAGES = (
@@ -108,6 +112,10 @@ METADATA_PACKAGES = (
     "llama-cpp-python",
     "valtec-tts",
     "omnivoice",
+    "vocos",
+    "x-transformers",
+    "einops",
+    "soxr",
 )
 
 
