@@ -1161,7 +1161,8 @@ def ensure_source_separation_runtime(*, phase: str, step: str, progress: float) 
 
 
 def ensure_omnivoice_runtime(*, phase: str, step: str, progress: float) -> None:
-    if importlib.util.find_spec("omnivoice") is None:
+    from ..process_utils import module_available
+    if not module_available("omnivoice"):
         if getattr(sys, "frozen", False):
             safe_print("[warn] Thiếu thư viện 'omnivoice' trong gói đóng gói độc lập (.exe). Bỏ qua khởi tạo OmniVoice-TTS...")
             emit_progress(

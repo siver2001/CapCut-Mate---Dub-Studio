@@ -904,7 +904,18 @@ class WindowWorkflowMixin:
 
     @staticmethod
     def _has_dependency(module_name: str) -> bool:
-        return importlib.util.find_spec(module_name) is not None
+        try:
+            if importlib.util.find_spec(module_name) is not None:
+                return True
+        except Exception:
+            pass
+        try:
+            importlib.import_module(module_name)
+            return True
+        except ImportError:
+            return False
+        except Exception:
+            return True
 
     def _validate_analysis_input(self) -> Path:
         input_path = Path(self.input_path_edit.text().strip())

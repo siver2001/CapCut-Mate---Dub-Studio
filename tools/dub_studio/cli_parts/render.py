@@ -3122,6 +3122,9 @@ def do_health_check(*, output_json: Path | None = None) -> dict[str, Any]:
     def _module_check(module_name: str, *, required: bool = True) -> dict[str, Any]:
         try:
             available = importlib.util.find_spec(module_name) is not None
+            if not available:
+                importlib.import_module(module_name)
+                available = True
         except Exception:
             available = False
         return {

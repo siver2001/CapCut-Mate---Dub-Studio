@@ -64,6 +64,7 @@ OPTIONAL_COLLECT_MODULES = (
     "omnivoice",
     "vocos",
     "x_transformers",
+    "transformers",
     "einops",
     "soxr",
 )
@@ -120,7 +121,10 @@ METADATA_PACKAGES = (
 
 
 def module_exists(name: str) -> bool:
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def metadata_exists(name: str) -> bool:
