@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from .common import *
 from .runtime import (
     TRANSLATION_PROMPT_VERSION,

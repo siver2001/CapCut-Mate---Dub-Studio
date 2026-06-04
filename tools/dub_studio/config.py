@@ -213,10 +213,7 @@ WHISPERX_DIARIZATION_MAX_SPEAKERS = max(
     ),
     1,
 )
-WHISPERX_DIARIZATION_MODEL = (
-    env_value("DUB_WHISPERX_DIARIZATION_MODEL", default="pyannote/speaker-diarization-community-1")
-    or "pyannote/speaker-diarization-community-1"
-)
+WHISPERX_DIARIZATION_MODEL = env_value("DUB_WHISPERX_DIARIZATION_MODEL", default="")
 EDGE_VOICE_PRESETS = {
     "edge:female": "vi-VN-HoaiMyNeural",
     "edge:male": "vi-VN-NamMinhNeural",

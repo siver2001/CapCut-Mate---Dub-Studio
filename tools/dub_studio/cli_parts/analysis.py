@@ -38,97 +38,6 @@ def subtitles_from_analysis_segments(segments: list[dict[str, Any]]) -> list[Sub
     return subtitles
 
 
-def merge_whisperx_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    for raw in segments:
-        text = normalize_text(raw.get("text") or raw.get("sourceText") or "")
-        if not text:
-            continue
-        item = {
-            "startMs": max(int(raw.get("startMs", 0)), 0),
-            "endMs": max(int(raw.get("endMs", 0)), max(int(raw.get("startMs", 0)), 0) + 1),
-            "text": text,
-            "speaker": normalize_text(raw.get("speaker") or raw.get("speakerId") or ""),
-        }
-        if current is None:
-            current = item
-            continue
-        gap = item["startMs"] - current["endMs"]
-        merged_span = item["endMs"] - current["startMs"]
-        combined = f"{current['text']} {item['text']}".strip()
-        same_speaker = item["speaker"] == current["speaker"]
-        if same_speaker and gap <= 550 and merged_span <= 6500 and len(combined) <= 110:
-            current = {
-                **current,
-                "endMs": item["endMs"],
-                "text": combined,
-            }
-            continue
-        merged.append(current)
-        current = item
-    if current is not None:
-        merged.append(current)
-    return merged
-
-
-def remap_speaker_segments(
-    segments: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str]:
-    labeled = [item for item in segments if normalize_text(item.get("speaker") or "")]
-    if not labeled:
-        return [], {}, "speaker_1"
-    usage_count: dict[str, int] = {}
-    total_duration_ms: dict[str, int] = {}
-    total_chars: dict[str, int] = {}
-    turn_count: dict[str, int] = {}
-    previous_speaker = ""
-    for item in labeled:
-        raw_speaker = normalize_text(item.get("speaker") or "")
-        usage_count[raw_speaker] = usage_count.get(raw_speaker, 0) + 1
-        total_duration_ms[raw_speaker] = total_duration_ms.get(raw_speaker, 0) + max(
-            int(item.get("endMs", 0)) - int(item.get("startMs", 0)),
-            0,
-        )
-        total_chars[raw_speaker] = total_chars.get(raw_speaker, 0) + len(
-            normalize_text(item.get("text") or "").replace(" ", "")
-        )
-        if previous_speaker and previous_speaker != raw_speaker:
-            turn_count[raw_speaker] = turn_count.get(raw_speaker, 0) + 1
-        turn_count.setdefault(raw_speaker, turn_count.get(raw_speaker, 0))
-        previous_speaker = raw_speaker
-    ranked_speakers = sorted(
-        usage_count,
-        key=lambda speaker_id: (
-            total_duration_ms.get(speaker_id, 0) + turn_count.get(speaker_id, 0) * 220 + usage_count.get(speaker_id, 0) * 140,
-            total_chars.get(speaker_id, 0),
-        ),
-        reverse=True,
-    )
-    remap = {
-        raw_speaker: f"speaker_{index + 1}"
-        for index, raw_speaker in enumerate(ranked_speakers)
-    }
-    remapped_segments: list[dict[str, Any]] = []
-    for item in labeled:
-        speaker_id = remap[normalize_text(item.get("speaker") or "")]
-        remapped_segments.append(
-            {
-                **item,
-                "speakerId": speaker_id,
-            }
-        )
-    speaker_stats = {
-        remap[raw_speaker]: {
-            "speakerId": remap[raw_speaker],
-            "segmentCount": usage_count.get(raw_speaker, 0),
-            "totalDurationMs": total_duration_ms.get(raw_speaker, 0),
-            "totalChars": total_chars.get(raw_speaker, 0),
-            "turnCount": turn_count.get(raw_speaker, 0),
-        }
-        for raw_speaker in ranked_speakers
-    }
-    return remapped_segments, speaker_stats, "speaker_1"
 
 
 def extract_speaker_samples(video_path: Path, segments: list[dict[str, Any]], output_dir: Path) -> dict[str, Path]:
@@ -303,41 +212,6 @@ def analyze_with_whisperx(
         return_char_alignments=False,
     )
     aligned_segments = aligned_result.get("segments") or []
-    diarization_used = False
-    diarization_model_path = str(WHISPERX_DIARIZATION_MODEL).strip()
-    # Support relative paths resolved relative to ROOT
-    resolved_model_path = ROOT / diarization_model_path
-    if not os.path.isabs(diarization_model_path) and resolved_model_path.exists():
-        diarization_model_path = resolved_model_path.resolve().as_posix()
-    is_local_config = diarization_model_path.endswith((".yaml", ".yml")) or os.path.exists(diarization_model_path)
-    hf_token = resolve_hf_token()
-
-    if is_local_config or hf_token or hf_repo_cached(diarization_model_path):
-        try:
-            cli_log(f"analyze_with_whisperx: Loading diarization model ({diarization_model_path})")
-            emit_progress(phase="analysis", step="diarize", progress=0.55, message="Đang tải mô hình nhận diện người nói (PyAnnote Diarization)...")
-            from whisperx.diarize import DiarizationPipeline
-            token_to_use = hf_token if not is_local_config else None
-            diarize_model = DiarizationPipeline(
-                model_name=diarization_model_path,
-                token=token_to_use,
-                device=device,
-                cache_dir=str(HUGGINGFACE_HUB_CACHE),
-            )
-            cli_log("analyze_with_whisperx: Starting diarization")
-            emit_progress(phase="analysis", step="diarize", progress=0.65, message="Đang phân tích và phân biệt giọng người nói...")
-            diarize_segments = diarize_model(
-                waveform,
-                min_speakers=1,
-                max_speakers=WHISPERX_DIARIZATION_MAX_SPEAKERS,
-            )
-            cli_log("analyze_with_whisperx: Assigning word speakers")
-            aligned_result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
-            aligned_segments = aligned_result.get("segments") or []
-            diarization_used = True
-        except Exception as exc:
-            warnings.append(f"WhisperX diarization không chạy được, sẽ chuyển sang bộ nhận diện LLM/Heuristic: {exc}")
-
     normalized_segments = [
         {
             "startMs": max(int(float(segment.get("start", 0.0)) * 1000), 0),
@@ -350,39 +224,6 @@ def analyze_with_whisperx(
     ]
     raw_subtitles = subtitles_from_analysis_segments(normalized_segments)
     raw_srt_path.write_text(compose_srt(raw_subtitles), encoding="utf-8")
-
-    if diarization_used:
-        merged_segments = merge_whisperx_segments(normalized_segments)
-        merged_srt_path.write_text(
-            compose_srt(subtitles_from_analysis_segments(merged_segments)),
-            encoding="utf-8",
-        )
-        remapped_segments, _, _ = remap_speaker_segments(merged_segments)
-        if remapped_segments:
-            (
-                remapped_segments,
-                speaker_stats,
-                main_speaker_id,
-                speaker_count,
-                speaker_confidence,
-                voice_layout,
-            ) = collapse_segments_to_gender_buckets(
-                remapped_segments,
-                audio=audio,
-                sr=16000,
-            )
-            return {
-                "sourceLanguage": detected_language,
-                "rawSubtitles": raw_subtitles,
-                "mergedSegments": remapped_segments,
-                "speakerStats": speaker_stats,
-                "mainSpeakerId": main_speaker_id,
-                "speakerCount": speaker_count,
-                "speakerConfidence": speaker_confidence,
-                "voiceLayout": voice_layout,
-                "warnings": warnings,
-            }
-        warnings.append("WhisperX diarization không gán được speaker ổn định, sẽ chuyển sang bộ nhận diện LLM/Heuristic.")
 
     merged_subtitles = merge_short_subtitles(raw_subtitles)
     merged_srt_path.write_text(compose_srt(merged_subtitles), encoding="utf-8")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from .common import *
 
 def ensure_local_whisper_model(*, phase: str, step: str, progress: float) -> Path:
@@ -194,35 +196,6 @@ def ensure_whisperx_align_cache(*, language_code: str, phase: str, step: str, pr
     return repo_id
 
 
-def ensure_whisperx_diarization_cache(*, phase: str, step: str, progress: float) -> str:
-    repo_id = normalize_text(WHISPERX_DIARIZATION_MODEL)
-    if not repo_id:
-        return ""
-    # Skip HF download if it points to a local file or config
-    resolved_path = ROOT / repo_id
-    if (
-        repo_id.endswith((".yaml", ".yml"))
-        or os.path.exists(repo_id)
-        or resolved_path.exists()
-        or "/" not in repo_id
-    ):
-        return ""
-    hf_token = resolve_hf_token()
-    if not hf_token:
-        safe_print(f"[warn] Chưa có HF_TOKEN trong .env. Bỏ qua tự động tải model diarization gated '{repo_id}'. Hệ thống sẽ dùng bộ nhận diện LLM/Heuristic dự phòng.")
-        return ""
-    try:
-        ensure_hf_snapshot(
-            repo_id,
-            phase=phase,
-            step=step,
-            progress=progress,
-            message="Đang tải model diarization WhisperX vào cache local...",
-            token=hf_token,
-        )
-    except Exception as exc:
-        safe_print(f"[warn] Không tải được model diarization gated '{repo_id}' (Lỗi: {exc}). Hệ thống sẽ chuyển sang dùng bộ nhận diện LLM/Heuristic dự phòng.")
-    return repo_id
 
 
 def discover_ollama_binary() -> Path | None:
@@ -1101,7 +1074,6 @@ def ensure_whisperx_runtime(*, phase: str, step: str, progress: float) -> None:
         [
             ("whisperx", "whisperx"),
             ("torchaudio", "torchaudio"),
-            ("pyannote.audio", "pyannote.audio"),
         ],
         phase=phase,
         step=step,
@@ -1571,12 +1543,11 @@ def prepare_runtime(target: str) -> None:
     if normalized in {"analysis", "all"}:
         if not whisperx_disabled():
             ensure_whisperx_runtime(phase="analysis", step="prepare", progress=0.02)
-            # Tải đầy đủ mô hình WhisperX chính, mô hình căn chỉnh (zh, en, vi) và mô hình phân biệt người nói PyAnnote
+            # Tải đầy đủ mô hình WhisperX chính và mô hình căn chỉnh (zh, en, vi)
             ensure_whisperx_model_cache(phase="analysis", step="prepare", progress=0.025)
             ensure_whisperx_align_cache(language_code="zh", phase="analysis", step="prepare", progress=0.03)
             ensure_whisperx_align_cache(language_code="en", phase="analysis", step="prepare", progress=0.035)
             ensure_whisperx_align_cache(language_code="vi", phase="analysis", step="prepare", progress=0.04)
-            ensure_whisperx_diarization_cache(phase="analysis", step="prepare", progress=0.045)
             
         ensure_local_whisper_model(phase="analysis", step="prepare", progress=0.05)
         if DUB_TRANSLATE_PROVIDER in {"ollama", "auto"}:

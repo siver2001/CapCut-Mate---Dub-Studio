@@ -13,7 +13,7 @@ APP_NAME = "CapCutMate"
 ENTRY_POINT = "main.py"
 
 DATA_DIRS = ("assets", "config", "tools")
-RUNTIME_MODEL_DIRS = ("valtec", "omnivoice", "pyannote")
+RUNTIME_MODEL_DIRS = ("valtec", "omnivoice")
 
 REQUIRED_IMPORTS = {
     "PyInstaller": "pyinstaller",
@@ -32,10 +32,6 @@ OPTIONAL_COLLECT_MODULES = (
     "edge_tts",
     "yt_dlp",
     "whisperx",
-    "pyannote.audio",
-    "pyannote.core",
-    "pyannote.database",
-    "pyannote.metrics",
     "torch",
     "torchaudio",
     "torchvision",
@@ -79,7 +75,6 @@ METADATA_PACKAGES = (
     "yt-dlp",
     "requests",
     "whisperx",
-    "pyannote.audio",
     "torch",
     "torchaudio",
     "torchvision",
@@ -306,7 +301,7 @@ def copy_runtime_models(root: Path, output_dir: Path) -> None:
         )
         copied_any = True
 
-    # Copy HuggingFace offline cache (OmniVoice, PyAnnote) if exists
+    # Copy HuggingFace offline cache (OmniVoice) if exists
     if source_cache.exists():
         target_cache = output_dir / "temp" / ".cache"
         if target_cache.exists():

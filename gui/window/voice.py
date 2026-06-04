@@ -219,7 +219,7 @@ class WindowVoiceMixin:
             )
             status_label.setObjectName("SectionHint")
             
-            # Build detailed label (Pyannote stats + detected age/gender)
+            # Build detailed label (diarization stats + detected age/gender)
             detail_text = f"{int(speaker.get('segmentCount') or 0)} câu • {float(speaker.get('totalDurationMs') or 0) / 1000:.1f}s"
             if speaker.get("gender") and speaker.get("age"):
                 gender_lbl = "Nam" if speaker.get("gender") == "M" else "Nữ"

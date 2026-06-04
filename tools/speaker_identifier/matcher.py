@@ -7,17 +7,17 @@ from .memory_manager import find_closest_speaker, add_or_update_speaker
 
 def match_speakers_and_extract_features(
     video_path: Path,
-    pyannote_segments: list[dict],
+    diarization_segments: list[dict],
     talknet_tracks: list,
     talknet_scores: list,
     output_speakers_dir: Path,
     use_gpu: bool = False
 ) -> list[dict]:
     """
-    Correlates Pyannote audio speaker labels with TalkNet-ASD visual tracks.
+    Correlates audio speaker labels with TalkNet-ASD visual tracks.
     For each speaker, extracts face embedding and saves face thumbnail.
     
-    pyannote_segments: list of dicts:
+    diarization_segments: list of dicts:
       [{'start': float, 'end': float, 'speaker': str}]
     talknet_tracks: list of tracks from tracks.pckl
     talknet_scores: list of score lists from scores.pckl
@@ -27,9 +27,9 @@ def match_speakers_and_extract_features(
     """
     output_speakers_dir.mkdir(parents=True, exist_ok=True)
     
-    # 1. Group Pyannote segments by speaker
+    # 1. Group diarization segments by speaker
     speaker_audio_frames = {} # speaker_id -> set of frame indices (at 25 fps)
-    for seg in pyannote_segments:
+    for seg in diarization_segments:
         spk = seg.get("speaker")
         if not spk:
             continue
@@ -51,12 +51,12 @@ def match_speakers_and_extract_features(
     
     results = []
     
-    # 3. For each Pyannote speaker, find the best matching TalkNet track
+    # 3. For each speaker, find the best matching TalkNet track
     for spk, audio_frames in speaker_audio_frames.items():
         best_track_idx = -1
         best_score_sum = -999.0
         
-        # We calculate the sum of TalkNet speaking scores during the frames Pyannote says this speaker speaks
+        # We calculate the sum of TalkNet speaking scores during the frames diarization says this speaker speaks
         for tidx, track_data in enumerate(talknet_tracks):
             track = track_data["track"]
             scores = talknet_scores[tidx]

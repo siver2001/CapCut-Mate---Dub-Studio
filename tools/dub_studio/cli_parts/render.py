@@ -2195,9 +2195,9 @@ def do_analyze_resilient(
         talknet_res = run_talknet_asd(input_path, dirs["analysis"], sys.executable)
         if talknet_res:
             talknet_tracks, talknet_scores = talknet_res
-            pyannote_segs = []
+            diarization_segs = []
             for seg in segments:
-                pyannote_segs.append({
+                diarization_segs.append({
                     "start": float(seg.get("startMs", 0)) / 1000.0,
                     "end": float(seg.get("endMs", 0)) / 1000.0,
                     "speaker": seg.get("speakerId", "speaker_1")
@@ -2205,7 +2205,7 @@ def do_analyze_resilient(
             
             visual_speaker_data = match_speakers_and_extract_features(
                 video_path=input_path,
-                pyannote_segments=pyannote_segs,
+                diarization_segments=diarization_segs,
                 talknet_tracks=talknet_tracks,
                 talknet_scores=talknet_scores,
                 output_speakers_dir=dirs["analysis"] / "speakers",
