@@ -63,6 +63,7 @@ OPTIONAL_COLLECT_MODULES = (
     "transformers",
     "einops",
     "soxr",
+    "optree",
 )
 
 METADATA_PACKAGES = (
@@ -134,12 +135,34 @@ def remove_dir(path: Path) -> None:
     if not path.exists():
         return
     print(f"Cleaning {path.name}...", flush=True)
-    try:
-        shutil.rmtree(path)
-    except PermissionError:
-        print(f"\n[!] Khong xoa duoc '{path}'.", flush=True)
-        print(f"Hay dong {APP_NAME}.exe hoac cua so dang mo thu muc nay roi chay lai.", flush=True)
-        raise SystemExit(1)
+    import time
+    import stat
+
+    def make_writable_and_remove(func, p, excinfo):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except Exception:
+            pass
+
+    for attempt in range(5):
+        try:
+            shutil.rmtree(path, onexc=make_writable_and_remove)
+            if not path.exists():
+                return
+        except Exception:
+            time.sleep(0.5)
+
+    if path.exists():
+        try:
+            temp_path = path.parent / f"{path.name}_to_delete_{int(time.time())}"
+            path.rename(temp_path)
+            shutil.rmtree(temp_path, onexc=make_writable_and_remove)
+        except Exception as exc:
+            print(f"\n[!] Khong xoa duoc '{path}': {exc}", flush=True)
+            print(f"Hay dong {APP_NAME}.exe hoac cua so dang mo thu muc nay roi chay lai.", flush=True)
+            raise SystemExit(1)
+
 
 
 def check_required_dependencies(python_exe: str) -> None:
@@ -307,13 +330,24 @@ def copy_runtime_models(root: Path, output_dir: Path) -> None:
         if target_cache.exists():
             shutil.rmtree(target_cache, ignore_errors=True)
         print(f"Copy HuggingFace cache: temp/.cache -> dist/{APP_NAME}/temp/.cache", flush=True)
+        
+        # Exclude heavy foreign language XLS-R models (Chinese, Japanese, Korean) to save space
+        def ignore_cache_elements(path, names):
+            ignored = []
+            for name in names:
+                if name.endswith(".lock") or name.endswith(".tmp"):
+                    ignored.append(name)
+                elif "wav2vec2-large-xlsr-53-chinese" in name or \
+                     "wav2vec2-large-xlsr-53-japanese" in name or \
+                     "wav2vec2-large-xlsr-korean" in name:
+                    print(f"  [info] Excluded foreign cache model from build: {name}", flush=True)
+                    ignored.append(name)
+            return ignored
+
         shutil.copytree(
             source_cache,
             target_cache,
-            ignore=shutil.ignore_patterns(
-                "*.lock",
-                "*.tmp",
-            ),
+            ignore=ignore_cache_elements,
         )
         copied_any = True
 

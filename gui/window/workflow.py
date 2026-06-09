@@ -351,6 +351,7 @@ class WindowWorkflowMixin:
         process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUNBUFFERED", "1")
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))
         process.setArguments(["-m", "pip", "install", "-U", "yt-dlp"])
@@ -598,6 +599,7 @@ class WindowWorkflowMixin:
         process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUNBUFFERED", "1")
         ytdlp_temp_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "yt_dlp_tmp")
         env.insert("TMP", str(ytdlp_temp_dir))
         env.insert("TEMP", str(ytdlp_temp_dir))
@@ -905,17 +907,15 @@ class WindowWorkflowMixin:
     @staticmethod
     def _has_dependency(module_name: str) -> bool:
         try:
-            if importlib.util.find_spec(module_name) is not None:
-                return True
+            if importlib.util.find_spec(module_name) is None:
+                return False
         except Exception:
-            pass
+            return False
         try:
             importlib.import_module(module_name)
             return True
-        except ImportError:
-            return False
         except Exception:
-            return True
+            return False
 
     def _validate_analysis_input(self) -> Path:
         input_path = Path(self.input_path_edit.text().strip())

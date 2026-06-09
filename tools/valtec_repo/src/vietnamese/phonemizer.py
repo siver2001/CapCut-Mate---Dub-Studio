@@ -291,11 +291,12 @@ def text_to_phonemes_viphoneme(text: str) -> Tuple[List[str], List[int], List[in
     """
     import warnings
 
-    # In frozen/PyInstaller mode, use char-based phonemizer directly
-    # to avoid vinorm dependency issues
-    is_frozen = getattr(sys, 'frozen', False)
-    if is_frozen:
-        return text_to_phonemes_charbased(text)
+    # In frozen/PyInstaller mode, we now globally mock the vinorm module
+    # and provide the imp shim in pyi_runtime_hook.py, so we can run 
+    # the high-quality viphoneme phonemizer directly without falling back.
+    # is_frozen = getattr(sys, 'frozen', False)
+    # if is_frozen:
+    #     return text_to_phonemes_charbased(text)
     
     # Use direct import on Windows with proper mock routing to avoid subprocess overhead and timeouts!
     if os.name == 'nt':

@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 try:
     import torch
     # Eagerly import torch at the top level to avoid deadlocks in multi-process environments on Windows
@@ -81,7 +84,6 @@ def main():
             root = os.path.dirname(os.path.abspath(__file__))
             if root not in sys.path:
                 sys.path.insert(0, root)
-                
             import importlib
             try:
                 # Try running the __main__ of the module
@@ -90,7 +92,8 @@ def main():
                     try:
                         sys.exit(mod.main())
                     except Exception as e:
-                        print(f"Error executing {module_name}.main(): {e}")
+                        import traceback
+                        traceback.print_exc()
                         sys.exit(1)
                 else:
                     print(f"No main function found in {module_name}.__main__")
@@ -99,13 +102,23 @@ def main():
                 try:
                     mod = importlib.import_module(module_name)
                     if hasattr(mod, "main"):
-                        sys.exit(mod.main())
+                        try:
+                            sys.exit(mod.main())
+                        except Exception as e:
+                            import traceback
+                            traceback.print_exc()
+                            sys.exit(1)
                     else:
                         print(f"No main function found in {module_name}")
                         sys.exit(1)
-                except ImportError as e:
-                    print(f"Failed to import module {module_name}: {e}")
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
                     sys.exit(1)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                sys.exit(1)
 
     # Default behavior: run as normal app if no specialized mode
     # Add root to path for imports

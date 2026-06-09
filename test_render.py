@@ -84,7 +84,7 @@ def run_test_render():
         "introHook": {
             "enabled": True,
             "mode": "montage",
-            "voice": "valtec:thanh_tam",
+            "voice": "edge:male",
             "clipDurationMs": 15000,
             "useBackgroundAudio": True,
             "backgroundVolume": 0.08

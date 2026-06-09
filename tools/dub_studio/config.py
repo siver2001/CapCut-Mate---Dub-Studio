@@ -110,6 +110,7 @@ MICROSOFT_TRANSLATOR_TIMEOUT = max(
 )
 DUB_USE_GPU = True
 DUB_USE_OMNIVOICE = env_bool("DUB_USE_OMNIVOICE", default=True)
+DUB_OMNIVOICE_DEVICE = env_value("DUB_OMNIVOICE_DEVICE", default="auto").lower()
 DUB_USE_VALTEC = env_bool("DUB_USE_VALTEC", default=True)
 DUB_VALTEC_PRELOAD_ZEROSHOT = env_bool("DUB_VALTEC_PRELOAD_ZEROSHOT", default=False)
 DUB_TTS_ENABLE_PARALLEL = env_bool("DUB_TTS_ENABLE_PARALLEL", default=True)
@@ -228,14 +229,7 @@ VALTEC_PRESET_SPEAKER_IDS = {
     "valtec:sm": "SM",
     "valtec:nm2": "NM2",
 }
-VALTEC_REFERENCE_VOICES = {
-    "valtec:thu_ha": {"filename": "thu_ha.wav", "label": "Valtec-TTS • Thu Hà"},
-    "valtec:minh_duc": {"filename": "minh_duc.wav", "label": "Valtec-TTS • Minh Đức"},
-    "valtec:thanh_tam": {"filename": "thanh_tam.wav", "label": "Valtec-TTS • Thanh Tâm"},
-    "valtec:quang_huy": {"filename": "quang_huy.wav", "label": "Valtec-TTS • Quang Huy"},
-    "valtec:ngoc_anh": {"filename": "ngoc_anh.wav", "label": "Valtec-TTS • Ngọc Ánh"},
-    "valtec:hoang_nam": {"filename": "hoang_nam.wav", "label": "Valtec-TTS • Hoàng Nam"},
-}
+VALTEC_REFERENCE_VOICES = {}
 
 CUSTOM_VALTEC_VOICES_FILE = ROOT / "config" / "custom_valtec_voices.json"
 if CUSTOM_VALTEC_VOICES_FILE.exists():
@@ -276,25 +270,13 @@ VALTEC_ZEROSHOT_AVAILABLE = VALTEC_ZEROSHOT_CODE_PATH.exists()
 if not VALTEC_ZEROSHOT_AVAILABLE:
     VALTEC_REFERENCE_VOICES = {}
 
-DEFAULT_VOICES = (
-    [
-        "valtec:thanh_tam",
-        "valtec:thu_ha",
-        "valtec:nf",
-        "valtec:nm1",
-        "valtec:sf",
-        "valtec:sm",
-        "valtec:nm2",
-    ]
-    if VALTEC_ZEROSHOT_AVAILABLE
-    else [
-        "valtec:nf",
-        "valtec:sf",
-        "valtec:nm1",
-        "valtec:sm",
-        "valtec:nm2",
-    ]
-)
+DEFAULT_VOICES = [
+    "valtec:nf",
+    "valtec:sf",
+    "valtec:nm1",
+    "valtec:sm",
+    "valtec:nm2",
+]
 VOICE_LABELS = {
     "edge:female": "EdgeTTS • Nữ Hoài My",
     "edge:male": "EdgeTTS • Nam Nam Minh",
@@ -303,12 +285,6 @@ VOICE_LABELS = {
     "valtec:nm1": "Valtec-TTS • NM1 Nam Bac",
     "valtec:sm": "Valtec-TTS • SM Nam Nam",
     "valtec:nm2": "Valtec-TTS • NM2 Nam Bac 2",
-    "valtec:thu_ha": "Valtec-TTS • Thu Hà",
-    "valtec:minh_duc": "Valtec-TTS • Minh Đức",
-    "valtec:thanh_tam": "Valtec-TTS • Thanh Tâm",
-    "valtec:quang_huy": "Valtec-TTS • Quang Huy",
-    "valtec:ngoc_anh": "Valtec-TTS • Ngọc Ánh",
-    "valtec:hoang_nam": "Valtec-TTS • Hoàng Nam",
     "vi-VN-HoaiMyNeural": "EdgeTTS • Nữ Hoài My",
     "vi-VN-NamMinhNeural": "EdgeTTS • Nam Nam Minh",
 }
@@ -322,16 +298,6 @@ VOICE_LABELS.update(
     }
 )
 VOICE_LABELS.update({k: v.get("label", k) for k, v in CUSTOM_OMNIVOICE_VOICES.items()})
-if not VALTEC_ZEROSHOT_AVAILABLE:
-    for _voice_key in (
-        "valtec:thu_ha",
-        "valtec:minh_duc",
-        "valtec:thanh_tam",
-        "valtec:quang_huy",
-        "valtec:ngoc_anh",
-        "valtec:hoang_nam",
-    ):
-        VOICE_LABELS.pop(_voice_key, None)
 LANGUAGE_OPTIONS = ("en", "zh", "ko", "ja")
 WHISPERX_PRELOAD_ALIGN_LANGUAGES = tuple(
     language
@@ -353,8 +319,20 @@ def whisperx_disabled() -> bool:
 
 
 def omnivoice_model_ready(model_dir: Path = OMNIVOICE_MODEL_DIR) -> bool:
-    # OmniVoice downloads models directly from HuggingFace and manages them internally
-    return True
+    # 1. Check if model exists in OMNIVOICE_MODEL_DIR
+    if model_dir.exists() and (model_dir / "model.safetensors").exists():
+        return True
+    # 2. Check if model exists in HuggingFace cache folder
+    try:
+        from tools.dub_studio.config import HUGGINGFACE_HUB_CACHE
+        hf_cached_dir = HUGGINGFACE_HUB_CACHE / "models--k2-fsa--OmniVoice" / "snapshots"
+        if hf_cached_dir.exists():
+            for snapshot in hf_cached_dir.iterdir():
+                if snapshot.is_dir() and (snapshot / "model.safetensors").exists():
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 # Cấu hình các mô hình dịch local cho 4 ngôn ngữ

@@ -444,7 +444,21 @@ def inject_mid_sentence_pause(text: str) -> str:
 
 
 def parse_srt_timestamp(value: str) -> int:
-    sec_str, ms_str = value.split(",")
+    normalized = value.replace(".", ",")
+    if "," in normalized:
+        sec_str, ms_str = normalized.split(",")
+    else:
+        sec_str = normalized
+        ms_str = "0"
+    
+    sec_str = sec_str.strip()
+    ms_str = ms_str.strip()
+    
+    if len(ms_str) < 3:
+        ms_str = ms_str.ljust(3, "0")
+    elif len(ms_str) > 3:
+        ms_str = ms_str[:3]
+        
     hh, mm, ss = [int(part) for part in sec_str.split(":")]
     return (((hh * 60) + mm) * 60 + ss) * 1000 + int(ms_str)
 

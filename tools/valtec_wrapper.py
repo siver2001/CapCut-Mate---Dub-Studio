@@ -76,7 +76,10 @@ def append_silence_to_wav(wav_path: Path, duration_seconds: float) -> None:
 
 class ValtecProvider:
     def __init__(self):
-        root = Path(__file__).parent.parent
+        if getattr(sys, 'frozen', False):
+            root = Path(sys.executable).resolve().parent
+        else:
+            root = Path(__file__).parent.parent
         self.model_dir = root / "temp" / "models" / "valtec"
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self._tts = None
@@ -158,16 +161,6 @@ class ValtecProvider:
             "valtec:sm": "SM", "valtec:nm2": "NM2"
         }
         
-        # Mapping for high-quality native reference voices (Thu Ha, Minh Duc, etc.)
-        VALTEC_REFERENCE_VOICES = {
-            "valtec:thu_ha": "thu_ha.wav",
-            "valtec:minh_duc": "minh_duc.wav",
-            "valtec:thanh_tam": "thanh_tam.wav",
-            "valtec:quang_huy": "quang_huy.wav",
-            "valtec:ngoc_anh": "ngoc_anh.wav",
-            "valtec:hoang_nam": "hoang_nam.wav"
-        }
-        
         selected_voice = voice_name or "valtec:nf"
         
         # 1. Native VITS presets (speak directly using internal weights)
@@ -180,31 +173,7 @@ class ValtecProvider:
                 output_path=str(output_path),
                 speed=speed
             )
-        # 2. Native Reference Preset voices (Thu Ha, Minh Duc, Thanh Tam, etc.)
-        elif selected_voice in VALTEC_REFERENCE_VOICES:
-            ref_file = VALTEC_REFERENCE_VOICES[selected_voice]
-            # Reference file is located in tools/valtec_repo/examples/zeroshot/example_<name>.wav
-            ref_path = Path(__file__).parent / "valtec_repo" / "examples" / "zeroshot" / f"example_{ref_file}"
-            
-            # If the native high-quality reference audio exists, use it for zero-shot synthesis!
-            if ref_path.exists():
-                engine = self._load_zero_shot()
-                engine.clone_voice(
-                    text=text,
-                    reference_audio=str(ref_path),
-                    output_path=str(output_path),
-                    length_scale=speed
-                )
-            else:
-                # Fallback to NF preset
-                engine = self._load_tts()
-                engine.speak(
-                    text=text,
-                    speaker="NF",
-                    output_path=str(output_path),
-                    speed=speed
-                )
-        # 3. Custom Zero-shot cloning (from the original video's character audio prompt)
+        # 2. Custom Zero-shot cloning (from the original video's character audio prompt)
         else:
             if prompt_audio and prompt_audio.exists():
                 engine = self._load_zero_shot()

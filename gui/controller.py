@@ -317,6 +317,7 @@ class DubStudioJobController(QWidget):
         process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUNBUFFERED", "1")
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))
         

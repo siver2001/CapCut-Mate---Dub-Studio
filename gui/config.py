@@ -158,6 +158,19 @@ EDGE_VOICE_OPTIONS = [
 ]
 
 OMNIVOICE_PRESET_OPTIONS = []
+CUSTOM_OMNIVOICE_VOICES_FILE = ROOT / "config" / "custom_omnivoice_voices.json"
+_TEMP_OMNIVOICE_SHORTS = {}
+if CUSTOM_OMNIVOICE_VOICES_FILE.exists():
+    try:
+        import json
+        custom_data = json.loads(CUSTOM_OMNIVOICE_VOICES_FILE.read_text(encoding="utf-8"))
+        for k, v in custom_data.items():
+            label = v.get("label", k)
+            clean_label = label.replace(" (OmniVoice)", "")
+            OMNIVOICE_PRESET_OPTIONS.append((k, f"OmniVoice • {clean_label}"))
+            _TEMP_OMNIVOICE_SHORTS[k] = clean_label
+    except Exception:
+        pass
 
 VALTEC_PRESET_OPTIONS = [
     ("valtec:nf", "Nữ miền Bắc"),
@@ -167,14 +180,7 @@ VALTEC_PRESET_OPTIONS = [
     ("valtec:nm2", "Nam miền Bắc 2"),
 ]
 
-VALTEC_REFERENCE_OPTIONS = [
-    ("valtec:thu_ha", "Thu Hà"),
-    ("valtec:minh_duc", "Minh Đức"),
-    ("valtec:thanh_tam", "Thanh Tâm"),
-    ("valtec:quang_huy", "Quang Huy"),
-    ("valtec:ngoc_anh", "Ngọc Ánh"),
-    ("valtec:hoang_nam", "Hoàng Nam"),
-]
+VALTEC_REFERENCE_OPTIONS = []
 
 CUSTOM_VALTEC_VOICES_FILE = ROOT / "config" / "custom_valtec_voices.json"
 if CUSTOM_VALTEC_VOICES_FILE.exists():
@@ -211,15 +217,10 @@ SHORT_VOICE_LABELS = {
     "valtec:nm1": "Nam miền Bắc",
     "valtec:sm": "Nam miền Nam",
     "valtec:nm2": "Nam miền Bắc 2",
-    "valtec:thu_ha": "Thu Hà",
-    "valtec:minh_duc": "Minh Đức",
-    "valtec:thanh_tam": "Thanh Tâm",
-    "valtec:quang_huy": "Quang Huy",
-    "valtec:ngoc_anh": "Ngọc Ánh",
-    "valtec:hoang_nam": "Hoàng Nam",
     "edge:male": "Nam Minh",
     "edge:female": "Hoài My",
 }
+SHORT_VOICE_LABELS.update(_TEMP_OMNIVOICE_SHORTS)
 
 VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
 
@@ -595,7 +596,8 @@ VOICE_LABELS = {value: label for value, label in VOICE_OPTIONS}
 
 DEFAULT_VOICES = (
     [
-        "valtec:thanh_tam",
+        "edge:male",
+        "edge:female",
         "valtec:thu_ha",
         "valtec:nf",
         "valtec:nm1",
@@ -605,6 +607,8 @@ DEFAULT_VOICES = (
     ]
     if VALTEC_ZEROSHOT_AVAILABLE
     else [
+        "edge:male",
+        "edge:female",
         "valtec:nf",
         "valtec:sf",
         "valtec:nm1",

@@ -1166,9 +1166,18 @@ def ensure_omnivoice_runtime(*, phase: str, step: str, progress: float) -> None:
         progress=progress,
         message="Đang khởi động OmniVoice-TTS...",
     )
-    with temporarily_use_workspace_hf_home():
-        from tools.omnivoice_wrapper import get_omnivoice_provider
-        get_omnivoice_provider()
+    try:
+        with temporarily_use_workspace_hf_home():
+            from tools.omnivoice_wrapper import get_omnivoice_provider
+            get_omnivoice_provider()
+    except Exception as exc:
+        safe_print(f"[warn] Không thể khởi tạo OmniVoice-TTS: {exc}")
+        emit_progress(
+            phase=phase,
+            step=step,
+            progress=progress,
+            message=f"Cảnh báo: Không thể khởi chạy OmniVoice-TTS do lỗi môi trường ({exc}). Chế độ clone giọng nói có thể tạm thời không khả dụng.",
+        )
 
 
 def ensure_local_translation_models(*, phase: str, step: str, progress: float) -> None:

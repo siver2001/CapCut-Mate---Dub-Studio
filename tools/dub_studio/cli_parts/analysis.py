@@ -717,10 +717,10 @@ def resolve_valtec_reference_audio(voice: str) -> Path | None:
 def transcribe_reference_audio_file(audio_path: Path) -> str:
     if not audio_path.exists():
         return ""
-    import tempfile
-    
-    temp_dir = Path(tempfile.gettempdir())
-    temp_srt = temp_dir / f"transcribe_ref_{audio_path.stem}_{time.time_ns()}.srt"
+    temp_dir = ROOT / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    safe_stem = re.sub(r"[^a-zA-Z0-9_]", "_", audio_path.stem)
+    temp_srt = temp_dir / f"transcribe_ref_{safe_stem}_{time.time_ns()}.srt"
     
     try:
         transcribe_to_srt(audio_path, temp_srt, language="vi", max_len=999)
@@ -847,7 +847,6 @@ def recommend_voice_preset(
     normalized = normalize_text(value).lower().replace("-", "_")
     gender = normalize_text(estimated_gender).lower()
     female_reference_voices = (
-        "valtec:thanh_tam",
         "valtec:nf",
         "valtec:sf",
     )

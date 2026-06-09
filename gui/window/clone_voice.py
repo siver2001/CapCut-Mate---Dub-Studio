@@ -19,9 +19,11 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QFileDialog,
     QMessageBox,
-    QFrame
+    QFrame,
+    QComboBox,
+    QProgressBar
 )
-from gui.utils import ensure_dir, repair_mojibake_text
+from gui.utils import ensure_dir, repair_mojibake_text, decode_process_bytes
 
 
 class WindowCloneVoiceMixin:
@@ -119,26 +121,69 @@ class WindowCloneVoiceMixin:
         self.clone_test_text_edit.setMaximumHeight(80)
         grid.addWidget(self.clone_test_text_edit, 3, 1)
 
+        # 5. Thiết bị chạy (Device)
+        grid.addWidget(self._field_label("Thiết bị chạy OmniVoice:"), 4, 0)
+        self.clone_device_combo = QComboBox()
+        self.clone_device_combo.addItem("Auto (Tự động - Ưu tiên GPU)", "auto")
+        self.clone_device_combo.addItem("GPU (NVIDIA CUDA)", "cuda")
+        self.clone_device_combo.addItem("CPU (Ổn định)", "cpu")
+        self.clone_device_combo.setStyleSheet("""
+            QComboBox {
+                background: rgba(15, 23, 42, 0.4);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 8px;
+                color: #ffffff;
+                padding: 8px 12px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #0f172a;
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+            }
+        """)
+        
+        # Load initial device setting
+        init_device = os.environ.get("DUB_OMNIVOICE_DEVICE", "auto").lower()
+        idx = self.clone_device_combo.findData(init_device)
+        if idx >= 0:
+            self.clone_device_combo.setCurrentIndex(idx)
+        self.clone_device_combo.currentIndexChanged.connect(self.on_clone_device_changed)
+        grid.addWidget(self.clone_device_combo, 4, 1)
+
         clone_inner_layout.addLayout(grid)
 
         # Actions row
         actions = QHBoxLayout()
         actions.setSpacing(12)
 
-        self.clone_test_btn = self._make_button("Nghe thử", "ghost")
-        self.clone_test_btn.setMinimumHeight(40)
-        self.clone_test_btn.clicked.connect(self.on_test_clone_voice_clicked)
-        
-        self.clone_save_btn = self._make_button("Lưu giọng đọc", "success")
+        self.clone_save_btn = self._make_button("Lưu giọng", "success")
         self.clone_save_btn.setMinimumHeight(40)
         self.clone_save_btn.clicked.connect(self.on_save_clone_voice_clicked)
 
-        actions.addWidget(self.clone_test_btn, 1)
+        self.clone_test_btn = self._make_button("Clone giọng", "ghost")
+        self.clone_test_btn.setMinimumHeight(40)
+        self.clone_test_btn.clicked.connect(self.on_test_clone_voice_clicked)
+        
+        self.clone_replay_btn = self._make_button("Nghe thử", "ghost")
+        self.clone_replay_btn.setMinimumHeight(40)
+        self.clone_replay_btn.clicked.connect(self.on_replay_clone_voice_clicked)
+        self.clone_replay_btn.setEnabled(False)  # Only enabled after a preview is generated
+
         actions.addWidget(self.clone_save_btn, 1)
+        actions.addWidget(self.clone_test_btn, 1)
+        actions.addWidget(self.clone_replay_btn, 1)
         clone_inner_layout.addLayout(actions)
 
+        # Progress bar
+        self.clone_progress_bar = QProgressBar()
+        self.clone_progress_bar.setRange(0, 100)
+        self.clone_progress_bar.setValue(0)
+        self.clone_progress_bar.setTextVisible(False)
+        self.clone_progress_bar.setVisible(False)
+        clone_inner_layout.addWidget(self.clone_progress_bar)
+
         # Status area
-        self.clone_status_label = QLabel("Chuẩn bị file .wav và bấm Nghe thử để kiểm tra.")
+        self.clone_status_label = QLabel("Chuẩn bị file .wav, nhập tên và bấm 'Clone giọng' để nghe thử, sau đó bấm 'Lưu giọng' nếu ưng ý.")
         self.clone_status_label.setObjectName("SectionHint")
         self.clone_status_label.setWordWrap(True)
         self.clone_status_label.setStyleSheet("color: #94a3b8; font-style: italic;")
@@ -209,59 +254,135 @@ class WindowCloneVoiceMixin:
             f"Đã chọn tệp: {os.path.basename(file_path)} ({duration:.2f} giây). Sẵn sàng để Nghe thử hoặc Lưu."
         )
 
+    def on_clone_device_changed(self) -> None:
+        device_val = self.clone_device_combo.currentData()
+        self._save_omnivoice_device_setting(device_val)
+        self.clone_status_label.setText(f"Đã chuyển thiết bị OmniVoice sang: {self.clone_device_combo.currentText()}")
+
+    def _save_omnivoice_device_setting(self, device_val: str) -> None:
+        from gui.config import ROOT
+        env_file = ROOT / ".env"
+        
+        # Update current os.environ at runtime
+        os.environ["DUB_OMNIVOICE_DEVICE"] = device_val
+        
+        lines = []
+        if env_file.exists():
+            try:
+                lines = env_file.read_text(encoding="utf-8-sig").splitlines()
+            except Exception:
+                pass
+                
+        updated = False
+        new_lines = []
+        for raw_line in lines:
+            line_stripped = raw_line.strip()
+            if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
+                k, v = line_stripped.split("=", 1)
+                k = k.strip()
+                if k == "DUB_OMNIVOICE_DEVICE":
+                    new_lines.append(f"DUB_OMNIVOICE_DEVICE={device_val}")
+                    updated = True
+                else:
+                    new_lines.append(raw_line)
+            else:
+                new_lines.append(raw_line)
+                
+        if not updated:
+            new_lines.append(f"DUB_OMNIVOICE_DEVICE={device_val}")
+            
+        try:
+            env_file.write_text("\n".join(new_lines), encoding="utf-8")
+        except Exception:
+            pass
 
     def on_test_clone_voice_clicked(self) -> None:
+        name = self.clone_name_edit.text().strip()
         ref_path = self.clone_wav_path_edit.text().strip()
         test_text = self.clone_test_text_edit.toPlainText().strip()
         ref_text = self.clone_ref_text_edit.toPlainText().strip()
 
+        if not name:
+            QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng nhập tên giọng clone.")
+            return
         if not ref_path or not os.path.exists(ref_path):
-            QMessageBox.warning(self, "Thiếu tệp tin", "Vui lòng chọn tệp âm thanh mẫu (.wav) trước khi nghe thử.")
+            QMessageBox.warning(self, "Thiếu tệp tin", "Vui lòng chọn tệp âm thanh mẫu (.wav) trước khi clone giọng.")
             return
         if not test_text:
             QMessageBox.warning(self, "Thiếu văn bản", "Vui lòng nhập văn bản kiểm thử.")
             return
 
-        self.clone_status_label.setText("Đang khởi tạo mô hình OmniVoice và tổng hợp giọng clone...")
-        self.clone_test_btn.setEnabled(False)
-        self.clone_save_btn.setEnabled(False)
-
-        # Chạy logic test lồng tiếng ngầm qua CLI của CapCutMate
-        from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, is_frozen
-        preview_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "voice_preview")
-        result_path = preview_dir / "clone_preview_status.json"
-
-        # Cấu hình file JSON tạm cho preview
-        temp_voices_file = ROOT / "config" / "custom_omnivoice_voices.json"
+        from gui.config import ROOT
         
-        # Backup tệp cấu hình cũ (nếu có)
-        backup_data = None
-        if temp_voices_file.exists():
-            try:
-                backup_data = json.loads(temp_voices_file.read_text(encoding="utf-8"))
-            except Exception: pass
+        # 1. Prepare temp directory and copy wav file
+        dest_dir = ensure_dir(ROOT / "config" / "voices" / "omnivoice")
+        temp_wav_filename = "__temp_clone__.wav"
+        temp_wav_path = dest_dir / temp_wav_filename
+        
+        try:
+            shutil.copy2(ref_path, temp_wav_path)
+        except Exception as e:
+            QMessageBox.warning(self, "Lỗi sao chép", f"Không thể chuẩn bị file âm thanh mẫu nghe thử: {e}")
+            return
 
-        # Ghi đè cấu hình tạm thời chứa ID '__temp_clone__'
-        temp_data = dict(backup_data or {})
-        temp_data["omnivoice:__temp_clone__"] = {
-            "filename": os.path.basename(ref_path),
+        # 2. Write temp voice config to custom_omnivoice_voices.json so subprocess can resolve it
+        config_file = ROOT / "config" / "custom_omnivoice_voices.json"
+        data = {}
+        if config_file.exists():
+            try:
+                data = json.loads(config_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        
+        voice_id = "omnivoice:__temp_clone__"
+        safe_name = "__temp_clone__"
+        
+        data[voice_id] = {
+            "filename": temp_wav_filename,
             "ref_text": ref_text,
             "label": "Clone • Temp"
         }
         
         try:
-            ref_target_dir = ensure_dir(ROOT / "config" / "voices" / "omnivoice")
-            shutil.copy2(ref_path, ref_target_dir / os.path.basename(ref_path))
-            temp_voices_file.write_text(json.dumps(temp_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            config_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
-            self.clone_status_label.setText(f"Lỗi chuẩn bị tệp: {e}")
-            self.clone_test_btn.setEnabled(True)
-            self.clone_save_btn.setEnabled(True)
+            QMessageBox.warning(self, "Lỗi ghi cấu hình", f"Không thể tạo cấu hình nghe thử tạm thời: {e}")
             return
+            
+        # Update current GUI memory state
+        from tools.dub_studio.config import CUSTOM_OMNIVOICE_VOICES as cli_custom_voices
+        cli_custom_voices[voice_id] = data[voice_id]
+
+        self.clone_status_label.setText("Đang khởi tạo mô hình OmniVoice và tổng hợp giọng clone...")
+        self.clone_test_btn.setEnabled(False)
+        self.clone_save_btn.setEnabled(False)
+        self.clone_replay_btn.setEnabled(False)
+
+        # Run pipeline preview-voice
+        from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, is_frozen
+        preview_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "voice_preview")
+        result_path = preview_dir / "clone_preview_status.json"
 
         process = QProcess(self)
+        process.stdout_data = []
+        process.stderr_data = []
+        
+        def read_stdout():
+            process.stdout_data.append(process.readAllStandardOutput().data())
+        def read_stderr():
+            process.stderr_data.append(process.readAllStandardError().data())
+            
+        process.readyReadStandardOutput.connect(read_stdout)
+        process.readyReadStandardError.connect(read_stderr)
+        
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUNBUFFERED", "1")
+        
+        # Pass device setting from combo
+        device_val = self.clone_device_combo.currentData()
+        env.insert("DUB_OMNIVOICE_DEVICE", device_val)
+        
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))
         
@@ -273,9 +394,9 @@ class WindowCloneVoiceMixin:
             
         args.extend([
             "preview-voice",
-            "--voice", "omnivoice:__temp_clone__",
+            "--voice", voice_id,
             "--text", test_text,
-            "--speaker-id", "__temp_clone__",
+            "--speaker-id", safe_name,
             "--output-json", str(result_path)
         ])
         
@@ -283,41 +404,60 @@ class WindowCloneVoiceMixin:
         process.setWorkingDirectory(str(ROOT))
         
         def on_finished(code: int):
+            self.clone_progress_bar.setVisible(False)
+            self.clone_progress_bar.setRange(0, 100)
             self.clone_test_btn.setEnabled(True)
             self.clone_save_btn.setEnabled(True)
             
-            # Khôi phục tệp cấu hình gốc sau khi chạy xong
-            if backup_data is not None:
-                temp_voices_file.write_text(json.dumps(backup_data, ensure_ascii=False, indent=2), encoding="utf-8")
-            elif temp_voices_file.exists():
-                try: temp_voices_file.unlink()
-                except Exception: pass
-
+            stdout_str = decode_process_bytes(b"".join(process.stdout_data))
+            stderr_str = decode_process_bytes(b"".join(process.stderr_data))
+            
             if code != 0 or not result_path.exists():
                 self.clone_status_label.setText("Tổng hợp giọng clone thất bại.")
-                QMessageBox.warning(self, "Lỗi tổng hợp", "Không thể tạo file nghe thử. Hãy đảm bảo tệp .wav đúng định dạng và mô hình không bị lỗi.")
+                try:
+                    error_log_path = preview_dir / "clone_error.log"
+                    error_log_path.write_text(
+                        f"Exit Code: {code}\n"
+                        f"--- STDERR ---\n{stderr_str}\n"
+                        f"--- STDOUT ---\n{stdout_str}\n",
+                        encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+                
+                err_msg = stderr_str.strip() or stdout_str.strip() or "Không nhận dạng được lỗi (quá thời gian hoặc tiến trình bị tắt đột ngột)."
+                detailed_msg = f"Không thể thực hiện clone giọng. Hãy đảm bảo tệp .wav đúng định dạng và mô hình không bị lỗi.\n\nChi tiết lỗi:\n{err_msg}"
+                QMessageBox.warning(self, "Lỗi tổng hợp", repair_mojibake_text(detailed_msg))
                 return
 
             try:
                 payload = json.loads(result_path.read_text(encoding="utf-8-sig"))
                 audio_path = payload.get("outputPath")
                 
-                # Check for auto-transcribed reference text
-                ref_text_transcribed = payload.get("refText")
-                if ref_text_transcribed and not self.clone_ref_text_edit.toPlainText().strip():
-                    self.clone_ref_text_edit.setPlainText(ref_text_transcribed)
-
                 if audio_path and os.path.exists(audio_path):
+                    self._last_clone_preview_path = audio_path
+                    self.clone_replay_btn.setEnabled(True)
                     self.clone_status_label.setText("Đang phát âm thanh clone...")
-                    self._play_voice_preview_audio(audio_path, "Giọng clone của bạn", self.clone_status_label)
+                    self._play_voice_preview_audio(audio_path, f"Giọng clone {name}", self.clone_status_label)
                 else:
                     self.clone_status_label.setText("Không tìm thấy file audio output.")
             except Exception as e:
                 self.clone_status_label.setText(f"Lỗi đọc kết quả: {e}")
 
         process.finished.connect(on_finished)
+        self.clone_progress_bar.setRange(0, 0)
+        self.clone_progress_bar.setVisible(True)
         process.start()
         QTimer.singleShot(180000, process.kill)
+
+    def on_replay_clone_voice_clicked(self) -> None:
+        audio_path = getattr(self, "_last_clone_preview_path", None)
+        if audio_path and os.path.exists(audio_path):
+            self.clone_status_label.setText("Đang phát âm thanh nghe thử...")
+            self._play_voice_preview_audio(audio_path, "Giọng clone phát lại", self.clone_status_label)
+        else:
+            self.clone_status_label.setText("Không tìm thấy file âm thanh nghe thử.")
+            self.clone_replay_btn.setEnabled(False)
 
     def on_save_clone_voice_clicked(self) -> None:
         name = self.clone_name_edit.text().strip()
@@ -335,6 +475,7 @@ class WindowCloneVoiceMixin:
             self.clone_status_label.setText("Đang tự động phân tích và nhận diện văn bản từ tệp mẫu...")
             self.clone_test_btn.setEnabled(False)
             self.clone_save_btn.setEnabled(False)
+            self.clone_replay_btn.setEnabled(False)
             
             from gui.config import PIPELINE_PATH, PIPELINE_PYTHON, ROOT, is_frozen
             preview_dir = ensure_dir(ROOT / "temp" / "dub_studio" / "voice_preview")
@@ -344,8 +485,20 @@ class WindowCloneVoiceMixin:
                 except Exception: pass
 
             process = QProcess(self)
+            process.stdout_data = []
+            process.stderr_data = []
+            
+            def read_stdout():
+                process.stdout_data.append(process.readAllStandardOutput().data())
+            def read_stderr():
+                process.stderr_data.append(process.readAllStandardError().data())
+                
+            process.readyReadStandardOutput.connect(read_stdout)
+            process.readyReadStandardError.connect(read_stderr)
+            
             env = QProcessEnvironment.systemEnvironment()
             env.insert("PYTHONIOENCODING", "utf-8")
+            env.insert("PYTHONUNBUFFERED", "1")
             process.setProcessEnvironment(env)
             process.setProgram(str(PIPELINE_PYTHON))
             
@@ -365,8 +518,15 @@ class WindowCloneVoiceMixin:
             process.setWorkingDirectory(str(ROOT))
             
             def on_transcribe_finished(code: int):
+                self.clone_progress_bar.setVisible(False)
+                self.clone_progress_bar.setRange(0, 100)
                 self.clone_test_btn.setEnabled(True)
                 self.clone_save_btn.setEnabled(True)
+                if getattr(self, "_last_clone_preview_path", None) and os.path.exists(self._last_clone_preview_path):
+                    self.clone_replay_btn.setEnabled(True)
+                
+                stdout_str = decode_process_bytes(b"".join(process.stdout_data))
+                stderr_str = decode_process_bytes(b"".join(process.stderr_data))
                 
                 transcribed_text = ""
                 if code == 0 and transcribe_result_path.exists():
@@ -378,6 +538,19 @@ class WindowCloneVoiceMixin:
                 
                 if not transcribed_text:
                     self.clone_status_label.setText("Không thể tự động nhận dạng văn bản mẫu.")
+                    try:
+                        error_log_path = preview_dir / "transcribe_error.log"
+                        error_log_path.write_text(
+                            f"Exit Code: {code}\n"
+                            f"--- STDERR ---\n{stderr_str}\n"
+                            f"--- STDOUT ---\n{stdout_str}\n",
+                            encoding="utf-8"
+                        )
+                    except Exception:
+                        pass
+                    err_msg = stderr_str.strip() or stdout_str.strip() or "Không nhận dạng được lỗi (quá thời gian hoặc tiến trình bị tắt đột ngột)."
+                    QMessageBox.warning(self, "Lỗi nhận dạng", f"Không thể tự động nhận dạng văn bản mẫu.\n\nChi tiết lỗi:\n{err_msg}")
+                    return
                 else:
                     self.clone_ref_text_edit.setPlainText(transcribed_text)
                     self.clone_status_label.setText("Đã tự động nhận diện văn bản mẫu thành công!")
@@ -385,6 +558,8 @@ class WindowCloneVoiceMixin:
                 self._proceed_save_clone_voice(name, ref_path, transcribed_text)
 
             process.finished.connect(on_transcribe_finished)
+            self.clone_progress_bar.setRange(0, 0)
+            self.clone_progress_bar.setVisible(True)
             process.start()
             QTimer.singleShot(180000, process.kill)
             return
@@ -416,6 +591,17 @@ class WindowCloneVoiceMixin:
                 data = json.loads(config_file.read_text(encoding="utf-8"))
             except Exception: pass
 
+        # Clean up temporary clone voice if it exists
+        temp_voice_id = "omnivoice:__temp_clone__"
+        data.pop(temp_voice_id, None)
+        
+        temp_wav_path = dest_dir / "__temp_clone__.wav"
+        if temp_wav_path.exists():
+            try:
+                temp_wav_path.unlink()
+            except Exception:
+                pass
+
         voice_id = f"omnivoice:{safe_name}"
         data[voice_id] = {
             "filename": dest_filename,
@@ -433,6 +619,7 @@ class WindowCloneVoiceMixin:
         from tools.dub_studio.config import CUSTOM_OMNIVOICE_VOICES as cli_custom_voices
         from gui.config import SHORT_VOICE_LABELS as gui_short_labels, VOICE_LABELS as gui_labels, VOICE_OPTIONS as gui_options, INTRO_TTS_OPTIONS as gui_intro_options
         
+        cli_custom_voices.pop(temp_voice_id, None)
         cli_custom_voices[voice_id] = data[voice_id]
         
         label_text = f"Clone • {name}"

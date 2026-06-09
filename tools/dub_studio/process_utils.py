@@ -155,17 +155,15 @@ def run_output(cmd: list[str], cwd: Path | None = None, timeout: float | None = 
 
 def module_available(module_name: str) -> bool:
     try:
-        if importlib.util.find_spec(module_name) is not None:
-            return True
+        if importlib.util.find_spec(module_name) is None:
+            return False
     except Exception:
-        pass
+        return False
     try:
         importlib.import_module(module_name)
         return True
-    except ImportError:
-        return False
     except Exception:
-        return True
+        return False
 
 
 
