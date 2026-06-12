@@ -13,7 +13,8 @@ APP_NAME = "CapCutMate"
 ENTRY_POINT = "main.py"
 
 DATA_DIRS = ("assets", "config", "tools")
-RUNTIME_MODEL_DIRS = ("valtec", "omnivoice")
+RUNTIME_MODEL_DIRS = ("omnivoice",)
+
 
 REQUIRED_IMPORTS = {
     "PyInstaller": "pyinstaller",
@@ -331,18 +332,21 @@ def copy_runtime_models(root: Path, output_dir: Path) -> None:
             shutil.rmtree(target_cache, ignore_errors=True)
         print(f"Copy HuggingFace cache: temp/.cache -> dist/{APP_NAME}/temp/.cache", flush=True)
         
-        # Exclude heavy foreign language XLS-R models (Chinese, Japanese, Korean) to save space
+        # Exclude heavy foreign language XLS-R models (Chinese, Japanese, Korean) to save space, keeping Vietnamese alignment models
         def ignore_cache_elements(path, names):
             ignored = []
             for name in names:
-                if name.endswith(".lock") or name.endswith(".tmp"):
+                name_lower = name.lower()
+                if name_lower.endswith(".lock") or name_lower.endswith(".tmp"):
                     ignored.append(name)
-                elif "wav2vec2-large-xlsr-53-chinese" in name or \
-                     "wav2vec2-large-xlsr-53-japanese" in name or \
-                     "wav2vec2-large-xlsr-korean" in name:
+                elif "wav2vec2-large-xlsr-53-chinese" in name_lower or \
+                     "wav2vec2-large-xlsr-53-japanese" in name_lower or \
+                     "wav2vec2-large-xlsr-korean" in name_lower:
                     print(f"  [info] Excluded foreign cache model from build: {name}", flush=True)
                     ignored.append(name)
             return ignored
+
+
 
         shutil.copytree(
             source_cache,
