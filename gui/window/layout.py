@@ -55,6 +55,7 @@ from gui.config import (
     TIMING_MODE_OPTIONS,
     UI_THEME_OPTIONS,
     VIDEO_CODEC_OPTIONS,
+    VIDEO_SPEED_OPTIONS,
     VOICE_OPTIONS,
     WATERMARK_POSITION_OPTIONS,
 )
@@ -323,6 +324,12 @@ class WindowLayoutMixin:
         settings_grid.setHorizontalSpacing(14)
         settings_grid.setVerticalSpacing(12)
         settings_layout.addLayout(settings_grid)
+        self.video_codec_combo = self._make_combo(
+            VIDEO_CODEC_OPTIONS, self.on_basic_settings_changed
+        )
+        self.video_speed_combo = self._make_combo(
+            VIDEO_SPEED_OPTIONS, self.on_basic_settings_changed
+        )
         self.subtitle_enabled_combo = self._make_combo(
             SUBTITLE_VISIBILITY_OPTIONS, self.on_basic_settings_changed
         )
@@ -530,8 +537,8 @@ class WindowLayoutMixin:
             (
                 "Chế độ encode",
                 self.video_codec_combo,
-                None,
-                None,
+                "Tốc độ video",
+                self.video_speed_combo,
             ),
             (
                 "Bật/Tắt vietsub",
@@ -858,6 +865,7 @@ class WindowLayoutMixin:
         self.main_timing_mode_combo = self._make_combo(TIMING_MODE_OPTIONS, self.on_basic_settings_changed)
         self.video_codec_combo = self._make_combo(VIDEO_CODEC_OPTIONS, self.on_basic_settings_changed)
         self.main_cleanup_combo = self._make_combo(CLEANUP_OPTIONS, self.on_basic_settings_changed)
+        self.video_speed_combo = self._make_combo(VIDEO_SPEED_OPTIONS, self.on_basic_settings_changed)
 
         lang_grid.addWidget(self._field_label("Ngôn ngữ nguồn"), 0, 0)
         lang_grid.addWidget(self.main_source_language_combo, 0, 1)
@@ -873,7 +881,11 @@ class WindowLayoutMixin:
         lang_grid.addWidget(self.main_cleanup_combo, 2, 1)
         lang_grid.addWidget(self._field_label("Chế độ encode"), 2, 2)
         lang_grid.addWidget(self.video_codec_combo, 2, 3)
+
+        lang_grid.addWidget(self._field_label("Tốc độ video"), 3, 0)
+        lang_grid.addWidget(self.video_speed_combo, 3, 1)
         lang_section.content_layout.addLayout(lang_grid)
+
 
         # Audio & Teaser
         audio_section = self._make_section("Audio & Teaser", expanded=False)

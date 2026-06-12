@@ -2258,6 +2258,7 @@ class WindowWorkflowMixin:
         self.settings["videoCodecMode"] = str(
             self.video_codec_combo.currentData() or "gpu_preferred"
         )
+        self.settings["videoSpeed"] = float(self.video_speed_combo.currentData() or 1.0)
         self.settings["sourceSubtitleCleanupMode"] = get_combo_val(getattr(self, "main_cleanup_combo", None), self.cleanup_combo)
         self.settings["subtitlePreset"]["enabled"] = (
             get_combo_val(None, self.subtitle_enabled_combo) == "on"
@@ -2451,6 +2452,7 @@ class WindowWorkflowMixin:
             "outputTargets": copy.deepcopy(self.settings["outputTargets"]),
             "outputRatio": self.settings.get("outputRatio", "original"),
             "timingMode": self.settings["timingMode"],
+            "videoSpeed": float(self.settings.get("videoSpeed", 1.0)),
             "videoCodecMode": self.settings.get("videoCodecMode", "gpu_preferred"),
             "keepOriginalAudio": self.settings["keepOriginalAudio"],
             "backgroundMusic": copy.deepcopy(self.settings.get("backgroundMusic", {})),
@@ -2577,6 +2579,7 @@ class WindowWorkflowMixin:
             self.speaker_count_spin,
             self.timing_mode_combo,
             self.video_codec_combo,
+            self.video_speed_combo,
             self.cleanup_combo,
             self.subtitle_enabled_combo,
             self.subtitle_position_combo,
@@ -2651,6 +2654,9 @@ class WindowWorkflowMixin:
         self._set_combo_value(self.timing_mode_combo, self.settings["timingMode"])
         self._set_combo_value(
             self.video_codec_combo, self.settings.get("videoCodecMode", "gpu_preferred")
+        )
+        self._set_combo_value(
+            self.video_speed_combo, str(self.settings.get("videoSpeed", 1.0))
         )
         self._set_combo_value(
             self.cleanup_combo, self.settings["sourceSubtitleCleanupMode"]

@@ -30,6 +30,8 @@ else:
         PIPELINE_PYTHON = Path(sys.executable)
 
 PIPELINE_PATH = ROOT / "tools" / "dub_studio_pipeline.py"
+APP_VERSION = "1.0.0"
+
 
 
 TEMP_DUB_DIR = ROOT / "temp" / "dub_studio"
@@ -376,6 +378,16 @@ VIDEO_CODEC_OPTIONS = [
     ("cpu_stable", "CPU ổn định"),
 ]
 
+VIDEO_SPEED_OPTIONS = [
+    ("0.5", "0.5x"),
+    ("0.75", "0.75x"),
+    ("1.0", "1x (Mặc định)"),
+    ("1.25", "1.25x"),
+    ("1.5", "1.5x"),
+    ("2.0", "2x"),
+]
+
+
 TRANSLATE_PROVIDER_OPTIONS = [
     ("auto", "Tự động (Ưu tiên Ollama → llama.cpp)"),
     ("ollama", "Ollama (Local API, Gemma 4 E2B)"),
@@ -558,6 +570,16 @@ VIDEO_CODEC_OPTIONS = [
     ("gpu_preferred", "GPU tăng tốc (NVENC)"),
     ("cpu_stable", "CPU ổn định"),
 ]
+
+VIDEO_SPEED_OPTIONS = [
+    ("0.5", "0.5x"),
+    ("0.75", "0.75x"),
+    ("1.0", "1x (Mặc định)"),
+    ("1.25", "1.25x"),
+    ("1.5", "1.5x"),
+    ("2.0", "2x"),
+]
+
 
 TRANSLATE_PROVIDER_OPTIONS = [
     ("auto", "Tự động (Ưu tiên Ollama → llama.cpp)"),

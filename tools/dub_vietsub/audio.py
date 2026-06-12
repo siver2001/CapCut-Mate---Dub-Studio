@@ -109,8 +109,11 @@ def create_dub_audio(
     translated_lines: list[str],
     voices: list[str],
     rate_override: str | None = None,
+    video_speed: float = 1.0,
 ) -> tuple[Path, list[ClipManifest]]:
     video_duration_ms = ffprobe_duration_ms(video_path)
+    if video_speed != 1.0:
+        video_duration_ms = int(video_duration_ms / video_speed)
     mix = AudioSegment.silent(duration=video_duration_ms + 800)
     tts_dir = TEMP_DIR / "tts_clips"
     manifest: list[ClipManifest] = []
@@ -161,9 +164,11 @@ def create_dub_audio(
     return dub_audio_path, manifest
 
 
-def mix_audio(video_path: Path, dub_audio_path: Path, keep_original_audio: bool) -> Path:
+def mix_audio(video_path: Path, dub_audio_path: Path, keep_original_audio: bool, video_speed: float = 1.0) -> Path:
     dub_audio = AudioSegment.from_file(dub_audio_path) + 2
     target_duration = ffprobe_duration_ms(video_path)
+    if video_speed != 1.0:
+        target_duration = int(target_duration / video_speed)
     if len(dub_audio) < target_duration:
         dub_audio += AudioSegment.silent(duration=target_duration - len(dub_audio))
 
@@ -171,6 +176,17 @@ def mix_audio(video_path: Path, dub_audio_path: Path, keep_original_audio: bool)
         mixed = dub_audio[:target_duration]
     else:
         original_audio = AudioSegment.from_file(video_path)
+        if video_speed != 1.0:
+            temp_orig = TEMP_DIR / "temp_orig_voice.wav"
+            temp_speeded = TEMP_DIR / "temp_orig_speeded.wav"
+            original_audio.export(temp_orig, format="wav")
+            run(["ffmpeg", "-y", "-i", str(temp_orig), "-filter:a", build_atempo_filter(video_speed), str(temp_speeded)])
+            original_audio = AudioSegment.from_file(temp_speeded)
+            try:
+                temp_orig.unlink(missing_ok=True)
+                temp_speeded.unlink(missing_ok=True)
+            except Exception:
+                pass
         if len(original_audio) < target_duration:
             original_audio += AudioSegment.silent(duration=target_duration - len(original_audio))
         mixed = (original_audio[:target_duration] - 22).overlay(dub_audio[:target_duration])

@@ -144,17 +144,17 @@ class DubStudioJobController(QWidget):
         if self._get_running_job_id():
             raise RuntimeError("A pipeline task is already running.")
             
+        job_id = str(uuid.uuid4())
+        job = create_base_job(job_id, input_path)
+        self.jobs[job_id] = job
+        self._last_activity_at[job_id] = time.monotonic()
+
         # Pre-flight: Check HF Token if WhisperX is used (default)
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         provider = (os.environ.get("DUB_TRANSCRIBE_PROVIDER") or "auto").lower()
         if provider == "auto" or provider == "whisperx":
             if not hf_token:
-                append_job_log(None, "Cảnh báo: Chưa có HF_TOKEN trong .env. Diarization có thể không hoạt động.", "warn")
-
-        job_id = str(uuid.uuid4())
-        job = create_base_job(job_id, input_path)
-        self.jobs[job_id] = job
-        self._last_activity_at[job_id] = time.monotonic()
+                append_job_log(job, "Cảnh báo: Chưa có HF_TOKEN trong .env. Diarization có thể không hoạt động.", "warn")
         
         if options:
             job["overrides"] = copy.deepcopy(options)

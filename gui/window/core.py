@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import QMainWindow
 
 from gui.controller import DubStudioJobController
 from gui.utils import default_settings, safe_qta_icon
+from gui.config import APP_VERSION
 
 from .helpers import WindowHelpersMixin
 from .layout import WindowLayoutMixin
@@ -43,7 +44,7 @@ class DubStudioWindow(
 ):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("CapCut Mate · Dub Studio PyQt6")
+        self.setWindowTitle(f"CapCut Mate · Dub Studio PyQt6 v{APP_VERSION}")
         self._fit_window_to_screen()
         logo_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),

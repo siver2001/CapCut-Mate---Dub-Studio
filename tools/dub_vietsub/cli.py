@@ -60,6 +60,12 @@ def parse_args() -> argparse.Namespace:
         default=24,
         help="Approximate line wrap width for Vietnamese subtitles.",
     )
+    parser.add_argument(
+        "--video-speed",
+        type=float,
+        default=1.0,
+        help="Video and audio speed scaling factor.",
+    )
     return parser.parse_args()
 
 
@@ -105,14 +111,19 @@ def main() -> int:
         translated_lines,
         wrap_width=args.wrap_width,
     )
+    if args.video_speed != 1.0:
+        from datetime import timedelta
+        for sub in vietnamese_subtitles:
+            sub.start = timedelta(seconds=sub.start.total_seconds() / args.video_speed)
+            sub.end = timedelta(seconds=sub.end.total_seconds() / args.video_speed)
     save_srt(vietnamese_srt_path, vietnamese_subtitles)
 
     print("Step 4/5: Generating Vietnamese dub...")
-    dub_audio_path, manifest = create_dub_audio(video_path, vietnamese_subtitles, translated_lines, args.voices)
+    dub_audio_path, manifest = create_dub_audio(video_path, vietnamese_subtitles, translated_lines, args.voices, video_speed=args.video_speed)
     write_manifest(manifest)
 
     print("Step 5/5: Mixing audio and exporting final video...")
-    mixed_audio_path = mix_audio(video_path, dub_audio_path, keep_original_audio=args.keep_original_audio)
+    mixed_audio_path = mix_audio(video_path, dub_audio_path, keep_original_audio=args.keep_original_audio, video_speed=args.video_speed)
     burn_subtitles(
         video_path,
         mixed_audio_path,
@@ -120,6 +131,7 @@ def main() -> int:
         output_path,
         cover_source_subtitles=args.cover_source_subtitles,
         subtitle_font_size=args.subtitle_font_size,
+        video_speed=args.video_speed,
     )
 
     print(f"Done. Final video: {output_path}")

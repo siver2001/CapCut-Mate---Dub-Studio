@@ -2430,10 +2430,14 @@ def create_final_audio(
     background_audio_path: Path | None = None,
     background_music_path: Path | None = None,
     background_music_volume: float = 0.0,
+    video_speed: float = 1.0,
 ) -> None:
     normalized_mode = normalize_audio_mix_mode(audio_mix_mode, keep_original_audio=keep_original_audio)
+    video_duration_ms = ffprobe_duration_ms(video_path)
+    if video_speed != 1.0:
+        video_duration_ms = video_duration_ms / video_speed
     target_duration_ms = max(
-        ffprobe_duration_ms(video_path),
+        video_duration_ms,
         ffprobe_audio_duration_ms(dub_audio_path),
     )
     command = [
@@ -2462,9 +2466,14 @@ def create_final_audio(
         mix_inputs.append(background_music_label)
     if normalized_mode == "preserve_background" and background_audio_path and background_audio_path.exists():
         command.extend(["-i", str(background_audio_path)])
-        filter_parts.append(
-            f"[{input_index}:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
-        )
+        if video_speed != 1.0:
+            filter_parts.append(
+                f"[{input_index}:a]{build_atempo_filter(video_speed)},volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
+            )
+        else:
+            filter_parts.append(
+                f"[{input_index}:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
+            )
         mix_inputs.append("[bed]")
         input_index += 1
     elif (normalized_mode == "preserve_original_low" or (normalized_mode == "preserve_background" and keep_original_audio)) and keep_original_audio:
@@ -2475,9 +2484,14 @@ def create_final_audio(
             has_video_audio = False
         if has_video_audio:
             command.extend(["-i", str(video_path)])
-            filter_parts.append(
-                f"[{input_index}:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
-            )
+            if video_speed != 1.0:
+                filter_parts.append(
+                    f"[{input_index}:a]{build_atempo_filter(video_speed)},volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
+                )
+            else:
+                filter_parts.append(
+                    f"[{input_index}:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
+                )
             mix_inputs.append("[orig]")
             input_index += 1
     command.extend(["-i", str(dub_audio_path)])

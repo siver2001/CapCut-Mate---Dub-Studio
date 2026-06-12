@@ -729,6 +729,7 @@ def default_settings() -> dict[str, Any]:
         "outputTargets": {"mp4": True, "draft": False},
         "outputRatio": "9:16",
         "timingMode": "balanced_natural",
+        "videoSpeed": 1.0,
         "videoCodecMode": "gpu_preferred",
         "uiThemePreset": "cinema",
         "audioMixMode": "preserve_background",
@@ -819,6 +820,8 @@ def create_base_job(job_id: str, input_path: str) -> dict[str, Any]:
 
 
 def append_job_log(job: dict[str, Any], message: str, level: str = "info") -> None:
+    if job is None:
+        return
     compact_message = " ".join(repair_mojibake_text(str(message or "")).split()).strip()
     if not compact_message:
         return

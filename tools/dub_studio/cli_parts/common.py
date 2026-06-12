@@ -116,3 +116,51 @@ def stable_audio_filter_chain(*, trim_boundaries: bool = False) -> str:
     filters.append("aresample=async=1:min_hard_comp=0.100:first_pts=0")
     filters.append("asetpts=N/SR/TB")
     return ",".join(filters)
+
+
+@contextmanager
+def safe_ffmpeg_path(path: Path, is_output: bool = False):
+    """
+    Ensures a path is relative to ROOT and has no spaces/colons,
+    which is required to avoid syntax errors in FFmpeg filter graphs on Windows.
+    If the path is on a different drive, outside ROOT, or contains spaces,
+    it redirects via a space-free temporary file inside ROOT/temp/ffmpeg_temp.
+    Yields: relative_path_as_posix
+    """
+    import uuid
+    import shutil
+    temp_file = None
+    try:
+        # Resolve path to absolute first
+        abs_path = path.resolve()
+    except Exception:
+        abs_path = path.absolute()
+        
+    try:
+        rel_path = abs_path.relative_to(ROOT)
+        has_spaces = " " in rel_path.as_posix()
+        if not has_spaces:
+            yield rel_path.as_posix()
+            return
+    except ValueError:
+        pass
+
+    temp_dir = ROOT / "temp" / "ffmpeg_temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_file = temp_dir / f"{uuid.uuid4().hex}{path.suffix}"
+    
+    if not is_output and abs_path.exists():
+        shutil.copy2(abs_path, temp_file)
+        
+    yield temp_file.relative_to(ROOT).as_posix()
+    
+    if is_output and temp_file.exists():
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(temp_file, abs_path)
+        
+    if temp_file and temp_file.exists():
+        try:
+            temp_file.unlink()
+        except Exception:
+            pass
+

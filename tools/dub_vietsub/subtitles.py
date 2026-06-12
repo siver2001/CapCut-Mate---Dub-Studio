@@ -7,7 +7,7 @@ from typing import Iterable
 import srt
 
 from .config import MODEL_PATH, ROOT
-from .io_utils import run
+from .io_utils import run, safe_ffmpeg_path
 from .text import normalize_text, split_display_text, wrap_vietnamese_text
 
 
@@ -55,27 +55,27 @@ def merge_short_subtitles(subtitles: Iterable[srt.Subtitle]) -> list[srt.Subtitl
 
 
 def transcribe_to_srt(video_path: Path, output_srt: Path) -> None:
-    relative_model = MODEL_PATH.relative_to(ROOT).as_posix()
-    relative_srt = output_srt.relative_to(ROOT).as_posix()
-    whisper_filter = (
-        f"whisper=model={relative_model}:language=zh:use_gpu=false:format=srt:"
-        f"destination={relative_srt}:max_len=32"
-    )
-    run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(video_path),
-            "-vn",
-            "-af",
-            whisper_filter,
-            "-f",
-            "null",
-            "-",
-        ],
-        cwd=ROOT,
-    )
+    with safe_ffmpeg_path(MODEL_PATH) as relative_model:
+        with safe_ffmpeg_path(output_srt, is_output=True) as relative_srt:
+            whisper_filter = (
+                f"whisper=model={relative_model}:language=zh:use_gpu=false:format=srt:"
+                f"destination={relative_srt}:max_len=32"
+            )
+            run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(video_path),
+                    "-vn",
+                    "-af",
+                    whisper_filter,
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                cwd=ROOT,
+            )
 
 
 def build_vietnamese_subtitles(

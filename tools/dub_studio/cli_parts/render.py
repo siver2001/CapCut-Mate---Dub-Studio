@@ -483,10 +483,13 @@ def burn_subtitles(
     dynamic_regions: list[dict[str, Any]] | None = None,
     use_ass: bool = False,
     output_ratio: str = "original",
+    video_speed: float = 1.0,
 ) -> None:
     codec, codec_args = choose_video_codec()
     source_video_meta = get_video_meta(video_path)
     target_duration_seconds = max(ffprobe_duration_ms(video_path) / 1000, 0.1)
+    if video_speed != 1.0:
+        target_duration_seconds = target_duration_seconds / video_speed
     font_size = effective_ass_font_size(subtitle_preset, source_video_meta)
     effective_region = resolve_subtitle_region_for_position(
         video_meta=source_video_meta,
@@ -533,11 +536,14 @@ def burn_subtitles(
         else 0
     )
 
+    ctx = safe_ffmpeg_path(subtitles_path)
+    relative_subtitles = ctx.__enter__()
+
     if use_ass:
-        subtitles_filter = f"ass={subtitles_path.relative_to(ROOT).as_posix()}"
+        subtitles_filter = f"ass={relative_subtitles}"
     else:
         subtitles_filter = (
-            f"subtitles={subtitles_path.relative_to(ROOT).as_posix()}:"
+            f"subtitles={relative_subtitles}:"
             f"force_style='FontName={font_name},PrimaryColour={primary_color},"
             f"OutlineColour={outline_color if use_unified_box else box_border_color if box_enabled else outline_color},"
             f"BorderStyle={3 if box_enabled else 1},"
@@ -545,6 +551,9 @@ def burn_subtitles(
             f"FontSize={font_size},BackColour={box_fill_color if box_enabled else '&H00000000'},"
             f"MarginV={margin_v},Alignment={8 if str(subtitle_preset.get('positionPreset') or 'bottom').strip().lower() == 'top' else 5 if str(subtitle_preset.get('positionPreset') or 'bottom').strip().lower() == 'middle' else 2}'"
         )
+
+    if video_speed != 1.0:
+        subtitles_filter = f"{subtitles_filter},setpts=PTS/{video_speed}"
 
     cleanup_region = expand_cleanup_region_for_render(
         effective_region,
@@ -767,6 +776,7 @@ def burn_subtitles(
     finally:
         if temp_script_path and temp_script_path.exists():
             temp_script_path.unlink(missing_ok=True)
+        ctx.__exit__(None, None, None)
 
 
 def invoke_create_final_audio_compat(
@@ -779,6 +789,7 @@ def invoke_create_final_audio_compat(
     background_audio_path: Path | None,
     background_music_path: Path | None = None,
     background_music_volume: float = 0.0,
+    video_speed: float = 1.0,
 ) -> None:
     kwargs: dict[str, Any] = {
         "audio_mix_mode": audio_mix_mode,
@@ -786,6 +797,7 @@ def invoke_create_final_audio_compat(
         "background_audio_path": background_audio_path,
         "background_music_path": background_music_path,
         "background_music_volume": background_music_volume,
+        "video_speed": video_speed,
     }
     try:
         signature = inspect.signature(create_final_audio)
@@ -824,6 +836,7 @@ def render_intro_hook(
     dynamic_regions: list[dict[str, Any]] | None = None,
     output_ratio: str = "original",
     global_speed: float = 1.0,
+    video_speed: float = 1.0,
 ) -> dict[str, Any]:
     video_duration_ms = int(video_meta.get("durationMs", 0))
     teaser_mode = intro_hook.get("mode") or "montage"
@@ -923,13 +936,13 @@ def render_intro_hook(
         
         if api_key and segments:
             try:
-                from llama_index.core import Document, VectorStoreIndex, Settings
-                from llama_index.llms.gemini import Gemini
-                from llama_index.embeddings.gemini import GeminiEmbedding
-                
                 # Make sure LlamaIndex dependencies are verified
                 from .runtime import ensure_llamaindex_runtime
                 ensure_llamaindex_runtime(phase="render", step="intro_hook", progress=0.86)
+                
+                from llama_index.core import Document, VectorStoreIndex, Settings
+                from llama_index.llms.gemini import Gemini
+                from llama_index.embeddings.gemini import GeminiEmbedding
                 
                 Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
                 Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
@@ -997,27 +1010,28 @@ def render_intro_hook(
         for c_idx, clip_info in enumerate(matched_clips_info):
             temp_clip_path = dirs["render"] / f"intro_hook_subclip_{c_idx}.mp4"
             sub_duration = clips_durations[c_idx]
+            extract_duration = int(round(sub_duration * video_speed)) if video_speed != 1.0 else sub_duration
             
             seg_start = clip_info["startMs"]
             seg_end = clip_info.get("endMs")
             if seg_end is None:
-                seg_end = seg_start + sub_duration
+                seg_end = seg_start + extract_duration
                 
             seg_len = seg_end - seg_start
             
             # Crop around the center of the segment to get the best visual action
-            if seg_len > sub_duration:
+            if seg_len > extract_duration:
                 seg_mid = (seg_start + seg_end) // 2
-                c_start = max(seg_start, seg_mid - sub_duration // 2)
+                c_start = max(seg_start, seg_mid - extract_duration // 2)
             else:
                 # If segment is shorter, expand boundaries outwards
-                c_start = max(0, seg_start - (sub_duration - seg_len) // 2)
+                c_start = max(0, seg_start - (extract_duration - seg_len) // 2)
                 
-            c_end = min(video_duration_ms, c_start + sub_duration)
-            if c_end - c_start < sub_duration:
-                c_start = max(0, c_end - sub_duration)
+            c_end = min(video_duration_ms, c_start + extract_duration)
+            if c_end - c_start < extract_duration:
+                c_start = max(0, c_end - extract_duration)
                 
-            extract_video_clip(input_path, temp_clip_path, c_start, sub_duration)
+            extract_video_clip(input_path, temp_clip_path, c_start, extract_duration)
             temp_clips.append(temp_clip_path)
             
         # Concatenate temp_clips into clip_path using ffmpeg
@@ -1057,7 +1071,37 @@ def render_intro_hook(
             except Exception:
                 pass
     else:
-        extract_video_clip(input_path, clip_path, clip_window["startMs"], actual_intro_duration_ms)
+        extract_duration = int(round(actual_intro_duration_ms * video_speed)) if video_speed != 1.0 else actual_intro_duration_ms
+        extract_video_clip(input_path, clip_path, clip_window["startMs"], extract_duration)
+
+    if video_speed != 1.0:
+        has_audio = bool(video_meta.get("hasAudio"))
+        speeded_clip_path = clip_path.with_name(f"{clip_path.stem}_speeded.mp4")
+        codec, codec_args = choose_video_codec()
+        from .audio import build_atempo_filter
+        if has_audio:
+            speed_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(clip_path),
+                "-vf", f"setpts=PTS/{video_speed}",
+                "-af", build_atempo_filter(video_speed),
+                "-c:v", codec, *codec_args,
+                "-c:a", "aac", "-b:a", "192k",
+                str(speeded_clip_path)
+            ]
+        else:
+            speed_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(clip_path),
+                "-vf", f"setpts=PTS/{video_speed}",
+                "-c:v", codec, *codec_args,
+                str(speeded_clip_path)
+            ]
+        run(speed_cmd, cwd=ROOT)
+        if speeded_clip_path.exists() and speeded_clip_path.stat().st_size > 0:
+            clip_path.unlink(missing_ok=True)
+            speeded_clip_path.rename(clip_path)
+
     create_intro_audio(
         video_clip_path=clip_path,
         intro_voice_path=fitted_intro_voice,
@@ -1392,9 +1436,12 @@ def mux_video_with_audio(
     watermark_options: dict[str, Any] | None = None,
     video_meta: dict[str, Any] | None = None,
     output_ratio: str = "original",
+    video_speed: float = 1.0,
 ) -> None:
     codec, codec_args = choose_video_codec()
     target_duration_seconds = max(ffprobe_duration_ms(video_path) / 1000, 0.1)
+    if video_speed != 1.0:
+        target_duration_seconds = target_duration_seconds / video_speed
     command = [
         "ffmpeg",
         "-y",
@@ -1418,6 +1465,12 @@ def mux_video_with_audio(
             filter_arg, video_filter, video_map, output_ratio
         )
         
+    if video_speed != 1.0:
+        if video_filter == "null":
+            video_filter = f"setpts=PTS/{video_speed}"
+        else:
+            video_filter = f"{video_filter},setpts=PTS/{video_speed}"
+            
     if video_filter != "null":
         map_idx = command.index("-map")
         command[map_idx+1] = video_map
@@ -2564,6 +2617,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     localization_mode = str(render_options.get("localizationMode") or analysis.get("renderDefaults", {}).get("localizationMode") or "creative")
     output_targets = render_options.get("outputTargets") or {"mp4": True, "draft": False}
     output_ratio = render_options.get("outputRatio") or "original"
+    video_speed = float(render_options.get("videoSpeed") or analysis.get("renderDefaults", {}).get("videoSpeed") or 1.0)
     subtitle_enabled = bool(subtitle_preset.get("enabled", True))
     effective_subtitle_region = resolve_subtitle_region_for_position(
         analysis["videoMeta"],
@@ -2629,6 +2683,27 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     translated_cache_path = dirs["analysis"] / "translated.json"
     editable_subtitle_timeline = analysis.get("subtitleTimeline") or []
     segments = copy.deepcopy(analysis["segments"])
+    if video_speed != 1.0:
+        for segment in segments:
+            if "startMs" in segment:
+                segment["startMs"] = int(round(segment["startMs"] / video_speed))
+            if "endMs" in segment:
+                segment["endMs"] = int(round(segment["endMs"] / video_speed))
+            if "word_timeline" in segment and segment["word_timeline"]:
+                for word in segment["word_timeline"]:
+                    if "startMs" in word:
+                        word["startMs"] = int(round(word["startMs"] / video_speed))
+                    if "endMs" in word:
+                        word["endMs"] = int(round(word["endMs"] / video_speed))
+        scaled_editable = []
+        for item in editable_subtitle_timeline:
+            new_item = copy.deepcopy(item)
+            if "startMs" in new_item:
+                new_item["startMs"] = int(round(new_item["startMs"] / video_speed))
+            if "endMs" in new_item:
+                new_item["endMs"] = int(round(new_item["endMs"] / video_speed))
+            scaled_editable.append(new_item)
+        editable_subtitle_timeline = scaled_editable
     print("DEBUG: Starting translate_segments...", flush=True)
     segments = translate_segments(
         segments,
@@ -2752,7 +2827,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         timing_mode=timing_mode,
         tts_dir=dirs["tts"],
         dub_audio_path=dub_audio_path,
-        global_speed=float(subtitle_preset["watermarkOptions"].get("global_speed", 1.0)),
+        global_speed=float(subtitle_preset["watermarkOptions"].get("global_speed", 1.0)) * video_speed,
     )
     manifest_path = dirs["audio"] / "dub_manifest.json"
     manifest_path.write_text(json.dumps([asdict(item) for item in manifest], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2778,6 +2853,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         background_audio_path=background_audio_path,
         background_music_path=background_music_path,
         background_music_volume=background_music_volume,
+        video_speed=video_speed,
     )
 
     outputs: dict[str, Any] = {
@@ -2817,9 +2893,10 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 dynamic_regions=dynamic_regions,
                 use_ass=True,
                 output_ratio=output_ratio,
+                video_speed=video_speed,
             )
         else:
-            mux_video_with_audio(video_path=input_path, audio_path=mixed_audio_path, output_path=main_render_path, watermark_options=subtitle_preset.get("watermarkOptions"), video_meta=analysis["videoMeta"], output_ratio=output_ratio)
+            mux_video_with_audio(video_path=input_path, audio_path=mixed_audio_path, output_path=main_render_path, watermark_options=subtitle_preset.get("watermarkOptions"), video_meta=analysis["videoMeta"], output_ratio=output_ratio, video_speed=video_speed)
 
     if intro_hook.get("enabled", False) and main_render_path is not None:
         emit_progress(phase="render", step="intro_hook", progress=0.86, message="Đang tạo intro hook tự động")
@@ -2841,7 +2918,8 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 background_music_volume=background_music_volume,
                 dynamic_regions=dynamic_regions,
                 output_ratio=output_ratio,
-                global_speed=float(subtitle_preset["watermarkOptions"].get("global_speed", 1.0)),
+                global_speed=float(subtitle_preset["watermarkOptions"].get("global_speed", 1.0)) * video_speed,
+                video_speed=video_speed,
             )
             flattened_render_path = dirs["render"] / f"{Path(input_path).stem}_dubstudio.mp4"
             concat_rendered_videos(Path(intro_result["videoPath"]), main_render_path, flattened_render_path)

@@ -285,52 +285,52 @@ def transcribe_to_srt(video_path: Path, output_srt: Path, language: str | None =
     if output_srt.exists() and output_srt.stat().st_size > 0:
         return
     model_path = get_transcription_model_path()
-    relative_model = model_path.relative_to(ROOT).as_posix()
-    relative_srt = output_srt.relative_to(ROOT).as_posix()
-    
-    use_gpu_options = [True]
-    if DUB_USE_GPU:
-        use_gpu_options = [True, False]
-    else:
-        use_gpu_options = [False]
-        
-    last_exc = None
-    for use_gpu in use_gpu_options:
-        options = [
-            f"model={relative_model}",
-            f"use_gpu={'true' if use_gpu else 'false'}",
-            f"gpu_device={DUB_GPU_DEVICE}",
-            "format=srt",
-            f"destination={relative_srt}",
-            f"max_len={max_len}",
-        ]
-        if language:
-            options.insert(1, f"language={language}")
-        whisper_filter = f"whisper={':'.join(options)}"
-        try:
-            run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(video_path),
-                    "-vn",
-                    "-af",
-                    whisper_filter,
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                cwd=ROOT,
-            )
-            # If successful, we exit!
-            return
-        except Exception as exc:
-            last_exc = exc
-            safe_print(f"[warn] ffmpeg-whisper với use_gpu={use_gpu} thất bại: {exc}. Đang thử phương án tiếp theo...", flush=True)
-            
-    if last_exc:
-        raise last_exc
+    with safe_ffmpeg_path(model_path) as relative_model:
+        with safe_ffmpeg_path(output_srt, is_output=True) as relative_srt:
+            use_gpu_options = [True]
+            if DUB_USE_GPU:
+                use_gpu_options = [True, False]
+            else:
+                use_gpu_options = [False]
+                
+            last_exc = None
+            for use_gpu in use_gpu_options:
+                options = [
+                    f"model={relative_model}",
+                    f"use_gpu={'true' if use_gpu else 'false'}",
+                    f"gpu_device={DUB_GPU_DEVICE}",
+                    "format=srt",
+                    f"destination={relative_srt}",
+                    f"max_len={max_len}",
+                ]
+                if language:
+                    options.insert(1, f"language={language}")
+                whisper_filter = f"whisper={':'.join(options)}"
+                try:
+                    run(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            str(video_path),
+                            "-vn",
+                            "-af",
+                            whisper_filter,
+                            "-f",
+                            "null",
+                            "-",
+                        ],
+                        cwd=ROOT,
+                    )
+                    # If successful, we exit!
+                    return
+                except Exception as exc:
+                    last_exc = exc
+                    safe_print(f"[warn] ffmpeg-whisper với use_gpu={use_gpu} thất bại: {exc}. Đang thử phương án tiếp theo...", flush=True)
+                    
+            if last_exc:
+                raise last_exc
+
 
 
 def analyze_with_local_whisper(
