@@ -302,7 +302,11 @@ def text_to_phonemes_viphoneme(text: str) -> Tuple[List[str], List[int], List[in
     if os.name == 'nt':
         try:
             from pathlib import Path
-            tools_dir = str((Path(__file__).parent.parents[2] / "tools").resolve())
+            # Resolve the "tools" directory. Since phonemizer.py is located at:
+            # {ROOT}/tools/valtec_repo/src/vietnamese/phonemizer.py
+            # parents sequence: [vietnamese, src, valtec_repo, tools]
+            # Thus, parents[3] points exactly to the "tools" directory.
+            tools_dir = str(Path(__file__).resolve().parents[3])
             if tools_dir not in sys.path:
                 sys.path.insert(0, tools_dir)
             os.environ["VIPHONEME_ISOLATE_VINORM"] = "0"
