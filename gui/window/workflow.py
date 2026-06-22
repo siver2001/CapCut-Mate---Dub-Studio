@@ -1390,7 +1390,7 @@ class WindowWorkflowMixin:
         hf_token = env_data.get("HF_TOKEN") or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN", "")
         self.conf_hf_token_edit.setText(hf_token)
 
-        hf_cache = env_data.get("DUB_HF_CACHE_DIR") or os.getenv("DUB_HF_CACHE_DIR") or str(ROOT / "temp" / ".cache" / "huggingface" / "hub")
+        hf_cache = env_data.get("DUB_HF_CACHE_DIR") or os.getenv("DUB_HF_CACHE_DIR") or "temp/.cache/huggingface/hub"
         self.conf_hf_cache_edit.setText(hf_cache)
 
         # Cloud AI configurations

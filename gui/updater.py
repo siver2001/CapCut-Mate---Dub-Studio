@@ -105,13 +105,11 @@ class UpdateThread(QThread):
 
         # 4. ZIP Update Method
         try:
+            # Both frozen and non-frozen download the source repository ZIP for Hot Updates
+            zip_url = "https://github.com/siver2001/CapCut-Mate---Dub-Studio/archive/refs/heads/main.zip"
             if self.is_frozen:
-                # URL for packaged version (Release exe ZIP)
-                zip_url = "https://github.com/siver2001/CapCut-Mate---Dub-Studio/releases/latest/download/CapCutMate.zip"
-                self.progress_signal.emit(40, "Đang chuẩn bị tải bản đóng gói .exe mới nhất...")
+                self.progress_signal.emit(40, "Đang chuẩn bị tải gói cập nhật mã nguồn...")
             else:
-                # URL for source code ZIP
-                zip_url = "https://github.com/siver2001/CapCut-Mate---Dub-Studio/archive/refs/heads/main.zip"
                 self.progress_signal.emit(40, "Đang chuẩn bị tải mã nguồn mới nhất...")
 
             with tempfile.TemporaryDirectory(dir=str(self.root_path)) as tmp_dir:
@@ -124,15 +122,9 @@ class UpdateThread(QThread):
                         shutil.copyfileobj(response, out_file)
                 except urllib.error.HTTPError as http_err:
                     if http_err.code == 404:
-                        if self.is_frozen:
-                            raise RuntimeError(
-                                "HTTP Error 404: Bản đóng gói chưa được phát hành trên GitHub Releases.\n"
-                                "Vui lòng kiểm tra lại liên kết Releases của dự án."
-                            ) from http_err
-                        else:
-                            raise RuntimeError(
-                                "HTTP Error 404: Kho lưu trữ GitHub riêng tư hoặc sai đường dẫn."
-                            ) from http_err
+                        raise RuntimeError(
+                            "HTTP Error 404: Kho lưu trữ GitHub riêng tư hoặc sai đường dẫn."
+                        ) from http_err
                     raise
                 
                 self.progress_signal.emit(70, "Đang giải nén dữ liệu cập nhật...")
@@ -142,23 +134,12 @@ class UpdateThread(QThread):
                 with zipfile.ZipFile(tmp_zip, 'r') as zip_ref:
                     zip_ref.extractall(extract_path)
                 
-                # Check for packaged executable or root source folder
-                if self.is_frozen:
-                    exe_candidates = list(extract_path.glob("**/CapCutMate.exe"))
-                    if not exe_candidates:
-                        # Fallback to check for any executable
-                        exe_candidates = list(extract_path.glob("**/*.exe"))
-                    
-                    if not exe_candidates:
-                        raise RuntimeError("Không tìm thấy file thực thi CapCutMate.exe trong gói cập nhật.")
-                    
-                    update_src = exe_candidates[0].parent
-                else:
-                    extracted_folders = [p for p in extract_path.iterdir() if p.is_dir()]
-                    if not extracted_folders:
-                        self.finished_signal.emit(False, "Không tìm thấy nội dung cập nhật sau khi giải nén.")
-                        return
-                    update_src = extracted_folders[0]
+                # Check for root source folder
+                extracted_folders = [p for p in extract_path.iterdir() if p.is_dir()]
+                if not extracted_folders:
+                    self.finished_signal.emit(False, "Không tìm thấy nội dung cập nhật sau khi giải nén.")
+                    return
+                update_src = extracted_folders[0]
 
                 self.progress_signal.emit(85, "Đang chuẩn bị cài đặt các thay đổi...")
                 

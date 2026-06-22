@@ -16,7 +16,11 @@ if sys.platform == "win32":
 
 if getattr(sys, "frozen", False):
     ROOT = Path(sys.executable).resolve().parent
-    CODE_ROOT = Path(getattr(sys, "_MEIPASS", ROOT)).resolve()
+    meipass = Path(getattr(sys, "_MEIPASS", ROOT)).resolve()
+    if (meipass / "tools").exists():
+        CODE_ROOT = meipass
+    else:
+        CODE_ROOT = ROOT
 else:
     ROOT = Path(__file__).resolve().parents[2]
     CODE_ROOT = ROOT
@@ -182,9 +186,11 @@ OLLAMA_TOKENS_MIN = max(int(env_value("DUB_OLLAMA_TOKENS_MIN", default="320")), 
 LLAMA_CPP_TIMEOUT = max(int(env_value("DUB_LLAMA_CPP_TIMEOUT", default="180")), 30)
 WHISPERX_MODEL = env_value("DUB_WHISPERX_MODEL", "WHISPERX_MODEL", default="large-v3") or "large-v3"
 WHISPERX_ASR_REPO = env_value("DUB_WHISPERX_ASR_REPO", default="")
-HUGGINGFACE_HUB_CACHE = Path(
-    env_value("DUB_HF_CACHE_DIR", default=str(ROOT / "temp" / ".cache" / "huggingface" / "hub"))
-).expanduser()
+hf_cache_raw = env_value("DUB_HF_CACHE_DIR", default=str(ROOT / "temp" / ".cache" / "huggingface" / "hub"))
+hf_cache_path = Path(hf_cache_raw)
+if not hf_cache_path.is_absolute():
+    hf_cache_path = (ROOT / hf_cache_path).resolve()
+HUGGINGFACE_HUB_CACHE = hf_cache_path.expanduser()
 WHISPERX_BATCH_SIZE = max(
     int(env_value("DUB_WHISPERX_BATCH_SIZE", "WHISPERX_BATCH_SIZE", default=("4" if DUB_USE_GPU else "1"))),
     1,

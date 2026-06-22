@@ -194,7 +194,7 @@ if CUSTOM_VALTEC_VOICES_FILE.exists():
     except Exception:
         pass
 
-VALTEC_ZEROSHOT_CODE_PATH = MEI_ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
+VALTEC_ZEROSHOT_CODE_PATH = ROOT / "tools" / "valtec_repo" / "valtec_tts" / "zeroshot.py"
 VALTEC_ZEROSHOT_AVAILABLE = VALTEC_ZEROSHOT_CODE_PATH.exists()
 if not VALTEC_ZEROSHOT_AVAILABLE:
     VALTEC_REFERENCE_OPTIONS = []

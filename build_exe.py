@@ -12,7 +12,7 @@ from pathlib import Path
 APP_NAME = "CapCutMate"
 ENTRY_POINT = "main.py"
 
-DATA_DIRS = ("assets", "config", "tools")
+DATA_DIRS = ("assets", "config")
 RUNTIME_MODEL_DIRS = ("omnivoice",)
 
 
@@ -27,6 +27,8 @@ REQUIRED_IMPORTS = {
 }
 
 OPTIONAL_COLLECT_MODULES = (
+    "PyQt6",
+    "PIL",
     "qtawesome",
     "qt_material",
     "superqt",
@@ -70,6 +72,7 @@ OPTIONAL_COLLECT_MODULES = (
 METADATA_PACKAGES = (
     "pyinstaller",
     "PyQt6",
+    "Pillow",
     "QtAwesome",
     "qt-material",
     "superqt",
@@ -198,6 +201,12 @@ def build_command(root: Path, python_exe: str, *, clean: bool) -> list[str]:
         "PyQt5",
         "--exclude-module",
         "PySide6",
+        "--exclude-module",
+        "tools",
+        "--exclude-module",
+        "gui",
+        "--exclude-module",
+        "src",
         "--log-level",
         "WARN",
     ]
@@ -539,6 +548,21 @@ def build() -> None:
 
     print("\nBUILD SUCCESSFUL!", flush=True)
     print(f"File chay: {exe_path}", flush=True)
+
+    # Copy source directories and main.py to output_dir for Hot Update
+    print("Copying Python source directories (tools, gui, src) and main.py to output folder...", flush=True)
+    for src_name in ("tools", "gui", "src"):
+        src_path = root / src_name
+        if src_path.exists():
+            dest_path = output_dir / src_name
+            if dest_path.exists():
+                shutil.rmtree(dest_path, ignore_errors=True)
+            shutil.copytree(
+                src_path,
+                dest_path,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".git", ".github"),
+            )
+    shutil.copy2(root / "main.py", output_dir / "main.py")
 
     copy_vc_redist(output_dir)
 

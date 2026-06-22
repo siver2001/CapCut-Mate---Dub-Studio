@@ -1,3 +1,13 @@
+import sys
+import os
+
+if getattr(sys, 'frozen', False):
+    ROOT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    if ROOT_DIR not in sys.path:
+        sys.path.insert(0, ROOT_DIR)
+else:
+    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -8,8 +18,6 @@ try:
 except ImportError:
     torch = None
 
-import sys
-import os
 
 if getattr(sys, 'frozen', False):
     import os
@@ -65,7 +73,7 @@ def main():
             # If called with 'pipeline' argument, act as the dub studio worker.
             sys.argv.pop(1)
             # Add root to path for imports
-            root = os.path.dirname(os.path.abspath(__file__))
+            root = ROOT_DIR
             if root not in sys.path:
                 sys.path.insert(0, root)
             from tools.dub_studio_pipeline import main as run_pipeline
@@ -81,7 +89,7 @@ def main():
             sys.argv.pop(1) # remove module_name
             
             # Add root to path for imports
-            root = os.path.dirname(os.path.abspath(__file__))
+            root = ROOT_DIR
             if root not in sys.path:
                 sys.path.insert(0, root)
             import importlib
@@ -119,10 +127,40 @@ def main():
                 import traceback
                 traceback.print_exc()
                 sys.exit(1)
+        elif mode.endswith(".py") or (os.path.exists(mode) and os.path.isfile(mode) and mode.endswith(".py")):
+            # Act as a python interpreter running the script
+            sys.argv.pop(1)  # Remove script name from sys.argv
+            script_path = os.path.abspath(mode)
+            # Add script's directory to sys.path
+            script_dir = os.path.dirname(script_path)
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+            # Make sys.argv[0] point to the script path
+            if len(sys.argv) > 0:
+                sys.argv[0] = script_path
+            else:
+                sys.argv.append(script_path)
+            # Execute the script
+            try:
+                with open(script_path, "r", encoding="utf-8") as f:
+                    code_content = f.read()
+                global_dict = {
+                    "__file__": script_path,
+                    "__name__": "__main__",
+                    "__doc__": None,
+                    "__package__": None,
+                }
+                exec(code_content, global_dict)
+                sys.exit(0)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                sys.exit(1)
+
 
     # Default behavior: run as normal app if no specialized mode
     # Add root to path for imports
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = ROOT_DIR
     if root not in sys.path:
         sys.path.insert(0, root)
     
