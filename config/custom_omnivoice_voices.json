@@ -1,7 +1,12 @@
 {
   "omnivoice:__temp_clone__": {
     "filename": "Generated Audio June 07, 2026 - 3_01PM.wav",
-    "ref_text": "Từng hứa cho em mọi điều quý giá sẽ đỏ ra. đưa em về nhà, cũng nắm tay qua mùa Đông Bút. Cũng đón ánh sương vừa lên!",
+    "ref_text": "",
     "label": "Clone • Temp"
+  },
+  "omnivoice:test_clone_voice": {
+    "filename": "test_clone_voice.wav",
+    "ref_text": "Xin chào mọi người",
+    "label": "Clone • Test Clone Voice (OmniVoice)"
   }
 }

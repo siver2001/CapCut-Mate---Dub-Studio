@@ -263,6 +263,19 @@ if CUSTOM_OMNIVOICE_VOICES_FILE.exists():
     except Exception:
         pass
 
+CUSTOM_CLOUD_VOICES_FILE = ROOT / "config" / "custom_cloud_voices.json"
+CUSTOM_CLOUD_VOICES = {}
+if CUSTOM_CLOUD_VOICES_FILE.exists():
+    try:
+        import json
+        custom_data = json.loads(CUSTOM_CLOUD_VOICES_FILE.read_text(encoding="utf-8"))
+        for k, v in custom_data.items():
+            CUSTOM_CLOUD_VOICES[k] = v
+    except Exception:
+        pass
+
+
+
 VALTEC_CLONE_PRESET = "valtec:clone"
 VALTEC_REPO_URL = env_value("DUB_VALTEC_REPO_URL", default="https://github.com/tronghieuit/valtec-tts.git")
 VALTEC_ZEROSHOT_REPO = env_value("DUB_VALTEC_ZEROSHOT_REPO", default="valtecAI-team/valtec-zeroshot-voice-cloning")
@@ -304,6 +317,7 @@ VOICE_LABELS.update(
     }
 )
 VOICE_LABELS.update({k: v.get("label", k) for k, v in CUSTOM_OMNIVOICE_VOICES.items()})
+VOICE_LABELS.update({k: v.get("label", k) for k, v in CUSTOM_CLOUD_VOICES.items()})
 LANGUAGE_OPTIONS = ("en", "zh", "ko", "ja")
 WHISPERX_PRELOAD_ALIGN_LANGUAGES = tuple(
     language

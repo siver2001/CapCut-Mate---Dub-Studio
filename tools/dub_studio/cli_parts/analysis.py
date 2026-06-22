@@ -834,6 +834,8 @@ def recommend_voice_preset(
     estimated_gender: str = "unknown",
 ) -> str:
     value = str(candidate or "").strip()
+    if value.startswith("cloud:"):
+        return value
     if value in VOICE_LABELS:
         return value
     if is_custom_edge_voice_name(value):
