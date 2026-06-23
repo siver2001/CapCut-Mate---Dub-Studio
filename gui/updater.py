@@ -193,7 +193,7 @@ del "%~f0"
                     # Run detached batch script
                     creationflags = 0
                     if os.name == 'nt':
-                        creationflags = subprocess.CREATE_NEW_CONSOLE | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
                     
                     subprocess.Popen(
                         [str(bat_path)],
