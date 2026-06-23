@@ -510,6 +510,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Khong chay self-test/health-check sau khi build.",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Chi cap nhat nhanh ma nguon (gui, tools, src, config, assets, main.py) vao thu muc dist san co ma khong can chay PyInstaller (cuc ky nhanh).",
+    )
     return parser.parse_args()
 
 
@@ -521,6 +526,30 @@ def build() -> None:
     print(f"=== {APP_NAME} build tool ===", flush=True)
     print(f"Project: {root}", flush=True)
     print(f"Python:  {python_exe}", flush=True)
+
+    if args.fast:
+        output_dir = root / "dist" / APP_NAME
+        exe_path = output_dir / f"{APP_NAME}.exe"
+        if not exe_path.exists():
+            print(f"\n[!] Khong tim thay {exe_path}. Vui long chay build day du truoc (khong co option --fast).", flush=True)
+            raise SystemExit(1)
+            
+        print("\n[+] Che do Fast Build: Dang cap nhat nhanh ma nguon...", flush=True)
+        # Copy source directories, assets, config and main.py to output_dir
+        for src_name in ("tools", "gui", "src", "assets", "config"):
+            src_path = root / src_name
+            if src_path.exists():
+                dest_path = output_dir / src_name
+                if dest_path.exists():
+                    shutil.rmtree(dest_path, ignore_errors=True)
+                shutil.copytree(
+                    src_path,
+                    dest_path,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".git", ".github"),
+                )
+        shutil.copy2(root / "main.py", output_dir / "main.py")
+        print("[+] Cap nhat ma nguon hoan tat! (Mat chua den 1 giay).", flush=True)
+        return
 
     os.environ.setdefault("QT_API", "pyqt6")
     os.environ.setdefault("PYTHONUTF8", "1")
