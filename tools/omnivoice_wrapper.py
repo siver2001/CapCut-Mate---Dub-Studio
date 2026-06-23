@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-y
 class OmnivoiceProvider:
     _instance: "OmnivoiceProvider | None" = None
     _model: Any = None
