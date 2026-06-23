@@ -312,6 +312,10 @@ class WindowHelpersMixin:
         index = combo.findData(value)
         if index >= 0:
             combo.setCurrentIndex(index)
+            return
+        index = combo.findText(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     @staticmethod
     def _resolve_voice_combo_value(combo: QComboBox) -> str:
@@ -321,6 +325,21 @@ class WindowHelpersMixin:
             data = combo.itemData(index)
             if data is not None and str(data).strip():
                 return str(data).strip()
+        
+        # Fallback to search items by text
+        for idx in range(combo.count()):
+            if combo.itemText(idx).strip() == current_text:
+                data = combo.itemData(idx)
+                if data is not None and str(data).strip():
+                    return str(data).strip()
+                    
+        # Fallback to known VOICE_LABELS if it matches a display label
+        from gui.config import VOICE_LABELS
+        clean_text = current_text.replace(" (đề xuất)", "").replace(" (suggested)", "").strip().lower()
+        for k, v in VOICE_LABELS.items():
+            if str(v).strip().lower() == clean_text:
+                return k
+                
         return current_text
 
     @staticmethod

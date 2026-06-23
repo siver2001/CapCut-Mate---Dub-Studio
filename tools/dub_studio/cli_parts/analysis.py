@@ -838,6 +838,13 @@ def recommend_voice_preset(
         return value
     if value in VOICE_LABELS:
         return value
+    
+    # Map display names back to internal keys if candidate is a display label
+    clean_val = value.replace(" (đề xuất)", "").replace(" (suggested)", "").strip().lower()
+    for k, v in VOICE_LABELS.items():
+        if str(v).strip().lower() == clean_val:
+            return k
+
     if is_custom_edge_voice_name(value):
         return value
     if value in EDGE_VOICE_PRESETS.values():
