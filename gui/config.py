@@ -30,7 +30,7 @@ else:
         PIPELINE_PYTHON = Path(sys.executable)
 
 PIPELINE_PATH = ROOT / "tools" / "dub_studio_pipeline.py"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 
 

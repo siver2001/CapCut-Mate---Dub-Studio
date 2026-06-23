@@ -1,6 +1,6 @@
 [project]
 name = "capcut-mate"
-version = "1.0.0"
+version = "1.0.1"
 description = "CapCut Mate API Service"
 authors = [
     { name = "Hommy", email = "longro0211vn147@gmail.com" }
