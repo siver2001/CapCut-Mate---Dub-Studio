@@ -186,7 +186,7 @@ OLLAMA_TOKENS_MIN = max(int(env_value("DUB_OLLAMA_TOKENS_MIN", default="320")), 
 LLAMA_CPP_TIMEOUT = max(int(env_value("DUB_LLAMA_CPP_TIMEOUT", default="180")), 30)
 WHISPERX_MODEL = env_value("DUB_WHISPERX_MODEL", "WHISPERX_MODEL", default="large-v3") or "large-v3"
 WHISPERX_ASR_REPO = env_value("DUB_WHISPERX_ASR_REPO", default="")
-hf_cache_raw = env_value("DUB_HF_CACHE_DIR", default=str(ROOT / "temp" / ".cache" / "huggingface" / "hub"))
+hf_cache_raw = env_value("DUB_HF_CACHE_DIR", default=str(ROOT / "hf_cache" / "huggingface" / "hub"))
 hf_cache_path = Path(hf_cache_raw)
 if not hf_cache_path.is_absolute():
     hf_cache_path = (ROOT / hf_cache_path).resolve()

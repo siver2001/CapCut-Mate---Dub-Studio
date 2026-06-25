@@ -77,6 +77,7 @@ compose.override.yaml
 # Runtime output / temp files
 output/
 temp/
+hf_cache/
 scratch/
 tmp_*/
 logs/

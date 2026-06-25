@@ -8,6 +8,35 @@ if getattr(sys, 'frozen', False):
 else:
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Migrate old DUB_HF_CACHE_DIR to new shorter path in .env to prevent MAX_PATH limit errors on Windows
+try:
+    env_file = os.path.join(ROOT_DIR, ".env")
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8-sig") as f:
+            lines = f.readlines()
+        
+        modified = False
+        new_lines = []
+        old_default_rel = "temp/.cache/huggingface/hub"
+        for line in lines:
+            line_stripped = line.strip()
+            if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
+                k, v = line_stripped.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k == "DUB_HF_CACHE_DIR" and v == old_default_rel:
+                    new_lines.append("DUB_HF_CACHE_DIR=hf_cache/huggingface/hub\n")
+                    os.environ["DUB_HF_CACHE_DIR"] = "hf_cache/huggingface/hub"
+                    modified = True
+                    continue
+            new_lines.append(line)
+        
+        if modified:
+            with open(env_file, "w", encoding="utf-8-sig") as f:
+                f.writelines(new_lines)
+except Exception:
+    pass
+
 import warnings
 warnings.filterwarnings("ignore")
 

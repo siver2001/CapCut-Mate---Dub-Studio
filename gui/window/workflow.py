@@ -1352,7 +1352,7 @@ class WindowWorkflowMixin:
 
     def choose_hf_cache_dir(self) -> None:
         current = self.conf_hf_cache_edit.text().strip()
-        default_path = current if current else str(ROOT / "temp" / ".cache" / "huggingface" / "hub")
+        default_path = current if current else str(ROOT / "hf_cache" / "huggingface" / "hub")
         dir_path = QFileDialog.getExistingDirectory(self, "Chọn thư mục cache HuggingFace", default_path)
         if dir_path:
             self.conf_hf_cache_edit.setText(dir_path)
@@ -1390,7 +1390,7 @@ class WindowWorkflowMixin:
         hf_token = env_data.get("HF_TOKEN") or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN", "")
         self.conf_hf_token_edit.setText(hf_token)
 
-        hf_cache = env_data.get("DUB_HF_CACHE_DIR") or os.getenv("DUB_HF_CACHE_DIR") or "temp/.cache/huggingface/hub"
+        hf_cache = env_data.get("DUB_HF_CACHE_DIR") or os.getenv("DUB_HF_CACHE_DIR") or "hf_cache/huggingface/hub"
         self.conf_hf_cache_edit.setText(hf_cache)
 
         # Cloud AI configurations

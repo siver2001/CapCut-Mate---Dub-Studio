@@ -303,10 +303,10 @@ def create_desktop_shortcut(root: Path) -> None:
 
 def copy_runtime_models(root: Path, output_dir: Path) -> None:
     source_models = root / "temp" / "models"
-    source_cache = root / "temp" / ".cache"
+    source_cache = root / "hf_cache"
     
     if not source_models.exists() and not source_cache.exists():
-        print("[!] Khong tim thay temp/models va temp/.cache nen ban build se tai model tren may nguoi dung khi can.", flush=True)
+        print("[!] Khong tim thay temp/models va hf_cache nen ban build se tai model tren may nguoi dung khi can.", flush=True)
         return
 
     target_models = output_dir / "temp" / "models"
@@ -336,10 +336,10 @@ def copy_runtime_models(root: Path, output_dir: Path) -> None:
 
     # Copy HuggingFace offline cache (OmniVoice) if exists
     if source_cache.exists():
-        target_cache = output_dir / "temp" / ".cache"
+        target_cache = output_dir / "hf_cache"
         if target_cache.exists():
             shutil.rmtree(target_cache, ignore_errors=True)
-        print(f"Copy HuggingFace cache: temp/.cache -> dist/{APP_NAME}/temp/.cache", flush=True)
+        print(f"Copy HuggingFace cache: hf_cache -> dist/{APP_NAME}/hf_cache", flush=True)
         
         # Exclude heavy foreign language XLS-R models (Chinese, Japanese, Korean) to save space, keeping Vietnamese alignment models
         def ignore_cache_elements(path, names):
