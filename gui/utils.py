@@ -130,6 +130,22 @@ def repair_mojibake_text(value: str | None) -> str:
 
     # Automatically add diacritics for common Vietnamese words if the text looks like unaccented Vietnamese
     repaired = restore_vietnamese_diacritics(repaired)
+
+    # Check for Windows paging file too small error (WinError 1455)
+    if "1455" in repaired or "paging file" in repaired.lower() or "page file" in repaired.lower():
+        repaired += (
+            "\n\n=== HƯỚNG DẪN KHẮC PHỤC LỖI BỘ NHỚ ẢO (PAGING FILE) ===\n"
+            "Lỗi trên xảy ra do bộ nhớ ảo (Paging File / Virtual Memory) trên Windows của bạn quá nhỏ so với kích thước mô hình AI đang tải.\n"
+            "Vui lòng làm theo các bước sau để tăng bộ nhớ ảo:\n"
+            "1. Nhấn tổ hợp phím Windows + R, gõ 'sysdm.cpl' và nhấn Enter.\n"
+            "2. Tại cửa sổ hiện ra, chọn thẻ Advanced (Nâng cao).\n"
+            "3. Trong mục Performance (Hiệu năng), nhấn nút Settings (Cài đặt).\n"
+            "4. Ở cửa sổ mới, chọn thẻ Advanced (Nâng cao) -> Trong mục Virtual memory (Bộ nhớ ảo), nhấn nút Change (Thay đổi).\n"
+            "5. BỎ CHỌN mục 'Automatically manage paging file size for all drives'.\n"
+            "6. Chọn ổ đĩa C: (hoặc ổ đĩa có nhiều dung lượng trống nhất), chọn Custom size (Kích thước tùy chỉnh).\n"
+            "7. Nhập cả hai mục Initial size (Kích thước ban đầu) và Maximum size (Kích thước tối đa) là: 16384 (tương đương 16GB) hoặc 32768 (tương đương 32GB).\n"
+            "8. Nhấn nút Set (Thiết lập), sau đó nhấn OK -> OK ở các cửa sổ rồi KHỞI ĐỘNG LẠI máy tính."
+        )
             
     return repaired
 
