@@ -3064,9 +3064,19 @@ def do_preview_voice(
     if reference_audio is not None and reference_audio.exists():
         stat = reference_audio.stat()
         reference_signature = f"|ref={reference_audio.name}:{stat.st_size}:{stat.st_mtime_ns}"
+    # Also build a reference signature for OmniVoice custom/clone voices
+    omnivoice_reference_signature = ""
+    if is_omnivoice_voice_preset(selected_voice):
+        from .analysis import resolve_omnivoice_reference_audio as _resolve_omni_ref
+        omni_ref_wav, omni_ref_text = _resolve_omni_ref(selected_voice)
+        if omni_ref_wav is not None and omni_ref_wav.exists():
+            omni_stat = omni_ref_wav.stat()
+            omnivoice_reference_signature = f"|omniref={omni_ref_wav.name}:{omni_stat.st_size}:{omni_stat.st_mtime_ns}"
     cache_scope = (
         f"reference:{selected_voice}{reference_signature}"
         if is_valtec_reference_voice(selected_voice)
+        else f"omnivoice:{selected_voice}{omnivoice_reference_signature}"
+        if is_omnivoice_voice_preset(selected_voice)
         else "shared"
     )
     cache_key = hashlib.sha1(
@@ -3075,6 +3085,8 @@ def do_preview_voice(
     preview_file_prefix = (
         "reference"
         if is_valtec_reference_voice(selected_voice)
+        else "omnivoice"
+        if is_omnivoice_voice_preset(selected_voice)
         else "shared"
     )
     output_path = preview_dir / f"{preview_file_prefix}_{cache_key}{extension}"
@@ -3103,6 +3115,8 @@ def do_preview_voice(
         )
         emit("RESULT", result)
         return result
+    if DUB_USE_OMNIVOICE and is_omnivoice_voice_preset(selected_voice):
+        ensure_omnivoice_runtime(phase="preview", step="prepare", progress=0.10)
     if DUB_USE_VALTEC and is_valtec_voice_preset(selected_voice):
         ensure_valtec_runtime(
             phase="preview",

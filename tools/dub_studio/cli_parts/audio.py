@@ -974,6 +974,16 @@ def synthesize_tts(
             if success:
                 validate_generated_audio_file(output_path, context="OmniVoice-TTS synthesis")
                 return
+        except (OSError, MemoryError) as mem_e:
+            err_str = str(mem_e)
+            if "paging file" in err_str.lower() or "1455" in err_str or isinstance(mem_e, MemoryError):
+                raise RuntimeError(
+                    f"Không đủ bộ nhớ RAM để chạy OmniVoice-TTS cho {speaker_id}. "
+                    "Vui lòng đóng bớt các ứng dụng khác hoặc tăng Virtual Memory (Page File) trong Windows."
+                ) from mem_e
+            raise RuntimeError(
+                f"OmniVoice-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {mem_e}"
+            ) from mem_e
         except Exception as e:
             raise RuntimeError(
                 f"OmniVoice-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {e}"

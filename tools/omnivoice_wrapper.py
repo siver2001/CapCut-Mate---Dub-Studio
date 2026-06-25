@@ -88,6 +88,25 @@ class OmnivoiceProvider:
                 device_map=device, 
                 dtype=dtype
             )
+        except (OSError, MemoryError) as mem_err:
+            # Restore env vars before raising
+            if use_offline:
+                if old_hf_offline is None:
+                    os.environ.pop("HF_HUB_OFFLINE", None)
+                else:
+                    os.environ["HF_HUB_OFFLINE"] = old_hf_offline
+                if old_tf_offline is None:
+                    os.environ.pop("TRANSFORMERS_OFFLINE", None)
+                else:
+                    os.environ["TRANSFORMERS_OFFLINE"] = old_tf_offline
+            err_str = str(mem_err)
+            if "paging file" in err_str.lower() or "1455" in err_str or isinstance(mem_err, MemoryError):
+                raise RuntimeError(
+                    "Không đủ bộ nhớ RAM để tải mô hình OmniVoice. "
+                    "Vui lòng đóng bớt các ứng dụng khác hoặc tăng Virtual Memory (Page File) trong Windows. "
+                    "Nếu máy có GPU, hãy đảm bảo đã cài PyTorch phiên bản CUDA để giảm tải bộ nhớ RAM."
+                ) from mem_err
+            raise
         finally:
             if use_offline:
                 if old_hf_offline is None:
