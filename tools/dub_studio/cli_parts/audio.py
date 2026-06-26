@@ -1707,28 +1707,6 @@ def _run_tts_chain(
 ) -> list[dict[str, Any]]:
     chain_results: list[dict[str, Any]] = []
 
-    # Natural Pacing Chaining: Group adjacent segments into 'flow blocks'
-    # if they share the same voice/speaker and have minimal gaps.
-    flow_blocks: list[list[dict[str, Any]]] = []
-    current_block: list[dict[str, Any]] = []
-
-    for item in items:
-        if not current_block:
-            current_block.append(item)
-            continue
-
-        prev = current_block[-1]
-        gap = int(item["segment"]["startMs"]) - int(prev["segment"]["endMs"])
-
-        # If segments are very close (< 250ms), treat them as one continuous speech flow
-        if 0 <= gap < 250:
-            current_block.append(item)
-        else:
-            flow_blocks.append(current_block)
-            current_block = [item]
-    if current_block:
-        flow_blocks.append(current_block)
-
     previous_rate: str | None = None
 
     edge_voices: list[str] = []
@@ -1752,150 +1730,85 @@ def _run_tts_chain(
     if edge_voices:
         warm_up_edge_tts(edge_voices[0])
 
-    for block in flow_blocks:
-        if not block:
-            continue
+    # Process each segment individually to ensure every segment gets its own
+    # properly synthesized audio matching its translated text and timeline slot.
+    for item in items:
+        if item.get("provider") == "edge":
+            time.sleep(1.0)
 
-        # If block has multiple items, we synthesize them as ONE to get natural intonation
-        if len(block) > 1:
-            combined_text = ". ".join(normalize_text(it["translated"]) for it in block)
-            # Add final punctuation if missing
-            if not combined_text.endswith((".", "!", "?", "…")):
-                combined_text += "."
-
-            first_item = block[0]
-            last_item = block[-1]
-            total_target_ms = int(last_item["segment"]["endMs"]) - int(first_item["segment"]["startMs"])
-
-            safe_print(f"[tts] Chaining {len(block)} segments for natural pacing (Total: {total_target_ms}ms)", flush=True)
-
-            try:
-                fitted_clip, clip_ms, rate, pitch, volume, tts_text = synthesize_timed_tts_clip(
-                    index=first_item["index"],
-                    speaker_id=first_item["speaker_id"],
-                    voice=first_item["voice"],
-                    translated=combined_text,
-                    source_text=first_item["source_text"],
-                    delivery=first_item["delivery"],
-                    target_ms=total_target_ms,
-                    timing_mode=timing_mode,
-                    tts_dir=tts_dir,
-                    previous_rate=previous_rate,
-                    job_id=job_id,
-                    global_speed=global_speed,
-                )
-                previous_rate = rate
-
-                # The first item gets the combined audio
-                chain_results.append({
-                    **first_item,
-                    "fitted_clip": fitted_clip,
-                    "clip_ms": clip_ms,
-                    "rate": rate,
-                    "pitch": pitch,
-                    "volume": volume,
-                    "tts_text": tts_text,
-                })
-
-                # Subsequent items in the same block are marked as 'chained' with a silent placeholder
-                # so they don't trigger redundant synthesis or overlapping audio.
-                for idx in range(1, len(block)):
-                    sub_item = block[idx]
-                    silent_clip = tts_dir / f"{sub_item['index']:04d}_chained_placeholder.wav"
-                    if not silent_clip.exists():
-                        run(["ffmpeg", "-y", "-f", "lavfi", "-t", "0.01", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-ac", str(STABLE_AUDIO_CHANNELS), "-ar", str(STABLE_AUDIO_SAMPLE_RATE), "-c:a", "pcm_s16le", str(silent_clip)], timeout=15.0)
-
-                    chain_results.append({
-                        **sub_item,
-                        "fitted_clip": silent_clip,
-                        "clip_ms": 10,
-                        "rate": rate,
-                        "pitch": pitch,
-                        "volume": volume,
-                        "tts_text": "(chained)",
-                    })
-                continue
-            except Exception as exc:
-                safe_print(f"[tts] Chain synthesis failed, falling back to individual processing: {exc}", flush=True)
-
-        # Individual processing for single-item blocks or fallback
-        for item in block:
-            if item.get("provider") == "edge":
-                time.sleep(1.0)
-
-            emit_progress(
-                phase="render",
-                step="tts",
-                progress=0.44 + (item["progress_index"] / max(total_segments, 1)) * 0.16,
-                message=(
-                    f"Đang tạo lồng tiếng {item['progress_index']}/{total_segments}"
-                    f" · {item['speaker_id']} · {item['voice']}"
-                ),
+        emit_progress(
+            phase="render",
+            step="tts",
+            progress=0.44 + (item["progress_index"] / max(total_segments, 1)) * 0.16,
+            message=(
+                f"Đang tạo lồng tiếng {item['progress_index']}/{total_segments}"
+                f" · {item['speaker_id']} · {item['voice']}"
+            ),
+        )
+        safe_print(
+            f"[tts] segment {item['progress_index']}/{total_segments} "
+            f"{item['speaker_id']} {item['voice']}",
+            flush=True,
+        )
+        try:
+            fitted_clip, clip_ms, rate, pitch, volume, tts_text = synthesize_timed_tts_clip(
+                index=item["index"],
+                speaker_id=item["speaker_id"],
+                voice=item["voice"],
+                translated=item["translated"],
+                source_text=item["source_text"],
+                delivery=item["delivery"],
+                target_ms=item["target_ms"],
+                timing_mode=timing_mode,
+                tts_dir=tts_dir,
+                previous_rate=previous_rate,
+                job_id=job_id,
+                global_speed=global_speed,
             )
+        except Exception as exc:
+            if not DUB_TTS_ALLOW_SILENT_FALLBACK:
+                raise RuntimeError(
+                    f"TTS failed for segment {item['index']} ({item['speaker_id']}), "
+                    f"silent fallback is disabled: {exc}"
+                ) from exc
             safe_print(
-                f"[tts] segment {item['progress_index']}/{total_segments} "
-                f"{item['speaker_id']} {item['voice']}",
+                f"  [!] TTS thất bại cho segment {item['index']}: {exc} — tạo clip im thay thế",
                 flush=True,
             )
-            try:
-                fitted_clip, clip_ms, rate, pitch, volume, tts_text = synthesize_timed_tts_clip(
-                    index=item["index"],
-                    speaker_id=item["speaker_id"],
-                    voice=item["voice"],
-                    translated=item["translated"],
-                    source_text=item["source_text"],
-                    delivery=item["delivery"],
-                    target_ms=item["target_ms"],
-                    timing_mode=timing_mode,
-                    tts_dir=tts_dir,
-                    previous_rate=previous_rate,
-                    job_id=job_id,
-                    global_speed=global_speed,
-                )
-            except Exception as exc:
-                if not DUB_TTS_ALLOW_SILENT_FALLBACK:
-                    raise RuntimeError(
-                        f"TTS failed for segment {item['index']} ({item['speaker_id']}), "
-                        f"silent fallback is disabled: {exc}"
-                    ) from exc
-                safe_print(
-                    f"  [!] TTS thất bại cho segment {item['index']}: {exc} — tạo clip im thay thế",
-                    flush=True,
-                )
-                target_ms = int(item["target_ms"])
-                silent_duration = max(target_ms / 1000.0, 0.05)
-                silent_clip = tts_dir / f"{item['index']:04d}_silent_fallback.wav"
-                run(
-                    [
-                        "ffmpeg", "-y",
-                        "-f", "lavfi",
-                        "-t", f"{silent_duration:.3f}",
-                        "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-                        "-ac", str(STABLE_AUDIO_CHANNELS),
-                        "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
-                        "-c:a", "pcm_s16le",
-                        str(silent_clip),
-                    ],
-                    timeout=30.0,
-                )
-                fitted_clip = silent_clip
-                clip_ms = int(target_ms)
-                rate = "+0%"
-                pitch = "+0Hz"
-                volume = "+0%"
-                tts_text = str(item.get("translated") or "")
-            previous_rate = rate
-            chain_results.append(
-                {
-                    **item,
-                    "fitted_clip": fitted_clip,
-                    "clip_ms": clip_ms,
-                    "rate": rate,
-                    "pitch": pitch,
-                    "volume": volume,
-                    "tts_text": tts_text,
-                }
+            target_ms = int(item["target_ms"])
+            silent_duration = max(target_ms / 1000.0, 0.05)
+            silent_clip = tts_dir / f"{item['index']:04d}_silent_fallback.wav"
+            run(
+                [
+                    "ffmpeg", "-y",
+                    "-f", "lavfi",
+                    "-t", f"{silent_duration:.3f}",
+                    "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                    "-ac", str(STABLE_AUDIO_CHANNELS),
+                    "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
+                    "-c:a", "pcm_s16le",
+                    str(silent_clip),
+                ],
+                timeout=30.0,
             )
+            fitted_clip = silent_clip
+            clip_ms = int(target_ms)
+            rate = "+0%"
+            pitch = "+0Hz"
+            volume = "+0%"
+            tts_text = str(item.get("translated") or "")
+        previous_rate = rate
+        chain_results.append(
+            {
+                **item,
+                "fitted_clip": fitted_clip,
+                "clip_ms": clip_ms,
+                "rate": rate,
+                "pitch": pitch,
+                "volume": volume,
+                "tts_text": tts_text,
+            }
+        )
     return chain_results
 
 
