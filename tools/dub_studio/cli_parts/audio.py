@@ -959,8 +959,23 @@ def synthesize_tts(
                 ref_audio_path = custom_ref_wav
                 ref_text_val = custom_ref_text
             elif selected_voice == OMNIVOICE_CLONE_PRESET:
-                from .analysis import resolve_omnivoice_prompt_audio
+                from .analysis import resolve_omnivoice_prompt_audio, transcribe_reference_audio_file
                 ref_audio_path = resolve_omnivoice_prompt_audio(speaker_id=speaker_id, job_id=job_id)
+                if ref_audio_path is not None and ref_audio_path.exists():
+                    txt_path = ref_audio_path.with_suffix(".txt")
+                    if txt_path.exists():
+                        try:
+                            ref_text_val = txt_path.read_text(encoding="utf-8").strip()
+                        except Exception:
+                            ref_text_val = ""
+                    if not ref_text_val:
+                        try:
+                            safe_print(f"[tts] Auto-transcribing live clone prompt audio: {ref_audio_path.name}", flush=True)
+                            ref_text_val = transcribe_reference_audio_file(ref_audio_path)
+                            if ref_text_val:
+                                txt_path.write_text(ref_text_val, encoding="utf-8")
+                        except Exception as e:
+                            safe_print(f"[tts] Warning: Failed to transcribe live clone audio: {e}", flush=True)
 
             from tools.omnivoice_wrapper import get_omnivoice_provider
             provider = get_omnivoice_provider()
@@ -1374,6 +1389,10 @@ def refine_tts_rate(
 def voice_cache_salt(voice: str) -> str:
     selected_voice = resolve_voice_preset(voice)
     reference_audio = resolve_valtec_reference_audio(selected_voice)
+    if reference_audio is None or not reference_audio.exists():
+        from .analysis import resolve_omnivoice_reference_audio
+        reference_audio, _ = resolve_omnivoice_reference_audio(selected_voice)
+        
     if reference_audio is None or not reference_audio.exists():
         return ""
     stat = reference_audio.stat()

@@ -836,6 +836,8 @@ def recommend_voice_preset(
     value = str(candidate or "").strip()
     if value.startswith("cloud:"):
         return value
+    if value in (OMNIVOICE_CLONE_PRESET, VALTEC_CLONE_PRESET):
+        return value
     if value in VOICE_LABELS:
         return value
     
