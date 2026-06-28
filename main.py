@@ -34,6 +34,40 @@ try:
         if modified:
             with open(env_file, "w", encoding="utf-8-sig") as f:
                 f.writelines(new_lines)
+            
+            # Migrate existing 10GB+ model files to the new cache directory to prevent re-downloads and save disk space
+            old_cache_path = os.path.join(ROOT_DIR, "temp", ".cache", "huggingface", "hub")
+            new_cache_path = os.path.join(ROOT_DIR, "hf_cache", "huggingface", "hub")
+            if os.path.exists(old_cache_path):
+                import shutil
+                try:
+                    if not os.path.exists(new_cache_path):
+                        os.makedirs(os.path.dirname(new_cache_path), exist_ok=True)
+                        shutil.move(old_cache_path, new_cache_path)
+                    else:
+                        # Merge old cache folder into new cache folder if both exist
+                        for item in os.listdir(old_cache_path):
+                            src_item = os.path.join(old_cache_path, item)
+                            dst_item = os.path.join(new_cache_path, item)
+                            if not os.path.exists(dst_item):
+                                shutil.move(src_item, dst_item)
+                            elif os.path.isdir(src_item) and os.path.isdir(dst_item):
+                                for sub_item in os.listdir(src_item):
+                                    sub_src = os.path.join(src_item, sub_item)
+                                    sub_dst = os.path.join(dst_item, sub_item)
+                                    if not os.path.exists(sub_dst):
+                                        shutil.move(sub_src, sub_dst)
+                        shutil.rmtree(old_cache_path, ignore_errors=True)
+                    
+                    # Clean up empty parent directories of the old cache
+                    for d in [
+                        os.path.join(ROOT_DIR, "temp", ".cache", "huggingface"),
+                        os.path.join(ROOT_DIR, "temp", ".cache")
+                    ]:
+                        if os.path.exists(d) and not os.listdir(d):
+                            os.rmdir(d)
+                except Exception:
+                    pass
 except Exception:
     pass
 
