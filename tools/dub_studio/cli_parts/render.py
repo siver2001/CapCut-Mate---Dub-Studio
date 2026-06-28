@@ -2832,6 +2832,47 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     manifest_path = dirs["audio"] / "dub_manifest.json"
     manifest_path.write_text(json.dumps([asdict(item) for item in manifest], ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # Re-align subtitles with the final shifted timings from create_dub_audio to ensure perfect sync
+    if subtitle_enabled:
+        final_timings = {
+            str(segment.get("id") or ""): (int(segment.get("startMs", 0)), int(segment.get("endMs", 0)))
+            for segment in segments
+            if segment.get("id")
+        }
+        for item in subtitle_timeline:
+            segment_id = str(item.get("segmentId") or item.get("id") or "")
+            if segment_id in final_timings:
+                final_start, final_end = final_timings[segment_id]
+                item["startMs"] = final_start
+                item["endMs"] = final_end
+        
+        display_subtitles = split_subtitle_lines_for_display(
+            subtitle_timeline_to_lines(subtitle_timeline),
+            max_words=int(subtitle_preset.get("maxWordsPerChunk", 5)),
+            max_chars=int(subtitle_preset.get("maxCharsPerChunk", 22)),
+            punctuation_aware=bool(subtitle_preset.get("punctuationAwareSplit", True)),
+        )
+        
+        subtitle_positions = build_stable_subtitle_positions(
+            display_subtitles,
+            dynamic_regions=dynamic_regions,
+            fallback_region=effective_subtitle_region,
+            video_meta=analysis["videoMeta"],
+        )
+        
+        subtitle_ass_path.write_text(
+            compose_ass(
+                display_subtitles,
+                video_meta=analysis["videoMeta"],
+                subtitle_preset=subtitle_preset,
+                subtitle_positions=subtitle_positions,
+            ),
+            encoding="utf-8",
+        )
+        subtitle_srt_path.write_text(
+            compose_srt(display_subtitles), encoding="utf-8"
+        )
+
     background_audio_path, background_warnings = prepare_background_audio_track(
         video_path=input_path,
         video_meta=analysis["videoMeta"],

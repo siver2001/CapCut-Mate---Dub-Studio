@@ -1264,7 +1264,7 @@ def fit_audio_length_with_mode(
 
     speed_factor = clip_ms / max(target_fill_ms, 1)
     # Prevent excessive time-stretching that degrades natural vocal cadence ("bắn liên thanh")
-    max_allowed_speed = 1.20 if ultra_tight else 1.15
+    max_allowed_speed = 1.30 if ultra_tight else 1.22
     if speed_factor > max_allowed_speed:
         speed_factor = max_allowed_speed
 
@@ -1280,6 +1280,12 @@ def fit_audio_length_with_mode(
         ]
     )
     fitted_ms = ffprobe_audio_duration_ms(output_path)
+    
+    # In balanced_natural mode, prioritize voice naturalness and completeness over strict timeline boundaries.
+    # Never truncate/trim the audio, allowing it to play the full sentence.
+    if timing_mode == "balanced_natural":
+        return fitted_ms
+
     if fitted_ms > target_ms:
         trimmed_output = output_path.with_name(f"{output_path.stem}_trimmed{output_path.suffix}")
         run(
@@ -1386,13 +1392,18 @@ def refine_tts_rate(
     return format_rate_percent(next_percent, timing_mode=timing_mode, intro=intro)
 
 
-def voice_cache_salt(voice: str) -> str:
+def voice_cache_salt(voice: str, speaker_id: str = "speaker_1", job_id: str = "") -> str:
     selected_voice = resolve_voice_preset(voice)
     reference_audio = resolve_valtec_reference_audio(selected_voice)
     if reference_audio is None or not reference_audio.exists():
         from .analysis import resolve_omnivoice_reference_audio
         reference_audio, _ = resolve_omnivoice_reference_audio(selected_voice)
         
+    if reference_audio is None or not reference_audio.exists():
+        if selected_voice in ("omnivoice:clone", "valtec:clone"):
+            from .analysis import resolve_omnivoice_prompt_audio
+            reference_audio = resolve_omnivoice_prompt_audio(speaker_id=speaker_id, job_id=job_id)
+            
     if reference_audio is None or not reference_audio.exists():
         return ""
     stat = reference_audio.stat()
@@ -1424,6 +1435,58 @@ def synthesize_timed_tts_clip(
         intro=intro,
     )
     tts_text = normalize_text(delivery_profile["text"])
+    
+    # Bypass TTS engine if text has no letters/digits (punctuation-only or empty segment)
+    if not any(c.isalnum() for c in tts_text):
+        raw_extension = resolve_tts_output_extension(voice=voice, speaker_id=speaker_id, job_id=job_id)
+        cache_paths = build_tts_cache_paths(
+            tts_dir=tts_dir,
+            index=index,
+            speaker_id=speaker_id,
+            voice=voice,
+            voice_cache_salt=voice_cache_salt(voice, speaker_id=speaker_id, job_id=job_id),
+            rate="direct",
+            pitch="+0Hz",
+            volume="+0%",
+            text=tts_text,
+            raw_extension=raw_extension,
+            target_ms=target_ms,
+            timing_mode=timing_mode,
+            global_speed=global_speed,
+        )
+        raw_clip = cache_paths.raw_clip
+        prepared_clip = cache_paths.prepared_clip
+        fitted_clip = cache_paths.fitted_clip
+        
+        silent_duration = max(target_ms / 1000.0, 0.05)
+        run(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-t", f"{silent_duration:.3f}",
+                "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-ac", str(STABLE_AUDIO_CHANNELS),
+                "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
+                "-c:a", "pcm_s16le",
+                str(raw_clip),
+            ],
+            timeout=30.0,
+        )
+        
+        import shutil
+        prepared_clip.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(raw_clip, prepared_clip)
+        shutil.copy(raw_clip, fitted_clip)
+        
+        return (
+            fitted_clip,
+            target_ms,
+            "+0%",
+            "+0Hz",
+            "+0%",
+            tts_text,
+        )
+
     pitch = delivery_profile["pitch"]
     volume = delivery_profile["volume"]
     rate = estimate_intro_rate(tts_text, target_ms, timing_mode=timing_mode) if intro else estimate_rate(tts_text, target_ms, timing_mode=timing_mode)
@@ -1460,7 +1523,7 @@ def synthesize_timed_tts_clip(
                 index=index,
                 speaker_id=speaker_id,
                 voice=voice,
-                voice_cache_salt=voice_cache_salt(voice),
+                voice_cache_salt=voice_cache_salt(voice, speaker_id=speaker_id, job_id=job_id),
                 rate=rate,
                 pitch=pitch,
                 volume=volume,
@@ -1582,7 +1645,7 @@ def synthesize_timed_tts_clip(
                     index=index,
                     speaker_id=speaker_id,
                     voice=voice,
-                    voice_cache_salt=voice_cache_salt(voice),
+                    voice_cache_salt=voice_cache_salt(voice, speaker_id=speaker_id, job_id=job_id),
                     rate="direct",
                     pitch="+0Hz",
                     volume="+0%",
