@@ -6,6 +6,7 @@ from pathlib import Path
 
 # Force HuggingFace cache to project local workspace directory
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 os.environ["HF_HOME"] = str(ROOT / "hf_cache")
 os.environ["HF_HUB_DISABLE_XET"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"

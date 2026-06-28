@@ -545,7 +545,7 @@ def build() -> None:
                 shutil.copytree(
                     src_path,
                     dest_path,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".git", ".github"),
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".git", ".github", ".gradle", "temp", "output"),
                 )
         shutil.copy2(root / "main.py", output_dir / "main.py")
         print("[+] Cap nhat ma nguon hoan tat! (Mat chua den 1 giay).", flush=True)
