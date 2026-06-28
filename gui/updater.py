@@ -48,12 +48,9 @@ class UpdateThread(QThread):
             self.progress_signal.emit(10, f"Không thể kiểm tra phiên bản ({str(ver_err).strip()}). Tiếp tục tiến trình...")
 
         if remote_ver:
-            if not self.is_newer_version(APP_VERSION, remote_ver):
-                self.progress_signal.emit(100, "Phiên bản hiện tại đã là mới nhất.")
-                self.finished_signal.emit(True, f"Phiên bản hiện tại ({APP_VERSION}) đã là mới nhất. Không cần cập nhật.")
-                return
-            else:
-                self.progress_signal.emit(15, f"Tìm thấy phiên bản mới: {remote_ver} (Hiện tại: {APP_VERSION})")
+            self.progress_signal.emit(15, f"Tìm thấy phiên bản trên máy chủ: {remote_ver} (Cục bộ: {APP_VERSION}). Đang tiến hành đồng bộ mã nguồn mới nhất...")
+        else:
+            self.progress_signal.emit(15, f"Chuẩn bị đồng bộ mã nguồn mới nhất từ GitHub...")
 
         # 2. Check Write Permission
         self.progress_signal.emit(20, "Kiểm tra quyền ghi vào thư mục cài đặt...")
