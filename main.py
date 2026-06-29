@@ -10,6 +10,9 @@ else:
 
 # Migrate old DUB_HF_CACHE_DIR to new shorter path in .env to prevent MAX_PATH limit errors on Windows
 try:
+    import shutil
+    new_cache_path = os.path.join(os.path.expanduser("~"), ".capcut_mate", "hf_cache", "huggingface", "hub")
+    
     env_file = os.path.join(ROOT_DIR, ".env")
     if os.path.exists(env_file):
         with open(env_file, "r", encoding="utf-8-sig") as f:
@@ -17,16 +20,15 @@ try:
         
         modified = False
         new_lines = []
-        old_default_rel = "temp/.cache/huggingface/hub"
         for line in lines:
             line_stripped = line.strip()
             if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
                 k, v = line_stripped.split("=", 1)
                 k = k.strip()
                 v = v.strip().strip('"').strip("'")
-                if k == "DUB_HF_CACHE_DIR" and v == old_default_rel:
-                    new_lines.append("DUB_HF_CACHE_DIR=hf_cache/huggingface/hub\n")
-                    os.environ["DUB_HF_CACHE_DIR"] = "hf_cache/huggingface/hub"
+                if k == "DUB_HF_CACHE_DIR" and v in ("temp/.cache/huggingface/hub", "hf_cache/huggingface/hub"):
+                    new_lines.append("# DUB_HF_CACHE_DIR is now defaulted to user home directory to prevent path limit errors\n")
+                    os.environ.pop("DUB_HF_CACHE_DIR", None)
                     modified = True
                     continue
             new_lines.append(line)
@@ -34,40 +36,58 @@ try:
         if modified:
             with open(env_file, "w", encoding="utf-8-sig") as f:
                 f.writelines(new_lines)
-            
-            # Migrate existing 10GB+ model files to the new cache directory to prevent re-downloads and save disk space
-            old_cache_path = os.path.join(ROOT_DIR, "temp", ".cache", "huggingface", "hub")
-            new_cache_path = os.path.join(ROOT_DIR, "hf_cache", "huggingface", "hub")
-            if os.path.exists(old_cache_path):
-                import shutil
-                try:
-                    if not os.path.exists(new_cache_path):
-                        os.makedirs(os.path.dirname(new_cache_path), exist_ok=True)
-                        shutil.move(old_cache_path, new_cache_path)
-                    else:
-                        # Merge old cache folder into new cache folder if both exist
-                        for item in os.listdir(old_cache_path):
-                            src_item = os.path.join(old_cache_path, item)
-                            dst_item = os.path.join(new_cache_path, item)
-                            if not os.path.exists(dst_item):
-                                shutil.move(src_item, dst_item)
-                            elif os.path.isdir(src_item) and os.path.isdir(dst_item):
-                                for sub_item in os.listdir(src_item):
-                                    sub_src = os.path.join(src_item, sub_item)
-                                    sub_dst = os.path.join(dst_item, sub_item)
-                                    if not os.path.exists(sub_dst):
-                                        shutil.move(sub_src, sub_dst)
-                        shutil.rmtree(old_cache_path, ignore_errors=True)
-                    
-                    # Clean up empty parent directories of the old cache
-                    for d in [
-                        os.path.join(ROOT_DIR, "temp", ".cache", "huggingface"),
-                        os.path.join(ROOT_DIR, "temp", ".cache")
-                    ]:
-                        if os.path.exists(d) and not os.listdir(d):
-                            os.rmdir(d)
-                except Exception:
-                    pass
+
+    # Helper to recursively merge and clean directories
+    def merge_dirs(src, dst):
+        if not os.path.exists(src):
+            return
+        os.makedirs(dst, exist_ok=True)
+        for item in os.listdir(src):
+            s = os.path.join(src, item)
+            d = os.path.join(dst, item)
+            if os.path.isdir(s):
+                merge_dirs(s, d)
+            else:
+                if not os.path.exists(d):
+                    try:
+                        shutil.move(s, d)
+                    except Exception:
+                        pass
+        try:
+            shutil.rmtree(src, ignore_errors=True)
+        except Exception:
+            pass
+
+    # Migrate existing model files from all potential old local cache locations
+    old_locations = [
+        os.path.join(ROOT_DIR, "temp", ".cache", "huggingface", "hub"),
+        os.path.join(ROOT_DIR, "hf_cache", "huggingface", "hub"),
+        os.path.join(ROOT_DIR, "_internal", "hf_cache", "huggingface", "hub"),
+    ]
+    for old_loc in old_locations:
+        if os.path.exists(old_loc):
+            try:
+                merge_dirs(old_loc, new_cache_path)
+            except Exception:
+                pass
+
+    # Clean up empty parent directories of old cache locations
+    def remove_empty_dir(d):
+        try:
+            if os.path.exists(d) and not os.listdir(d):
+                os.rmdir(d)
+        except Exception:
+            pass
+
+    for parent in [
+        os.path.join(ROOT_DIR, "temp", ".cache", "huggingface"),
+        os.path.join(ROOT_DIR, "temp", ".cache"),
+        os.path.join(ROOT_DIR, "hf_cache", "huggingface"),
+        os.path.join(ROOT_DIR, "hf_cache"),
+        os.path.join(ROOT_DIR, "_internal", "hf_cache", "huggingface"),
+        os.path.join(ROOT_DIR, "_internal", "hf_cache"),
+    ]:
+        remove_empty_dir(parent)
 except Exception:
     pass
 

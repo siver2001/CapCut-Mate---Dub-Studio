@@ -77,24 +77,6 @@ def ensure_hf_snapshot(
     if not normalized:
         return None
     
-    # Auto-link 'local' snapshot directory to the commit hash directory if refs/main exists
-    try:
-        snapshots_dir = hf_repo_cache_dir(normalized) / "snapshots"
-        local_dir = snapshots_dir / "local"
-        refs_main = hf_repo_cache_dir(normalized) / "refs" / "main"
-        if local_dir.exists() and refs_main.exists():
-            commit_hash = refs_main.read_text(encoding="utf-8").strip()
-            if commit_hash and commit_hash != "local":
-                hash_dir = snapshots_dir / commit_hash
-                if not hash_dir.exists():
-                    import subprocess
-                    if sys.platform == "win32":
-                        subprocess.run(["cmd", "/c", f'mklink /J "{hash_dir}" "{local_dir}"'], capture_output=True)
-                    else:
-                        os.symlink(local_dir, hash_dir)
-    except Exception:
-        pass
-
     snapshots = hf_repo_snapshots(normalized)
     if snapshots:
         return snapshots[-1]
@@ -113,15 +95,10 @@ def ensure_hf_snapshot(
     )
     from huggingface_hub import snapshot_download  # type: ignore
 
-    repo_cache_dir = hf_repo_cache_dir(normalized)
-    local_snapshot_dir = repo_cache_dir / "snapshots" / "local"
-    local_snapshot_dir.mkdir(parents=True, exist_ok=True)
     kwargs: dict[str, Any] = {
         "repo_id": normalized,
         "cache_dir": str(HUGGINGFACE_HUB_CACHE),
-        "local_dir": str(local_snapshot_dir),
     }
-    kwargs["local_dir_use_symlinks"] = False
     if allow_patterns:
         kwargs["allow_patterns"] = allow_patterns
     if token:
@@ -136,24 +113,6 @@ def ensure_hf_snapshot(
                 f"Model {normalized} đang là gated repo trên Hugging Face. Hãy đăng nhập đúng tài khoản HF đã có token và bấm chấp nhận quyền truy cập trên trang model rồi chạy lại."
             ) from exc
         raise
-
-    # Auto-link 'local' snapshot directory to the commit hash directory after downloading
-    try:
-        snapshots_dir = repo_cache_dir / "snapshots"
-        local_dir = snapshots_dir / "local"
-        refs_main = repo_cache_dir / "refs" / "main"
-        if local_dir.exists() and refs_main.exists():
-            commit_hash = refs_main.read_text(encoding="utf-8").strip()
-            if commit_hash and commit_hash != "local":
-                hash_dir = snapshots_dir / commit_hash
-                if not hash_dir.exists():
-                    import subprocess
-                    if sys.platform == "win32":
-                        subprocess.run(["cmd", "/c", f'mklink /J "{hash_dir}" "{local_dir}"'], capture_output=True)
-                    else:
-                        os.symlink(local_dir, hash_dir)
-    except Exception:
-        pass
 
     snapshots = hf_repo_snapshots(normalized)
     return snapshots[-1] if snapshots else None
