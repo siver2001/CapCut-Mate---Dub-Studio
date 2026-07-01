@@ -115,9 +115,9 @@ def ffprobe_duration_ms(path: Path) -> int:
 
 def ffprobe_audio_duration_ms(path: Path, timeout: float | None = None) -> int:
     if not path.exists():
-        raise RuntimeError(f"TTS audio file was not created: {path}")
-    if path.stat().st_size <= 0:
-        raise RuntimeError(f"TTS audio file is empty: {path}")
+        raise RuntimeError(f"TTS audio file does not exist: {path}")
+    if path.stat().st_size <= 100:
+        raise RuntimeError(f"TTS audio file is empty/corrupted (size <= 100B): {path}")
     effective_timeout = resolve_ffprobe_timeout(timeout or 30.0)
     raw = run_ffprobe_output(
         [
@@ -139,8 +139,8 @@ def ffprobe_audio_duration_ms(path: Path, timeout: float | None = None) -> int:
 def validate_generated_audio_file(path: Path, *, context: str) -> None:
     if not path.exists():
         raise RuntimeError(f"{context}: audio file was not created at {path}")
-    if path.stat().st_size <= 0:
-        raise RuntimeError(f"{context}: audio file is empty at {path}")
+    if path.stat().st_size <= 100:
+        raise RuntimeError(f"{context}: audio file is empty/corrupted (size <= 100B) at {path}")
 
 
 def get_video_meta(path: Path) -> dict[str, Any]:

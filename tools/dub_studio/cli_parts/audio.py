@@ -763,7 +763,7 @@ def synthesize_tts(
     global_speed: float = 1.0,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists() and output_path.stat().st_size <= 0:
+    if output_path.exists() and output_path.stat().st_size <= 100:
         output_path.unlink(missing_ok=True)
     selected_voice = resolve_voice_preset(voice)
     
@@ -1536,7 +1536,7 @@ def synthesize_timed_tts_clip(
             raw_clip = cache_paths.raw_clip
             prepared_clip = cache_paths.prepared_clip
             fitted_clip = cache_paths.fitted_clip
-            if raw_clip.exists() and raw_clip.stat().st_size <= 0:
+            if raw_clip.exists() and raw_clip.stat().st_size <= 100:
                 raw_clip.unlink(missing_ok=True)
             if raw_clip.exists():
                 try:
@@ -1700,7 +1700,7 @@ def synthesize_timed_tts_clip(
 
 
 def prepare_tts_clip_for_timeline(source_path: Path, output_path: Path) -> Path:
-    if output_path.exists() and output_path.stat().st_size > 0:
+    if output_path.exists() and output_path.stat().st_size > 100:
         try:
             ffprobe_audio_duration_ms(output_path)
             return output_path
@@ -1941,7 +1941,7 @@ def create_dub_audio(
             )
             silent_duration = max(target_ms / 1000.0, 0.05)
             silent_clip = tts_dir / f"{index:04d}_silent_fallback.wav"
-            if not silent_clip.exists() or silent_clip.stat().st_size <= 0:
+            if not silent_clip.exists() or silent_clip.stat().st_size <= 100:
                 run(
                     [
                         "ffmpeg", "-y",
@@ -2097,7 +2097,7 @@ def create_dub_audio(
         if DUB_ENABLE_ENERGY_MATCHING:
             reference_clip = reference_dir / f"{segment['id']}_orig.wav"
             try:
-                if not reference_clip.exists() or reference_clip.stat().st_size <= 0:
+                if not reference_clip.exists() or reference_clip.stat().st_size <= 100:
                     extract_audio_clip(
                         source_video_path,
                         reference_clip,
@@ -2211,7 +2211,7 @@ def normalize_audio_mix_mode(value: str | None, *, keep_original_audio: bool) ->
 
 
 def extract_audio_for_background_mix(video_path: Path, audio_path: Path) -> None:
-    if audio_path.exists() and audio_path.stat().st_size > 0:
+    if audio_path.exists() and audio_path.stat().st_size > 100:
         return
     run(
         [
@@ -2363,7 +2363,7 @@ def separate_background_audio(
     no_vocals_path = separation_root / DUB_SOURCE_SEPARATION_MODEL / stem_name / "no_vocals.wav"
     accompaniment_path = separation_root / DUB_SOURCE_SEPARATION_MODEL / stem_name / "accompaniment.wav"
     cached_candidate = no_vocals_path if no_vocals_path.exists() else accompaniment_path
-    if cached_candidate.exists() and cached_candidate.stat().st_size > 0:
+    if cached_candidate.exists() and cached_candidate.stat().st_size > 100:
         return cached_candidate
     emit_progress(
         phase=phase,

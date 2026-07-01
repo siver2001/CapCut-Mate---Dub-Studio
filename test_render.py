@@ -26,8 +26,8 @@ def run_test_render():
     safe_print("=" * 70)
     
     # 1. Xác định file và thư mục
-    video_input = ROOT_DIR / "Test.mp4"
-    real_analysis_path = ROOT_DIR / "temp" / "real_analysis.json"
+    video_input = ROOT_DIR / "VLOG DOGS PET BẢN TEST P2.mp4"
+    real_analysis_path = ROOT_DIR / "temp" / "dogs_analysis.json"
     
     if not video_input.exists():
         safe_print(f"[ERROR] Không tìm thấy file video đầu vào: {video_input}")
@@ -72,10 +72,10 @@ def run_test_render():
     # - introHook: Bật Teaser dạng montage dài 15 giây sử dụng giọng Thanh Tâm tự nhiên
     safe_print("[INFO] Đang khởi tạo tùy chọn Render nâng cao (Lồng tiếng nhiều nhân vật, Che Sub, Teaser)...")
     render_options = {
-        "sourceSubtitleCleanupMode": "localized_blur",
+        "sourceSubtitleCleanupMode": "none",
         "videoCodecMode": "cpu_stable",
         "voiceMapping": {
-            "speaker_1": "valtec:nm1",      # Người kể chuyện (Nam miền Bắc)
+            "speaker_1": "omnivoice:test_clone_voice",      # Người kể chuyện (Custom OmniVoice Clone)
             "speaker_2": "valtec:nf",       # Chân Hoàn / Đoan Phi (Nữ miền Bắc)
             "speaker_3": "valtec:sf",       # Long Nguyệt (Nữ miền Nam)
             "speaker_4": "valtec:nm2",      # Cận Tịch (Nam miền Bắc 2)

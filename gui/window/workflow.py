@@ -2488,68 +2488,75 @@ class WindowWorkflowMixin:
             self.effective_analysis = copy.deepcopy(self.analysis)
 
     def hydrate_settings_from_analysis(self, analysis: dict[str, Any]) -> None:
-        merged = default_settings()
+        # 1. Read current widget values so self.settings has the latest adjustments
+        self.read_settings_from_widgets()
+        
+        # 2. Use current settings as the base to keep user modifications
+        merged = copy.deepcopy(self.settings)
         render_defaults = analysis.get("renderDefaults") or {}
-        merged["sourceLanguage"] = (
-            self.settings.get("sourceLanguage") or merged["sourceLanguage"]
-        )
+        
+        # 3. Update only newly detected or generated fields from analysis
         merged["targetLanguage"] = analysis.get(
-            "targetLanguage", self.settings.get("targetLanguage") or "vi"
+            "targetLanguage", merged.get("targetLanguage") or "vi"
         )
-        merged["speakerDetectionMode"] = render_defaults.get(
-            "speakerDetectionMode", merged["speakerDetectionMode"]
-        )
-        merged["speakerCount"] = len(analysis.get("speakers") or []) or 1
+        
+        # Update speaker count
+        detected_speaker_count = len(analysis.get("speakers") or []) or 1
+        merged["speakerCount"] = detected_speaker_count
+        
+        # Ensure default voice is set
         merged["defaultVoice"] = str(
-            self.settings.get("defaultVoice")
-            or (self.settings.get("voiceMapping") or {}).get("speaker_1")
-            or merged.get("defaultVoice")
+            merged.get("defaultVoice")
+            or (merged.get("voiceMapping") or {}).get("speaker_1")
             or preferred_default_voice()
         )
-        merged["voiceMapping"] = {
+        
+        # Update speaker voice mapping
+        analysis_voice_map = {
             speaker.get("speakerId"): speaker.get("voicePreset")
             for speaker in analysis.get("speakers", [])
         }
-        for index in range(max(1, min(int(merged["speakerCount"] or 1), 4))):
-            merged["voiceMapping"].setdefault(f"speaker_{index + 1}", merged["defaultVoice"])
         
-        merged["displayNameMapping"] = {}
+        current_voice_map = merged.get("voiceMapping") or {}
+        for spk_id, preset in analysis_voice_map.items():
+            current_voice_map.setdefault(spk_id, preset or merged["defaultVoice"])
+            
+        for index in range(max(1, min(int(detected_speaker_count), 4))):
+            current_voice_map.setdefault(f"speaker_{index + 1}", merged["defaultVoice"])
+            
+        merged["voiceMapping"] = current_voice_map
+        
+        # Update display name mapping for speakers
+        if "displayNameMapping" not in merged:
+            merged["displayNameMapping"] = {}
         for speaker in analysis.get("speakers", []):
             name = speaker.get("displayName")
             spk_id = speaker.get("speakerId")
             if not name or not spk_id:
                 continue
-            if name.startswith("Người quen: "):
-                merged["displayNameMapping"][spk_id] = name.replace("Người quen: ", "", 1)
-            elif not name.startswith("speaker_") and "(" not in name and "tuổi" not in name:
-                merged["displayNameMapping"][spk_id] = name
-        merged["introHook"].update(render_defaults.get("introHook") or {})
-        merged["subtitlePreset"].update(render_defaults.get("subtitlePreset") or {})
-        merged["subtitleRegion"].update(analysis.get("subtitleRegion") or {})
-        merged["sourceSubtitleCleanupMode"] = render_defaults.get(
-            "sourceSubtitleCleanupMode", merged["sourceSubtitleCleanupMode"]
-        )
-        merged["outputTargets"].update(render_defaults.get("outputTargets") or {})
-        merged["timingMode"] = render_defaults.get("timingMode", merged["timingMode"])
-        merged["videoCodecMode"] = self.settings.get(
-            "videoCodecMode",
-            render_defaults.get("videoCodecMode", merged["videoCodecMode"]),
-        )
-        merged["uiThemePreset"] = self.settings.get(
-            "uiThemePreset", merged["uiThemePreset"]
-        )
-        merged["keepOriginalAudio"] = bool(
-            render_defaults.get("keepOriginalAudio", merged["keepOriginalAudio"])
-        )
-        merged["draftRoot"] = render_defaults.get("draftRoot") or merged["draftRoot"]
-        merged["outputDirectory"] = (
-            render_defaults.get("outputDirectory") or merged["outputDirectory"]
-        )
+            if spk_id not in merged["displayNameMapping"]:
+                if name.startswith("Người quen: "):
+                    merged["displayNameMapping"][spk_id] = name.replace("Người quen: ", "", 1)
+                elif not name.startswith("speaker_") and "(" not in name and "tuổi" not in name:
+                    merged["displayNameMapping"][spk_id] = name
+        
+        # Subtitle region is always updated since it is AI-detected
+        merged.setdefault("subtitleRegion", {}).update(analysis.get("subtitleRegion") or {})
+        
+        # Suggest cleanup mode and timing mode only if they are at defaults
+        if merged.get("sourceSubtitleCleanupMode") == "localized_blur" and render_defaults.get("sourceSubtitleCleanupMode"):
+            merged["sourceSubtitleCleanupMode"] = render_defaults["sourceSubtitleCleanupMode"]
+            
+        if merged.get("timingMode") == "balanced_natural" and render_defaults.get("timingMode"):
+            merged["timingMode"] = render_defaults["timingMode"]
+
+        # Handle intro hook preset resolution safely
+        merged.setdefault("introHook", {})
         intro_preset_key = str(
-            (merged.get("introHook") or {}).get("voicePresetKey") or ""
+            merged["introHook"].get("voicePresetKey") or ""
         )
         if not intro_preset_key:
-            intro_voice = str((merged.get("introHook") or {}).get("voice") or "")
+            intro_voice = str(merged["introHook"].get("voice") or "")
             if intro_voice.endswith("Neural") and intro_voice not in {
                 "vi-VN-HoaiMyNeural",
                 "vi-VN-NamMinhNeural",
@@ -2560,23 +2567,23 @@ class WindowWorkflowMixin:
                     "female_story" if intro_voice == "vi-VN-HoaiMyNeural" else "male_story"
                 )
         intro_preset = resolve_intro_voice_preset(intro_preset_key)
-        merged["introHook"]["voicePresetKey"] = intro_preset["key"]
-        merged["introHook"]["voice"] = intro_preset["voice"]
+        merged["introHook"]["voicePresetKey"] = merged["introHook"].get("voicePresetKey") or intro_preset["key"]
+        merged["introHook"]["voice"] = merged["introHook"].get("voice") or intro_preset["voice"]
         merged["introHook"]["voiceRateDeltaPercent"] = int(
-            (merged["introHook"] or {}).get(
-                "voiceRateDeltaPercent", intro_preset["rateDeltaPercent"]
-            )
+            merged["introHook"].get("voiceRateDeltaPercent") or intro_preset["rateDeltaPercent"]
         )
+        
+        # Watermark fallback
         merged.setdefault("watermark", {})
-        merged["watermark"]["enabled"] = render_defaults.get("watermarkEnabled", merged["watermark"].get("enabled", False))
-        merged["watermark"]["path"] = render_defaults.get("watermarkPath", merged["watermark"].get("path", ""))
-        merged["watermark"]["position"] = render_defaults.get("watermarkPosition", merged["watermark"].get("position", "top-right"))
-        merged["watermark"]["scale"] = render_defaults.get("watermarkScale", merged["watermark"].get("scale", 0.15))
-        merged.setdefault("stickerOptions", {}).update(
-            self.settings.get("stickerOptions")
-            or render_defaults.get("stickerOptions")
-            or {}
-        )
+        if "enabled" not in merged["watermark"]:
+            merged["watermark"]["enabled"] = render_defaults.get("watermarkEnabled", False)
+        if "path" not in merged["watermark"]:
+            merged["watermark"]["path"] = render_defaults.get("watermarkPath", "")
+        if "position" not in merged["watermark"]:
+            merged["watermark"]["position"] = render_defaults.get("watermarkPosition", "top-right")
+        if "scale" not in merged["watermark"]:
+            merged["watermark"]["scale"] = render_defaults.get("watermarkScale", 0.15)
+            
         self.settings = merged
         self.sync_widgets_from_settings()
 

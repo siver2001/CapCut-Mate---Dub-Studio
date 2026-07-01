@@ -318,6 +318,9 @@ class DubStudioJobController(QWidget):
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         env.insert("PYTHONUNBUFFERED", "1")
+        for key in ["DUB_OMNIVOICE_DEVICE", "DUB_HF_CACHE_DIR", "HF_HOME", "DUB_USE_GPU", "DUB_USE_OMNIVOICE", "DUB_USE_VALTEC"]:
+            if key in os.environ:
+                env.insert(key, os.environ[key])
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))
         
