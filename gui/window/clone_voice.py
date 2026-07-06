@@ -158,6 +158,7 @@ class WindowCloneVoiceMixin:
 
         self.clone_save_btn = self._make_button("Lưu giọng", "success")
         self.clone_save_btn.setMinimumHeight(40)
+        self.clone_save_btn.setEnabled(False)  # Disabled initially
         self.clone_save_btn.clicked.connect(self.on_save_clone_voice_clicked)
 
         self.clone_test_btn = self._make_button("Clone giọng", "ghost")
@@ -188,6 +189,11 @@ class WindowCloneVoiceMixin:
         self.clone_status_label.setWordWrap(True)
         self.clone_status_label.setStyleSheet("color: #94a3b8; font-style: italic;")
         clone_inner_layout.addWidget(self.clone_status_label)
+
+        # Connect input modifications to dynamically disable save/replay until a new test is run
+        self.clone_wav_path_edit.textChanged.connect(self.on_inputs_changed)
+        self.clone_ref_text_edit.textChanged.connect(self.on_inputs_changed)
+        self.clone_test_text_edit.textChanged.connect(self.on_inputs_changed)
 
         clone_inner_layout.addStretch(1)
         page_layout.addWidget(clone_card)
@@ -258,6 +264,13 @@ class WindowCloneVoiceMixin:
         device_val = self.clone_device_combo.currentData()
         self._save_omnivoice_device_setting(device_val)
         self.clone_status_label.setText(f"Đã chuyển thiết bị OmniVoice sang: {self.clone_device_combo.currentText()}")
+        self.on_inputs_changed()
+
+    def on_inputs_changed(self) -> None:
+        self.clone_save_btn.setEnabled(False)
+        self.clone_replay_btn.setEnabled(False)
+        if hasattr(self, "_last_clone_preview_path"):
+            self._last_clone_preview_path = None
 
     def _save_omnivoice_device_setting(self, device_val: str) -> None:
         from gui.config import ROOT
@@ -407,7 +420,8 @@ class WindowCloneVoiceMixin:
             self.clone_progress_bar.setVisible(False)
             self.clone_progress_bar.setRange(0, 100)
             self.clone_test_btn.setEnabled(True)
-            self.clone_save_btn.setEnabled(True)
+            self.clone_save_btn.setEnabled(False)
+            self.clone_replay_btn.setEnabled(False)
             
             stdout_str = decode_process_bytes(b"".join(process.stdout_data))
             stderr_str = decode_process_bytes(b"".join(process.stderr_data))
@@ -437,6 +451,7 @@ class WindowCloneVoiceMixin:
                 if audio_path and os.path.exists(audio_path):
                     self._last_clone_preview_path = audio_path
                     self.clone_replay_btn.setEnabled(True)
+                    self.clone_save_btn.setEnabled(True)
                     self.clone_status_label.setText("Đang phát âm thanh clone...")
                     self._play_voice_preview_audio(audio_path, f"Giọng clone {name}", self.clone_status_label)
                 else:
