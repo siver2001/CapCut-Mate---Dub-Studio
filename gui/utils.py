@@ -698,7 +698,7 @@ def default_settings() -> dict[str, Any]:
         "localizationMode": "creative",
         "translateProvider": "auto",
         "introHook": {
-            "enabled": True,
+            "enabled": False,
             "clipDurationMs": 15000,
             "voice": default_voice,
             "voicePresetKey": default_voice,

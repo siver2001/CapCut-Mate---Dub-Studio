@@ -1963,7 +1963,7 @@ def build_default_render_options(analysis: dict[str, Any]) -> dict[str, Any]:
         "draftRoot": "",
         "outputDirectory": "",
         "introHook": {
-            "enabled": True,
+            "enabled": False,
             "clipDurationMs": 15000,
             "voice": DEFAULT_VOICES[0],
             "voicePresetKey": DEFAULT_VOICES[0],
