@@ -130,8 +130,8 @@ class DubStudioJobController(QWidget):
         last_activity = self._last_activity_at.get(active_id, now)
         idle_time = now - last_activity
         
-        # 7 minutes timeout for silent hang
-        if idle_time > 420:
+        # 15 minutes timeout for silent hang
+        if idle_time > 900:
             append_job_log(job, f"Pipeline stalled for {int(idle_time)}s. Forcing termination.", "error")
             self._fail_job(active_id, "Tiến trình bị treo quá lâu (Watchdog timeout). Vui lòng kiểm tra lại cấu hình hoặc thử lại.")
             process = job.get("process")

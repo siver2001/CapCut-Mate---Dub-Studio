@@ -218,16 +218,23 @@ def analyze_with_whisperx(
         cli_log(f"[warn] Căn chỉnh WhisperX thất bại ({align_err}), chuyển sang sử dụng phân đoạn gốc.")
         warnings.append(f"Không thể tải hoặc chạy mô hình căn chỉnh từ vựng ({align_err}). Đã tự động dùng mốc thời gian gốc.")
         aligned_segments = raw_segments
-    normalized_segments = [
-        {
-            "startMs": max(int(float(segment.get("start", 0.0)) * 1000), 0),
-            "endMs": max(int(float(segment.get("end", 0.0)) * 1000), max(int(float(segment.get("start", 0.0)) * 1000), 0) + 1),
-            "text": normalize_text(segment.get("text") or ""),
+    normalized_segments = []
+    for segment in aligned_segments:
+        text = normalize_text(segment.get("text") or "")
+        if not text:
+            continue
+        raw_start = segment.get("start")
+        raw_end = segment.get("end")
+        start_val = float(raw_start) if raw_start is not None else 0.0
+        end_val = float(raw_end) if raw_end is not None else start_val + 0.1
+        start_ms = max(int(start_val * 1000), 0)
+        end_ms = max(int(end_val * 1000), start_ms + 1)
+        normalized_segments.append({
+            "startMs": start_ms,
+            "endMs": end_ms,
+            "text": text,
             "speaker": normalize_text(segment.get("speaker") or ""),
-        }
-        for segment in aligned_segments
-        if normalize_text(segment.get("text") or "")
-    ]
+        })
     raw_subtitles = subtitles_from_analysis_segments(normalized_segments)
     raw_srt_path.write_text(compose_srt(raw_subtitles), encoding="utf-8")
 
