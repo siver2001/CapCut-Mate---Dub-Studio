@@ -180,38 +180,44 @@ def analyze_with_whisperx(
     detected_language = normalize_text(result.get("language") or "") or "zh"
     raw_segments = result.get("segments") or []
 
-    emit_progress(phase="analysis", step="align", progress=0.35, message=f"Đang tải mô hình căn chỉnh (align) cho ngôn ngữ: {detected_language}...")
-    align_repo_id = whisperx_align_repo_id(detected_language)
-    align_kwargs: dict[str, Any] = {}
-    if align_repo_id:
-        if not hf_repo_cached(align_repo_id):
-            ensure_whisperx_align_cache(
-                language_code=detected_language,
-                phase="analysis",
-                step="align",
-                progress=0.35,
-            )
-        align_kwargs = {
-            "model_name": align_repo_id,
-            "model_dir": str(HUGGINGFACE_HUB_CACHE),
-        }
-    cli_log(f"analyze_with_whisperx: Loading alignment model for {detected_language}")
-    model_align, metadata = whisperx.load_align_model(
-        language_code=detected_language,
-        device=device,
-        **align_kwargs,
-    )
-    cli_log("analyze_with_whisperx: Starting alignment")
-    emit_progress(phase="analysis", step="align", progress=0.45, message="Đang căn chỉnh thời gian từ vựng (word-level alignment)...")
-    aligned_result = whisperx.align(
-        raw_segments,
-        model_align,
-        metadata,
-        audio,
-        device,
-        return_char_alignments=False,
-    )
-    aligned_segments = aligned_result.get("segments") or []
+    aligned_segments = []
+    try:
+        emit_progress(phase="analysis", step="align", progress=0.35, message=f"Đang tải mô hình căn chỉnh (align) cho ngôn ngữ: {detected_language}...")
+        align_repo_id = whisperx_align_repo_id(detected_language)
+        align_kwargs: dict[str, Any] = {}
+        if align_repo_id:
+            if not hf_repo_cached(align_repo_id):
+                ensure_whisperx_align_cache(
+                    language_code=detected_language,
+                    phase="analysis",
+                    step="align",
+                    progress=0.35,
+                )
+            align_kwargs = {
+                "model_name": align_repo_id,
+                "model_dir": str(HUGGINGFACE_HUB_CACHE),
+            }
+        cli_log(f"analyze_with_whisperx: Loading alignment model for {detected_language}")
+        model_align, metadata = whisperx.load_align_model(
+            language_code=detected_language,
+            device=device,
+            **align_kwargs,
+        )
+        cli_log("analyze_with_whisperx: Starting alignment")
+        emit_progress(phase="analysis", step="align", progress=0.45, message="Đang căn chỉnh thời gian từ vựng (word-level alignment)...")
+        aligned_result = whisperx.align(
+            raw_segments,
+            model_align,
+            metadata,
+            audio,
+            device,
+            return_char_alignments=False,
+        )
+        aligned_segments = aligned_result.get("segments") or []
+    except Exception as align_err:
+        cli_log(f"[warn] Căn chỉnh WhisperX thất bại ({align_err}), chuyển sang sử dụng phân đoạn gốc.")
+        warnings.append(f"Không thể tải hoặc chạy mô hình căn chỉnh từ vựng ({align_err}). Đã tự động dùng mốc thời gian gốc.")
+        aligned_segments = raw_segments
     normalized_segments = [
         {
             "startMs": max(int(float(segment.get("start", 0.0)) * 1000), 0),
