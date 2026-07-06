@@ -232,10 +232,60 @@ def trigger_update(parent_widget, is_frozen: bool, root_path: Path):
         return
 
     progress = QProgressDialog("Bắt đầu cập nhật...", "Hủy", 0, 100, parent_widget)
+    progress.setWindowTitle("Cập nhật ứng dụng")
     progress.setWindowModality(Qt.WindowModality.WindowModal)
     progress.setMinimumDuration(0)
     progress.setAutoClose(True)
     progress.setValue(0)
+    progress.setMinimumWidth(480)
+    
+    # Style progress dialog to match premium dark theme
+    progress.setStyleSheet("""
+        QProgressDialog {
+            background-color: #0b0f19;
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            border-radius: 8px;
+        }
+        QLabel {
+            color: #f1f5f9;
+            font-size: 13px;
+            font-family: "Segoe UI", Arial, sans-serif;
+            min-height: 36px;
+        }
+        QProgressBar {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 6px;
+            background-color: #1e293b;
+            text-align: center;
+            color: #ffffff;
+            font-weight: bold;
+            font-size: 11px;
+            height: 22px;
+        }
+        QProgressBar::chunk {
+            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #06b6d4, stop:1 #8b5cf6);
+            border-radius: 5px;
+        }
+        QPushButton {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            padding: 6px 20px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 12px;
+            font-family: "Segoe UI", Arial, sans-serif;
+            min-width: 80px;
+            min-height: 24px;
+        }
+        QPushButton:hover {
+            background-color: rgba(239, 68, 68, 0.2);
+            border-color: #ef4444;
+        }
+        QPushButton:pressed {
+            background-color: rgba(239, 68, 68, 0.3);
+        }
+    """)
 
     thread = UpdateThread(is_frozen, root_path)
 
