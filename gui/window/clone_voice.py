@@ -160,15 +160,70 @@ class WindowCloneVoiceMixin:
         self.clone_save_btn.setMinimumHeight(40)
         self.clone_save_btn.setEnabled(False)  # Disabled initially
         self.clone_save_btn.clicked.connect(self.on_save_clone_voice_clicked)
+        self.clone_save_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #047857);
+                border: 1px solid #10b981;
+                border-radius: 8px;
+                color: #ffffff;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #059669);
+                border-color: #34d399;
+            }
+            QPushButton:disabled {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                color: rgba(255, 255, 255, 0.2);
+            }
+        """)
 
-        self.clone_test_btn = self._make_button("Clone giọng", "ghost")
+        self.clone_test_btn = self._make_button("Clone giọng", "primary")
         self.clone_test_btn.setMinimumHeight(40)
         self.clone_test_btn.clicked.connect(self.on_test_clone_voice_clicked)
+        self.clone_test_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0259a8, stop:1 #014382);
+                border: 1px solid #00c0ff;
+                border-radius: 8px;
+                color: #ffffff;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #008cd4, stop:1 #0259a8);
+                border-color: #66d9ff;
+            }
+            QPushButton:disabled {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                color: rgba(255, 255, 255, 0.2);
+            }
+        """)
         
         self.clone_replay_btn = self._make_button("Nghe thử", "ghost")
         self.clone_replay_btn.setMinimumHeight(40)
-        self.clone_replay_btn.clicked.connect(self.on_replay_clone_voice_clicked)
         self.clone_replay_btn.setEnabled(False)  # Only enabled after a preview is generated
+        self.clone_replay_btn.clicked.connect(self.on_replay_clone_voice_clicked)
+        self.clone_replay_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(139, 92, 246, 0.1);
+                border: 1px solid rgba(139, 92, 246, 0.4);
+                color: #a78bfa;
+                border-radius: 8px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: rgba(139, 92, 246, 0.2);
+                border-color: #a78bfa;
+                color: #c084fc;
+            }
+            QPushButton:disabled {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                color: rgba(255, 255, 255, 0.2);
+            }
+        """)
 
         actions.addWidget(self.clone_save_btn, 1)
         actions.addWidget(self.clone_test_btn, 1)
