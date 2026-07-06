@@ -977,6 +977,11 @@ def synthesize_tts(
                         except Exception as e:
                             safe_print(f"[tts] Warning: Failed to transcribe live clone audio: {e}", flush=True)
 
+            elif selected_voice.startswith("omnivoice:"):
+                raise RuntimeError(
+                    f"Khong tim thay file mau cho giong clone {selected_voice}. "
+                    "Kiem tra config/custom_omnivoice_voices.json va file trong config/voices/omnivoice."
+                )
             from tools.omnivoice_wrapper import get_omnivoice_provider
             provider = get_omnivoice_provider()
             success = provider.synthesize(

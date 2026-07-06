@@ -670,7 +670,7 @@ VALTEC_CLONE_PRESET = "valtec:clone"
 def is_omnivoice_voice_preset(candidate: str) -> bool:
     value = str(candidate or "").strip()
     return (
-        value == OMNIVOICE_CLONE_PRESET
+        value.startswith("omnivoice:")
         or value in OMNIVOICE_PRESET_VOICE_IDS
         or value in CUSTOM_OMNIVOICE_VOICES
     )
@@ -835,6 +835,10 @@ def recommend_voice_preset(
 ) -> str:
     value = str(candidate or "").strip()
     if value.startswith("cloud:"):
+        return value
+    if value.startswith("omnivoice:"):
+        return value
+    if value.startswith("valtec:"):
         return value
     if value in (OMNIVOICE_CLONE_PRESET, VALTEC_CLONE_PRESET):
         return value
@@ -2059,4 +2063,3 @@ def build_dynamic_subtitle_regions(
             pos["centerY"] = matching_r["centerY"]
 
     return dynamic_regions, subtitle_positions
-

@@ -71,6 +71,19 @@ try:
             except Exception:
                 pass
 
+    # Migrate OmniVoice model from hf_cache/hub to user's home folder ~/.capcut_mate/hf_cache/hub
+    new_cache_path_hub = os.path.join(os.path.expanduser("~"), ".capcut_mate", "hf_cache", "hub")
+    old_hub_locations = [
+        os.path.join(ROOT_DIR, "hf_cache", "hub"),
+        os.path.join(ROOT_DIR, "_internal", "hf_cache", "hub"),
+    ]
+    for old_loc in old_hub_locations:
+        if os.path.exists(old_loc):
+            try:
+                merge_dirs(old_loc, new_cache_path_hub)
+            except Exception:
+                pass
+
     # Clean up empty parent directories of old cache locations
     def remove_empty_dir(d):
         try:
@@ -83,8 +96,10 @@ try:
         os.path.join(ROOT_DIR, "temp", ".cache", "huggingface"),
         os.path.join(ROOT_DIR, "temp", ".cache"),
         os.path.join(ROOT_DIR, "hf_cache", "huggingface"),
+        os.path.join(ROOT_DIR, "hf_cache", "hub"),
         os.path.join(ROOT_DIR, "hf_cache"),
         os.path.join(ROOT_DIR, "_internal", "hf_cache", "huggingface"),
+        os.path.join(ROOT_DIR, "_internal", "hf_cache", "hub"),
         os.path.join(ROOT_DIR, "_internal", "hf_cache"),
     ]:
         remove_empty_dir(parent)

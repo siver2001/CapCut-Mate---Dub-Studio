@@ -62,6 +62,11 @@ class OmnivoiceProvider:
         else:
             # 2. Check if model exists in HuggingFace cache folder
             hf_cached_dir = HUGGINGFACE_HUB_CACHE / "models--k2-fsa--OmniVoice" / "snapshots"
+            if not hf_cached_dir.exists():
+                alt_dir = HUGGINGFACE_HUB_CACHE.parent.parent / "hub" / "models--k2-fsa--OmniVoice" / "snapshots"
+                if alt_dir.exists():
+                    hf_cached_dir = alt_dir
+
             if hf_cached_dir.exists():
                 try:
                     snapshots = [d for d in hf_cached_dir.iterdir() if d.is_dir()]

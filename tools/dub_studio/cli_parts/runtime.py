@@ -1133,14 +1133,20 @@ def ensure_omnivoice_runtime(*, phase: str, step: str, progress: float) -> None:
     from ..process_utils import module_available
     if not module_available("omnivoice"):
         if getattr(sys, "frozen", False):
-            safe_print("[warn] Thiếu thư viện 'omnivoice' trong gói đóng gói độc lập (.exe). Bỏ qua khởi tạo OmniVoice-TTS...")
+            message = (
+                "Ban .exe hien tai thieu thu vien 'omnivoice', nen khong the render giong clone OmniVoice. "
+                "Hot-update chi cap nhat ma nguon Python, khong the them thu vien da dong goi vao exe. "
+                "Vui long cai/gui lai goi CapCutMate moi duoc build day du co OmniVoice."
+            )
+            safe_print(f"[error] {message}")
             emit_progress(
                 phase=phase,
                 step=step,
                 progress=progress,
-                message="Cảnh báo: Thiếu thư viện 'omnivoice', bỏ qua OmniVoice-TTS...",
+                message=message,
+                status="error",
             )
-            return
+            raise RuntimeError(message)
         emit_progress(
             phase=phase,
             step=step,
@@ -1719,7 +1725,3 @@ def ensure_speaker_identification_runtime(*, phase: str, step: str, progress: fl
         step=step,
         progress=min(progress + 0.08, 1.0)
     )
-
-
-
-

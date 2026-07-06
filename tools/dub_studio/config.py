@@ -354,6 +354,11 @@ def omnivoice_model_ready(model_dir: Path = OMNIVOICE_MODEL_DIR) -> bool:
     try:
         from tools.dub_studio.config import HUGGINGFACE_HUB_CACHE
         hf_cached_dir = HUGGINGFACE_HUB_CACHE / "models--k2-fsa--OmniVoice" / "snapshots"
+        if not hf_cached_dir.exists():
+            alt_dir = HUGGINGFACE_HUB_CACHE.parent.parent / "hub" / "models--k2-fsa--OmniVoice" / "snapshots"
+            if alt_dir.exists():
+                hf_cached_dir = alt_dir
+
         if hf_cached_dir.exists():
             for snapshot in hf_cached_dir.iterdir():
                 if snapshot.is_dir() and (snapshot / "model.safetensors").exists():
