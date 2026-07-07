@@ -187,11 +187,10 @@ def analyze_with_whisperx(
         align_kwargs: dict[str, Any] = {}
         if align_repo_id:
             if not hf_repo_cached(align_repo_id):
-                ensure_whisperx_align_cache(
-                    language_code=detected_language,
-                    phase="analysis",
-                    step="align",
-                    progress=0.35,
+                # Skip downloading foreign alignment models at runtime during analysis to prevent slow hangs
+                raise FileNotFoundError(
+                    f"Mô hình căn chỉnh cho '{detected_language}' chưa được chuẩn bị offline. "
+                    "Hệ thống sẽ tự động dùng mốc thời gian gốc để tối ưu thời gian."
                 )
             align_kwargs = {
                 "model_name": align_repo_id,
