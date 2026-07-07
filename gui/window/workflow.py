@@ -211,6 +211,8 @@ class WindowWorkflowMixin:
         self.job_status = None
         self.last_output_path = ""
         self.last_exported_output_path = ""
+        self.settings["voiceMapping"] = {}
+        self.settings["displayNameMapping"] = {}
         self.stop_render_preview(clear_source=True)
         self.show_source_video_preview(
             path,
@@ -746,6 +748,8 @@ class WindowWorkflowMixin:
         self.job_status = None
         self.last_output_path = ""
         self.last_exported_output_path = ""
+        self.settings["voiceMapping"] = {}
+        self.settings["displayNameMapping"] = {}
         self.stop_render_preview(clear_source=True)
         self.show_source_video_preview(
             video_path,
@@ -2515,6 +2519,14 @@ class WindowWorkflowMixin:
         }
         
         current_voice_map = merged.get("voiceMapping") or {}
+        
+        # Clean up stale/invalid custom clone voices that were deleted or renamed
+        from gui.config import VOICE_OPTIONS
+        valid_voice_ids = {opt[0] for opt in VOICE_OPTIONS}
+        for spk_id, v in list(current_voice_map.items()):
+            if v and v.startswith("omnivoice:") and v not in valid_voice_ids:
+                current_voice_map[spk_id] = merged["defaultVoice"]
+                
         for spk_id, preset in analysis_voice_map.items():
             current_voice_map.setdefault(spk_id, preset or merged["defaultVoice"])
             
