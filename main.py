@@ -5,6 +5,24 @@ if getattr(sys, 'frozen', False):
     ROOT_DIR = os.path.dirname(os.path.abspath(sys.executable))
     if ROOT_DIR not in sys.path:
         sys.path.insert(0, ROOT_DIR)
+    
+    # Bypass PyInstaller's FrozenImporter for tools, gui, and config modules
+    # to allow "Hot Updates" directly from raw python files on the disk!
+    for finder in sys.meta_path:
+        if finder.__class__.__name__ == 'PyiFrozenImporter':
+            if hasattr(finder, '_toc'):
+                try:
+                    to_remove = [
+                        name for name in finder._toc
+                        if name.startswith("tools") or name.startswith("gui") or name == "config"
+                    ]
+                    for name in to_remove:
+                        if hasattr(finder._toc, "discard"):
+                            finder._toc.discard(name)
+                        elif hasattr(finder._toc, "pop"):
+                            finder._toc.pop(name, None)
+                except Exception:
+                    pass
 else:
     ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
