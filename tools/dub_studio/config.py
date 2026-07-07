@@ -187,12 +187,6 @@ LLAMA_CPP_TIMEOUT = max(int(env_value("DUB_LLAMA_CPP_TIMEOUT", default="180")), 
 WHISPERX_MODEL = env_value("DUB_WHISPERX_MODEL", "WHISPERX_MODEL", default="large-v3") or "large-v3"
 WHISPERX_ASR_REPO = env_value("DUB_WHISPERX_ASR_REPO", default="")
 default_cache_dir = Path.home() / ".capcut_mate" / "hf_cache"
-old_local_cache = ROOT / "hf_cache"
-try:
-    if old_local_cache.is_dir() and any(old_local_cache.iterdir()):
-        default_cache_dir = old_local_cache
-except Exception:
-    pass
 
 hf_cache_raw = env_value("DUB_HF_CACHE_DIR", default=str(default_cache_dir / "huggingface" / "hub"))
 hf_cache_path = Path(hf_cache_raw)

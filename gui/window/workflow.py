@@ -1392,9 +1392,6 @@ class WindowWorkflowMixin:
 
         try:
             default_cache_dir = Path.home() / ".capcut_mate" / "hf_cache"
-            old_local_cache = ROOT / "hf_cache"
-            if old_local_cache.is_dir() and any(old_local_cache.iterdir()):
-                default_cache_dir = old_local_cache
             default_hf_cache = str((default_cache_dir / "huggingface" / "hub").as_posix())
         except Exception:
             default_hf_cache = "hf_cache/huggingface/hub"
