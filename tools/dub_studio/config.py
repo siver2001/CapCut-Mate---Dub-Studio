@@ -29,6 +29,18 @@ for _path in (CODE_ROOT, ROOT):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+# Patch RequirementCache to handle PyInstaller optional dependency checks
+try:
+    from lightning_utilities.core.imports import RequirementCache
+    original_bool = RequirementCache.__bool__
+    def patched_bool(self):
+        if self.requirement and "torch_fidelity" in str(self.requirement):
+            return False
+        return original_bool(self)
+    RequirementCache.__bool__ = patched_bool
+except Exception:
+    pass
+
 
 def load_local_env(env_path: Path) -> None:
     if not env_path.exists():

@@ -1651,12 +1651,22 @@ def whisperx_audio_waveform(audio: Any) -> dict[str, Any]:
         "sample_rate": 16000,
     }
 
-
 def download_file_with_fallback(dest_path: Path, urls: list[str], description: str, *, phase: str, step: str, progress: float) -> bool:
     import requests
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     if dest_path.exists() and dest_path.stat().st_size > 1024 * 1024:
         return True
+
+    # Fast offline check to prevent long hangs on connection timeouts
+    try:
+        import socket
+        socket.setdefaulttimeout(2)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(("huggingface.co", 443))
+        s.close()
+    except Exception:
+        print(f"[download] Offline: HuggingFace is unreachable. Skipping download for {description}.")
+        return False
 
     emit_progress(
         phase=phase,

@@ -68,7 +68,7 @@ OPTIONAL_COLLECT_MODULES = (
     "soxr",
     "optree",
     "scienceplots",
-    "pyannote",
+    "pyannote.audio",
 )
 
 METADATA_PACKAGES = (
