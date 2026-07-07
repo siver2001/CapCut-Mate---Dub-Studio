@@ -1865,6 +1865,7 @@ def _run_tts_chain(
             target_ms = int(item["target_ms"])
             silent_duration = max(target_ms / 1000.0, 0.05)
             silent_clip = tts_dir / f"{item['index']:04d}_silent_fallback.wav"
+            silent_clip.parent.mkdir(parents=True, exist_ok=True)
             run(
                 [
                     "ffmpeg", "-y",
