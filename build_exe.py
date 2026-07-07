@@ -68,6 +68,7 @@ OPTIONAL_COLLECT_MODULES = (
     "soxr",
     "optree",
     "scienceplots",
+    "pyannote",
 )
 
 METADATA_PACKAGES = (
