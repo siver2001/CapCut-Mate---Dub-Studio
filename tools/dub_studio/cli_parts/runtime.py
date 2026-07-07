@@ -107,12 +107,19 @@ def ensure_hf_snapshot(
         with temporarily_disable_dead_local_proxies(), temporarily_use_workspace_hf_home():
             snapshot_download(**kwargs)
     except Exception as exc:
-        message = normalize_text(str(exc))
-        if "gated repo" in message.lower() or "authorized list" in message.lower():
+        message_err = normalize_text(str(exc))
+        if "gated repo" in message_err.lower() or "authorized list" in message_err.lower():
             raise RuntimeError(
                 f"Model {normalized} đang là gated repo trên Hugging Face. Hãy đăng nhập đúng tài khoản HF đã có token và bấm chấp nhận quyền truy cập trên trang model rồi chạy lại."
             ) from exc
-        raise
+        # Fallback to local files only if offline or network error
+        try:
+            with temporarily_disable_dead_local_proxies(), temporarily_use_workspace_hf_home():
+                local_kwargs = kwargs.copy()
+                local_kwargs["local_files_only"] = True
+                snapshot_download(**local_kwargs)
+        except Exception:
+            raise exc
 
     snapshots = hf_repo_snapshots(normalized)
     return snapshots[-1] if snapshots else None

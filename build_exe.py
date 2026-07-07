@@ -67,6 +67,7 @@ OPTIONAL_COLLECT_MODULES = (
     "einops",
     "soxr",
     "optree",
+    "scienceplots",
 )
 
 METADATA_PACKAGES = (
@@ -207,6 +208,8 @@ def build_command(root: Path, python_exe: str, *, clean: bool) -> list[str]:
         "gui",
         "--exclude-module",
         "src",
+        "--exclude-module",
+        "pyarrow",
         "--log-level",
         "WARN",
     ]

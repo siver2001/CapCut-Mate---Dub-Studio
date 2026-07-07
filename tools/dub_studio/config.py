@@ -193,6 +193,7 @@ hf_cache_path = Path(hf_cache_raw)
 if not hf_cache_path.is_absolute():
     hf_cache_path = (ROOT / hf_cache_path).resolve()
 HUGGINGFACE_HUB_CACHE = hf_cache_path.expanduser()
+os.environ["HF_HOME"] = str(HUGGINGFACE_HUB_CACHE.parent)
 WHISPERX_BATCH_SIZE = max(
     int(env_value("DUB_WHISPERX_BATCH_SIZE", "WHISPERX_BATCH_SIZE", default=("4" if DUB_USE_GPU else "1"))),
     1,

@@ -201,6 +201,7 @@ def analyze_with_whisperx(
             align_kwargs = {
                 "model_name": align_repo_id,
                 "model_dir": str(HUGGINGFACE_HUB_CACHE),
+                "model_cache_only": True,
             }
         cli_log(f"analyze_with_whisperx: Loading alignment model for {detected_language}")
         model_align, metadata = whisperx.load_align_model(
