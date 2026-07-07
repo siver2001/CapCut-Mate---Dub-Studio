@@ -251,7 +251,63 @@ class WindowCloneVoiceMixin:
         self.clone_test_text_edit.textChanged.connect(self.on_inputs_changed)
 
         clone_inner_layout.addStretch(1)
-        page_layout.addWidget(clone_card)
+
+        # Right column: Saved voices list panel
+        manage_card = QFrame()
+        manage_card.setObjectName("SurfaceCard")
+        manage_inner_layout = QVBoxLayout(manage_card)
+        manage_inner_layout.setContentsMargins(20, 20, 20, 20)
+        manage_inner_layout.setSpacing(14)
+
+        manage_title = QLabel("DANH SÁCH GIỌNG ĐỌC CLONE")
+        manage_title.setObjectName("SectionTitle")
+        manage_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #38bdf8;")
+        manage_inner_layout.addWidget(manage_title)
+
+        from PyQt6.QtWidgets import QListWidget
+        self.voice_list_widget = QListWidget()
+        self.voice_list_widget.setStyleSheet("""
+            QListWidget {
+                background: rgba(15, 23, 42, 0.4);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 8px;
+                color: #ffffff;
+                padding: 4px;
+            }
+            QListWidget::item {
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                padding: 8px 4px;
+            }
+            QListWidget::item:hover {
+                background: rgba(255, 255, 255, 0.05);
+            }
+        """)
+        manage_inner_layout.addWidget(self.voice_list_widget)
+
+        # Control buttons row below list
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        
+        self.btn_rename_voice = self._make_button("Sửa tên", "ghost")
+        self.btn_rename_voice.clicked.connect(self.on_rename_voice_clicked)
+        self.btn_delete_voice = self._make_button("Xóa giọng", "danger")
+        self.btn_delete_voice.clicked.connect(self.on_delete_voice_clicked)
+        
+        btn_row.addWidget(self.btn_rename_voice, 1)
+        btn_row.addWidget(self.btn_delete_voice, 1)
+        manage_inner_layout.addLayout(btn_row)
+
+        # Horizontal split layout to contain both cards
+        split_layout = QHBoxLayout()
+        split_layout.setSpacing(16)
+        split_layout.addWidget(clone_card, 3)
+        split_layout.addWidget(manage_card, 2)
+
+        page_layout.addLayout(split_layout)
+        
+        # Load initial voices
+        self.refresh_cloned_voices_list()
+        
         return page
 
     def choose_reference_wav_file(self) -> None:
@@ -702,6 +758,7 @@ class WindowCloneVoiceMixin:
 
         self.clone_status_label.setText(f"Đã lưu thành công giọng clone: {name}!")
         self.refresh_voice_options_in_comboboxes()
+        self.refresh_cloned_voices_list()
         QMessageBox.information(self, "Thành công", f"Đã lưu thành công giọng đọc '{name}'. Bạn có thể chọn giọng này cho các nhân vật ở trang chính.")
 
     def refresh_voice_options_in_comboboxes(self) -> None:
@@ -725,3 +782,148 @@ class WindowCloneVoiceMixin:
                     combo.addItem(text, value)
                 self._set_combo_value(combo, current_value)
                 combo.blockSignals(False)
+
+    def refresh_cloned_voices_list(self) -> None:
+        if not hasattr(self, "voice_list_widget"):
+            return
+        self.voice_list_widget.clear()
+        
+        from gui.config import ROOT
+        config_file = ROOT / "config" / "custom_omnivoice_voices.json"
+        if not config_file.exists():
+            return
+            
+        try:
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+            from PyQt6.QtWidgets import QListWidgetItem
+            for voice_id, info in data.items():
+                label = info.get("label", voice_id)
+                display_name = label.replace("Clone • ", "").replace(" (OmniVoice)", "")
+                item = QListWidgetItem(display_name)
+                item.setData(Qt.ItemDataRole.UserRole, voice_id)
+                self.voice_list_widget.addItem(item)
+        except Exception:
+            pass
+
+    def on_rename_voice_clicked(self) -> None:
+        selected_items = self.voice_list_widget.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Chưa chọn giọng", "Vui lòng chọn một giọng nói từ danh sách để sửa tên.")
+            return
+            
+        item = selected_items[0]
+        voice_id = item.data(Qt.ItemDataRole.UserRole)
+        old_name = item.text()
+        
+        from PyQt6.QtWidgets import QInputDialog
+        new_name, ok = QInputDialog.getText(
+            self, 
+            "Sửa tên giọng đọc", 
+            "Nhập tên mới cho giọng đọc:", 
+            text=old_name
+        )
+        if not ok or not new_name.strip():
+            return
+            
+        new_name = new_name.strip()
+        
+        from gui.config import ROOT
+        config_file = ROOT / "config" / "custom_omnivoice_voices.json"
+        if not config_file.exists():
+            return
+            
+        try:
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+            if voice_id in data:
+                data[voice_id]["label"] = f"Clone • {new_name} (OmniVoice)"
+                config_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                
+                # Update runtime lists in config and GUI
+                from tools.dub_studio.config import CUSTOM_OMNIVOICE_VOICES as cli_custom_voices
+                from gui.config import SHORT_VOICE_LABELS as gui_short_labels, VOICE_LABELS as gui_labels, VOICE_OPTIONS as gui_options, INTRO_TTS_OPTIONS as gui_intro_options
+                
+                if voice_id in cli_custom_voices:
+                    cli_custom_voices[voice_id]["label"] = f"Clone • {new_name} (OmniVoice)"
+                
+                label_text = f"Clone • {new_name}"
+                gui_short_labels[voice_id] = label_text
+                gui_labels[voice_id] = f"OmniVoice • {label_text}"
+                
+                # Update lists in VOICE_OPTIONS
+                for i, opt in enumerate(gui_options):
+                    if opt[0] == voice_id:
+                        gui_options[i] = (voice_id, f"OmniVoice • {label_text}")
+                for i, opt in enumerate(gui_intro_options):
+                    if opt[0] == voice_id:
+                        gui_intro_options[i] = (voice_id, f"OmniVoice • {label_text}")
+                        
+                self.refresh_cloned_voices_list()
+                self.refresh_voice_options_in_comboboxes()
+                QMessageBox.information(self, "Thành công", f"Đã đổi tên giọng đọc thành '{new_name}'!")
+        except Exception as e:
+            QMessageBox.warning(self, "Lỗi", f"Không thể đổi tên giọng đọc: {e}")
+
+    def on_delete_voice_clicked(self) -> None:
+        selected_items = self.voice_list_widget.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Chưa chọn giọng", "Vui lòng chọn một giọng nói từ danh sách để xóa.")
+            return
+            
+        item = selected_items[0]
+        voice_id = item.data(Qt.ItemDataRole.UserRole)
+        name = item.text()
+        
+        reply = QMessageBox.question(
+            self,
+            "Xác nhận xóa",
+            f"Bạn có chắc chắn muốn xóa giọng đọc '{name}'? Hành động này sẽ xóa vĩnh viễn tệp mẫu.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+            
+        from gui.config import ROOT
+        config_file = ROOT / "config" / "custom_omnivoice_voices.json"
+        if not config_file.exists():
+            return
+            
+        try:
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+            if voice_id in data:
+                filename = data[voice_id].get("filename")
+                # Remove from config data
+                data.pop(voice_id)
+                config_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                
+                # Delete physical audio file
+                if filename:
+                    wav_path = ROOT / "config" / "voices" / "omnivoice" / filename
+                    if wav_path.exists():
+                        try:
+                            wav_path.unlink()
+                        except Exception:
+                            pass
+                
+                # Update runtime lists in config and GUI
+                from tools.dub_studio.config import CUSTOM_OMNIVOICE_VOICES as cli_custom_voices
+                from gui.config import SHORT_VOICE_LABELS as gui_short_labels, VOICE_LABELS as gui_labels, VOICE_OPTIONS as gui_options, INTRO_TTS_OPTIONS as gui_intro_options
+                
+                cli_custom_voices.pop(voice_id, None)
+                gui_short_labels.pop(voice_id, None)
+                gui_labels.pop(voice_id, None)
+                
+                # Remove from combo lists
+                for i, opt in enumerate(gui_options):
+                    if opt[0] == voice_id:
+                        gui_options.pop(i)
+                        break
+                for i, opt in enumerate(gui_intro_options):
+                    if opt[0] == voice_id:
+                        gui_intro_options.pop(i)
+                        break
+                        
+                self.refresh_cloned_voices_list()
+                self.refresh_voice_options_in_comboboxes()
+                QMessageBox.information(self, "Thành công", f"Đã xóa giọng đọc '{name}' thành công!")
+        except Exception as e:
+            QMessageBox.warning(self, "Lỗi", f"Không thể xóa giọng đọc: {e}")
