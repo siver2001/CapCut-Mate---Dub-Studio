@@ -163,6 +163,12 @@ def analyze_with_whisperx(
             ensure_whisperx_model_cache(phase="analysis", step="transcribe", progress=0.28)
         except Exception as e:
             warnings.append(f"Không thể tự động tải model WhisperX: {e}")
+    
+    local_only = False
+    if whisperx_repo_id and hf_repo_cached(whisperx_repo_id):
+        local_only = True
+        cli_log(f"analyze_with_whisperx: WhisperX model {WHISPERX_MODEL} is cached locally. Loading in offline mode.")
+
     cli_log(f"analyze_with_whisperx: Loading WhisperX model {WHISPERX_MODEL} on {device}")
     model = whisperx.load_model(
         WHISPERX_MODEL,
@@ -171,7 +177,7 @@ def analyze_with_whisperx(
         language=language,
         asr_options={"condition_on_previous_text": False},
         download_root=str(HUGGINGFACE_HUB_CACHE),
-        local_files_only=False,
+        local_files_only=local_only,
         threads=WHISPERX_THREADS,
     )
     cli_log("analyze_with_whisperx: Starting transcription")
