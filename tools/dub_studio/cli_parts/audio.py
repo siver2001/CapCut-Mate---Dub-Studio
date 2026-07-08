@@ -1443,7 +1443,7 @@ def synthesize_timed_tts_clip(
     
     # Bypass TTS engine if text has no letters/digits (punctuation-only or empty segment)
     if not any(c.isalnum() for c in tts_text):
-        raw_extension = resolve_tts_output_extension(voice=voice, speaker_id=speaker_id, job_id=job_id)
+        raw_extension = ".wav"  # Force WAV for silent bypass clips to ensure valid audio container and avoid container/codec mismatch (e.g. pcm_s16le inside mp3)
         cache_paths = build_tts_cache_paths(
             tts_dir=tts_dir,
             index=index,
