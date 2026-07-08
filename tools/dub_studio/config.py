@@ -198,7 +198,10 @@ OLLAMA_TOKENS_MIN = max(int(env_value("DUB_OLLAMA_TOKENS_MIN", default="320")), 
 LLAMA_CPP_TIMEOUT = max(int(env_value("DUB_LLAMA_CPP_TIMEOUT", default="180")), 30)
 WHISPERX_MODEL = env_value("DUB_WHISPERX_MODEL", "WHISPERX_MODEL", default="large-v3") or "large-v3"
 WHISPERX_ASR_REPO = env_value("DUB_WHISPERX_ASR_REPO", default="")
-default_cache_dir = Path.home() / ".capcut_mate" / "hf_cache"
+try:
+    default_cache_dir = Path.home() / ".capcut_mate" / "hf_cache"
+except Exception:
+    default_cache_dir = ROOT / "hf_cache"
 
 # Check if there is a bundled hf_cache containing OmniVoice to support offline capability out-of-the-box
 bundled_cache_path = ROOT / "hf_cache" / "huggingface" / "hub"
