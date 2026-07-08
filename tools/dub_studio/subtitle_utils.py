@@ -870,8 +870,6 @@ def apply_subtitle_timeline_to_segments(
         if not matched:
             continue
         translated = normalize_text(matched.get("text") or "")
-        if not translated:
-            continue
         segment["translatedText"] = translated
         segment.pop("spoken" + "Text", None)
         voice = normalize_text(
