@@ -200,7 +200,15 @@ WHISPERX_MODEL = env_value("DUB_WHISPERX_MODEL", "WHISPERX_MODEL", default="larg
 WHISPERX_ASR_REPO = env_value("DUB_WHISPERX_ASR_REPO", default="")
 default_cache_dir = Path.home() / ".capcut_mate" / "hf_cache"
 
-hf_cache_raw = env_value("DUB_HF_CACHE_DIR", default=str(default_cache_dir / "huggingface" / "hub"))
+# Check if there is a bundled hf_cache containing OmniVoice to support offline capability out-of-the-box
+bundled_cache_path = ROOT / "hf_cache" / "huggingface" / "hub"
+bundled_omni = bundled_cache_path / "models--k2-fsa--OmniVoice"
+if getattr(sys, "frozen", False) and bundled_omni.exists():
+    default_hf_cache_dir = bundled_cache_path
+else:
+    default_hf_cache_dir = default_cache_dir / "huggingface" / "hub"
+
+hf_cache_raw = env_value("DUB_HF_CACHE_DIR", default=str(default_hf_cache_dir.as_posix()))
 hf_cache_path = Path(hf_cache_raw)
 if not hf_cache_path.is_absolute():
     hf_cache_path = (ROOT / hf_cache_path).resolve()

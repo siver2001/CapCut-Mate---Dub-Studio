@@ -307,69 +307,77 @@ def create_desktop_shortcut(root: Path) -> None:
 
 def copy_runtime_models(root: Path, output_dir: Path) -> None:
     source_models = root / "temp" / "models"
-    source_cache = root / "hf_cache"
     
-    if not source_models.exists() and not source_cache.exists():
-        print("[!] Khong tim thay temp/models va hf_cache nen ban build se tai model tren may nguoi dung khi can.", flush=True)
-        return
-
     target_models = output_dir / "temp" / "models"
     target_models.mkdir(parents=True, exist_ok=True)
 
     copied_any = False
-    for model_name in RUNTIME_MODEL_DIRS:
-        source = source_models / model_name
-        if not source.exists():
-            continue
-        target = target_models / model_name
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
-        print(f"Copy runtime model: temp/models/{model_name} -> dist/{APP_NAME}/temp/models/{model_name}", flush=True)
+
+    # 1. Copy whisper.cpp model files if they exist in source_models (needed for offline transcription)
+    for filename in ("ggml-small.bin", "ggml-base.bin"):
+        src_file = source_models / filename
+        if src_file.exists():
+            print(f"Copy whisper model file: temp/models/{filename} -> dist/{APP_NAME}/temp/models/{filename}", flush=True)
+            shutil.copy2(src_file, target_models / filename)
+            copied_any = True
+
+    # 2. Copy omnivoice local model directory if exists
+    source_omni = source_models / "omnivoice"
+    if source_omni.exists():
+        target_omni = target_models / "omnivoice"
+        if target_omni.exists():
+            shutil.rmtree(target_omni, ignore_errors=True)
+        print(f"Copy omnivoice local model: temp/models/omnivoice -> dist/{APP_NAME}/temp/models/omnivoice", flush=True)
         shutil.copytree(
-            source,
-            target,
-            ignore=shutil.ignore_patterns(
-                "__pycache__",
-                "runtime_tmp",
-                "tmp",
-                "*.lock",
-                "*.tmp",
-            ),
+            source_omni,
+            target_omni,
+            ignore=shutil.ignore_patterns("__pycache__", "runtime_tmp", "tmp", "*.lock", "*.tmp"),
         )
         copied_any = True
 
-    # Copy HuggingFace offline cache (OmniVoice) if exists
-    if source_cache.exists():
-        target_cache = output_dir / "hf_cache"
-        if target_cache.exists():
-            shutil.rmtree(target_cache, ignore_errors=True)
-        print(f"Copy HuggingFace cache: hf_cache -> dist/{APP_NAME}/hf_cache", flush=True)
+    # 3. Copy HuggingFace OmniVoice cache folder
+    # Find models--k2-fsa--OmniVoice in either root/hf_cache or ~/.capcut_mate/hf_cache
+    omni_cache_candidates = [
+        root / "hf_cache" / "huggingface" / "hub" / "models--k2-fsa--OmniVoice",
+        root / "hf_cache" / "models--k2-fsa--OmniVoice",
+        Path.home() / ".capcut_mate" / "hf_cache" / "huggingface" / "hub" / "models--k2-fsa--OmniVoice",
+    ]
+    
+    found_omni_cache = None
+    for candidate in omni_cache_candidates:
+        if candidate.exists() and (candidate / "snapshots").exists():
+            found_omni_cache = candidate
+            break
+            
+    if found_omni_cache:
+        target_cache_hub = output_dir / "hf_cache" / "huggingface" / "hub"
+        target_cache_hub.mkdir(parents=True, exist_ok=True)
+        target_omni_cache = target_cache_hub / "models--k2-fsa--OmniVoice"
         
-        # Exclude heavy foreign language XLS-R models (Chinese, Japanese, Korean) to save space, keeping Vietnamese alignment models
+        if target_omni_cache.exists():
+            shutil.rmtree(target_omni_cache, ignore_errors=True)
+            
+        print(f"Copy HuggingFace OmniVoice cache: {found_omni_cache} -> dist/{APP_NAME}/hf_cache/huggingface/hub/models--k2-fsa--OmniVoice", flush=True)
+        
         def ignore_cache_elements(path, names):
             ignored = []
             for name in names:
                 name_lower = name.lower()
                 if name_lower.endswith(".lock") or name_lower.endswith(".tmp"):
                     ignored.append(name)
-                elif "wav2vec2-large-xlsr-53-chinese" in name_lower or \
-                     "wav2vec2-large-xlsr-53-japanese" in name_lower or \
-                     "wav2vec2-large-xlsr-korean" in name_lower:
-                    print(f"  [info] Excluded foreign cache model from build: {name}", flush=True)
-                    ignored.append(name)
             return ignored
-
-
-
+            
         shutil.copytree(
-            source_cache,
-            target_cache,
+            found_omni_cache,
+            target_omni_cache,
             ignore=ignore_cache_elements,
         )
         copied_any = True
+    else:
+        print("[!] Khong tim thay cache models--k2-fsa--OmniVoice de copy vao ban build.", flush=True)
 
     if not copied_any:
-        print("[!] Khong co Valtec/OmniVoice model local de copy vao ban build.", flush=True)
+        print("[!] Khong co Valtec/OmniVoice/Whisper model local de copy vao ban build.", flush=True)
 
 
 def copy_vc_redist(output_dir: Path) -> None:
