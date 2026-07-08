@@ -151,6 +151,16 @@ class OmnivoiceProvider:
                     data = data.mean(axis=1)
                 waveform_tensor = torch.from_numpy(data).float().unsqueeze(0)
                 ref_audio_param = (waveform_tensor, samplerate)
+                
+                # Truncate ref_text if it is too long for the audio duration to prevent OmniVoice from generating prefix text
+                if ref_text:
+                    duration_sec = len(data) / samplerate
+                    words = str(ref_text).split()
+                    max_words = max(5, int(duration_sec * 3.5))
+                    if len(words) > max_words:
+                        old_ref_text = ref_text
+                        ref_text = " ".join(words[:max_words])
+                        print(f"[info] Truncating ref_text from {len(words)} to {max_words} words (duration: {duration_sec:.2f}s) to match audio length. Old: {repr(old_ref_text)} -> New: {repr(ref_text)}", file=sys.stderr, flush=True)
             except Exception:
                 ref_audio_param = str(ref_audio)
 
