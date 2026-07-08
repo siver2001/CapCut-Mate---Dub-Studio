@@ -183,9 +183,9 @@ OMNIVOICE_TTS_CONCURRENCY = max(
 )
 TTS_FIT_CACHE_ENABLED = env_bool("DUB_TTS_FIT_CACHE_ENABLED", default=True)
 VIDEO_X264_PRESET = env_value("DUB_VIDEO_X264_PRESET", default="veryfast") or "veryfast"
-VIDEO_X264_CRF = max(int(env_value("DUB_VIDEO_X264_CRF", default="26")), 18)
+VIDEO_X264_CRF = max(int(env_value("DUB_VIDEO_X264_CRF", default="21")), 18)
 VIDEO_NVENC_PRESET = env_value("DUB_VIDEO_NVENC_PRESET", default="p4") or "p4"
-VIDEO_NVENC_CQ = max(int(env_value("DUB_VIDEO_NVENC_CQ", default="26")), 18)
+VIDEO_NVENC_CQ = max(int(env_value("DUB_VIDEO_NVENC_CQ", default="21")), 18)
 VIDEO_AMF_PRESET = env_value("DUB_VIDEO_AMF_PRESET", default="speed") or "speed"
 VIDEO_AMF_QUALITY = env_value("DUB_VIDEO_AMF_QUALITY", default="speed") or "speed"
 TRANSLATE_BATCH_SIZE = max(int(env_value("DUB_TRANSLATE_BATCH_SIZE", default="4")), 1)
