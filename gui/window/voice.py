@@ -186,6 +186,7 @@ class WindowVoiceMixin:
                 combo.addItem(text, value)
             selected_voice = (
                 self.settings["voiceMapping"].get(speaker["speakerId"])
+                or self.settings.get("defaultVoice")
                 or speaker.get("voicePreset")
                 or VOICE_OPTIONS[0][0]
             )
