@@ -743,7 +743,7 @@ def default_settings() -> dict[str, Any]:
         "subtitleRegion": {"x": 0, "y": 0, "w": 0, "h": 0},
         "sourceSubtitleCleanupMode": "localized_blur",
         "outputTargets": {"mp4": True, "draft": False},
-        "outputRatio": "9:16",
+        "outputRatio": "original",
         "timingMode": "balanced_natural",
         "videoSpeed": 1.0,
         "videoCodecMode": "gpu_preferred",
