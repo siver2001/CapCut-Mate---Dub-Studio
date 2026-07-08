@@ -2191,7 +2191,23 @@ class WindowWorkflowMixin:
         self.on_basic_settings_changed()
 
     def on_basic_settings_changed(self) -> None:
+        old_default = self.settings.get("defaultVoice")
         self.read_settings_from_widgets()
+        new_default = self.settings.get("defaultVoice")
+        
+        if old_default and new_default and old_default != new_default:
+            # Sync speaker combos that were using the old default to the new default
+            for speaker_id, combo in getattr(self, "voice_combo_map", {}).items():
+                if combo is not None:
+                    current_val = self._resolve_voice_combo_value(combo)
+                    if current_val == old_default:
+                        if combo.findData(new_default) >= 0:
+                            self._set_combo_value(combo, new_default)
+                        else:
+                            combo.setEditText(new_default)
+                        # Trigger mapping update for this speaker
+                        self.on_voice_mapping_changed(speaker_id, new_default)
+                        
         self._push_analysis_overrides()
         self.refresh_all()
 
