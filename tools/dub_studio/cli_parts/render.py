@@ -1417,7 +1417,7 @@ def apply_aspect_ratio_to_ffmpeg_command(
             "1:1": ("1080", "1080"),
         }
         target_w, target_h = fixed_ratio_map.get(base_ratio, ("1080", "1920"))
-        scale_pad_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black"
+        scale_pad_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,crop={target_w}:{target_h}"
     
     if filter_arg == "-vf":
         video_filter = f"{video_filter},{scale_pad_filter}"
