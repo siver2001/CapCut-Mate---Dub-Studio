@@ -328,7 +328,7 @@ class WindowBatchMixin:
             self._update_batch_log(f"  ✗ Lỗi phân tích: {exc}")
             self._refresh_batch_ui()
             # Continue to next item after a cooldown delay
-            QTimer.singleShot(5000, self._batch_process_next)
+            QTimer.singleShot(12000, self._batch_process_next)
 
     def _batch_on_analysis_ready(self, job_id: str, analysis: dict[str, Any]) -> None:
         """Called when a batch item's analysis completes → start rendering."""
@@ -340,12 +340,25 @@ class WindowBatchMixin:
             return
 
         item.status = "rendering"
-        item.detail_status = "🎬 Đang tạo subtitle + lồng tiếng..."
+        item.detail_status = "🎬 Chờ nguội GPU..."
         item.progress = 0.5
         self._refresh_batch_ui()
         self._update_batch_log(
-            f"  ✓ Phân tích xong, bắt đầu tạo subtitle + lồng tiếng + render: {Path(item.input_path).name}"
+            f"  ✓ Phân tích xong. Tạm nghỉ 8 giây giải phóng VRAM & nguội GPU..."
         )
+
+        QTimer.singleShot(8000, lambda: self._batch_start_rendering(job_id, analysis))
+
+    def _batch_start_rendering(self, job_id: str, analysis: dict[str, Any]) -> None:
+        if not self._batch_running:
+            return
+
+        item = self._find_batch_item_by_job_id(job_id)
+        if item is None:
+            return
+
+        item.detail_status = "🎬 Đang tạo subtitle + lồng tiếng..."
+        self._refresh_batch_ui()
 
         try:
             # Store analysis on the controller job
@@ -365,7 +378,7 @@ class WindowBatchMixin:
             item.error = str(exc)
             self._update_batch_log(f"  ✗ Lỗi render: {exc}")
             self._refresh_batch_ui()
-            QTimer.singleShot(5000, self._batch_process_next)
+            QTimer.singleShot(12000, self._batch_process_next)
 
     def _batch_on_render_ready(self, job_id: str, payload: dict[str, Any]) -> None:
         """Called when a batch item's render completes → export & proceed."""
@@ -414,7 +427,7 @@ class WindowBatchMixin:
         self._refresh_batch_ui()
 
         # Move to the next item with a cooldown gap
-        QTimer.singleShot(5000, self._batch_process_next)
+        QTimer.singleShot(12000, self._batch_process_next)
 
     def _batch_on_job_failed(self, job_id: str, message: str) -> None:
         """Called when a batch item fails."""
@@ -433,7 +446,7 @@ class WindowBatchMixin:
         self._refresh_batch_ui()
 
         # Continue to next item
-        QTimer.singleShot(5000, self._batch_process_next)
+        QTimer.singleShot(12000, self._batch_process_next)
 
     def _batch_on_status_changed(self, job_id: str, payload: dict[str, Any]) -> None:
         """Update progress for the currently running batch item."""
