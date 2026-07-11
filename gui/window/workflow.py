@@ -3,10 +3,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib
+import logging
 import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("dub_studio.workflow")
 
 from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
@@ -960,8 +964,32 @@ class WindowWorkflowMixin:
     def start_analysis(self) -> None:
         try:
             input_path = self._validate_analysis_input()
+            
+            # Pre-cut video in single mode if excluded ranges exist in saved configuration
+            effective_input_path = input_path
+            config_path = Path("temp/precut_configurations.json")
+            if config_path.exists():
+                import json
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    ranges_by_path = {item["videoPath"]: item["excludedRanges"] for item in data if "videoPath" in item}
+                    excluded_ranges = ranges_by_path.get(str(input_path))
+                    if excluded_ranges:
+                        precut_dir = Path("temp/precut")
+                        precut_dir.mkdir(parents=True, exist_ok=True)
+                        precut_path = precut_dir / f"{Path(input_path).stem}_precut_{uuid.uuid4().hex[:8]}.mp4"
+                        
+                        from tools.dub_studio.cli_parts.precut import precut_video
+                        precut_video(input_path, excluded_ranges, precut_path)
+                        if precut_path.exists():
+                            effective_input_path = precut_path
+                            logger.info(f"Single video pre-cut successful: {precut_path.name}")
+                except Exception as precut_err:
+                    logger.warning(f"Error pre-cutting single video: {precut_err}")
+
             self.job_id = self.controller.analyze_video(
-                str(input_path),
+                str(effective_input_path),
                 {"targetLanguage": self.settings.get("targetLanguage", "vi")},
             )
             self.job_status = self.controller.get_job_status(self.job_id)
