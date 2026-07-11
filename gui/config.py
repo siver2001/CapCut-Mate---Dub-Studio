@@ -29,6 +29,18 @@ else:
     else:
         PIPELINE_PYTHON = Path(sys.executable)
 
+def get_config_file_path(filename: str) -> Path:
+    # 1. Try ROOT (executable directory, e.g. for user overrides or hot updates)
+    root_path = ROOT / "config" / filename
+    if root_path.exists():
+        return root_path
+    # 2. Try MEI_ROOT (PyInstaller temporary extraction directory)
+    mei_path = MEI_ROOT / "config" / filename
+    if mei_path.exists():
+        return mei_path
+    # 3. Fallback to ROOT
+    return root_path
+
 PIPELINE_PATH = ROOT / "tools" / "dub_studio_pipeline.py"
 APP_VERSION = "1.0.2"
 
@@ -39,7 +51,7 @@ DEFAULT_OUTPUT_DIR = ROOT / "output"
 
 def _load_text_effect_options():
     try:
-        data = json.loads((ROOT / "config" / "huazi.json").read_text(encoding="utf-8"))
+        data = json.loads(get_config_file_path("huazi.json").read_text(encoding="utf-8"))
         options = [("none", "Không (Sử dụng Box cơ bản)")]
         for item in data.get("materials", []):
             if item.get("id") and item.get("name"):
@@ -62,7 +74,7 @@ def _format_text_effect_label_v2(item: dict[str, object]) -> str:
 def _load_text_effect_options_v2():
     fallback = [("none", "Khong (Dung box co ban)")]
     try:
-        raw = (ROOT / "config" / "huazi.json").read_text(encoding="utf-8-sig")
+        raw = get_config_file_path("huazi.json").read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         if isinstance(data, dict):
             materials = data.get("materials", [])
@@ -92,7 +104,7 @@ TEXT_EFFECT_OPTIONS = _load_text_effect_options_v2()
 def _load_sticker_options():
     fallback = [("none", "Không dùng sticker")]
     try:
-        raw = (ROOT / "config" / "sticker.json").read_text(encoding="utf-8-sig")
+        raw = get_config_file_path("sticker.json").read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         if not isinstance(data, list):
             return fallback
@@ -123,7 +135,7 @@ _STICKER_MAP: dict[str, dict] = {}
 
 def _load_sticker_map() -> dict[str, dict]:
     try:
-        raw = (ROOT / "config" / "sticker.json").read_text(encoding="utf-8-sig")
+        raw = get_config_file_path("sticker.json").read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         if not isinstance(data, list):
             return {}
