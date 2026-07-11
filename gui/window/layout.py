@@ -196,6 +196,8 @@ class WindowLayoutMixin:
         self.preview_canvas.subtitle_dragged.connect(self.on_preview_subtitle_dragged)
         self.preview_canvas.cleanup_region_changed.connect(self.on_cleanup_region_changed)
         self.preview_canvas.watermark_scale_changed.connect(self.on_watermark_scale_dragged)
+        self.preview_canvas.sticker_dragged.connect(self.on_preview_sticker_dragged)
+        self.preview_canvas.sticker_scaled.connect(self.on_preview_sticker_scaled)
         preview_layout.addWidget(self.preview_canvas)
         slider_grid = QGridLayout()
         slider_grid.setHorizontalSpacing(16)
@@ -737,12 +739,14 @@ class WindowLayoutMixin:
         self._nav_batch_btn = self._make_button("Batch", "ghost")
         self._nav_config_btn = self._make_button("Cấu hình", "ghost")
         self._nav_clone_btn = self._make_button("Clone giọng", "ghost")
+        self._nav_precut_btn = self._make_button("Cắt/Bỏ đoạn", "ghost")
         
         self._nav_edit_btn.clicked.connect(lambda: self._switch_page(0))
         self._nav_preview_btn.clicked.connect(lambda: self._switch_page(1))
         self._nav_config_btn.clicked.connect(lambda: self._switch_page(2))
         self._nav_batch_btn.clicked.connect(lambda: self._switch_page(3))
         self._nav_clone_btn.clicked.connect(lambda: self._switch_page(4))
+        self._nav_precut_btn.clicked.connect(lambda: self._switch_page(5))
 
         self.mode_chip = self._make_chip("Chờ phân tích")
         self.subtitle_chip = self._make_chip("Vietsub: Bật")
@@ -752,6 +756,7 @@ class WindowLayoutMixin:
         nav_bar.addWidget(self._nav_batch_btn)
         nav_bar.addWidget(self._nav_config_btn)
         nav_bar.addWidget(self._nav_clone_btn)
+        nav_bar.addWidget(self._nav_precut_btn)
         nav_bar.addSpacing(12)
         nav_bar.addWidget(self.mode_chip)
         nav_bar.addWidget(self.subtitle_chip)
@@ -1356,6 +1361,13 @@ class WindowLayoutMixin:
         self.stroke_width_spin.setRange(0, 6)
         self.stroke_width_spin.valueChanged.connect(self.on_basic_settings_changed)
         self.text_effect_combo = self._make_combo(TEXT_EFFECT_OPTIONS, self.on_basic_settings_changed)
+        self.sticker_list_combo = QComboBox()
+        self.sticker_list_combo.currentIndexChanged.connect(self.on_sticker_selection_changed)
+        self.add_sticker_btn = QPushButton("Thêm")
+        self.add_sticker_btn.clicked.connect(self.on_add_sticker_clicked)
+        self.delete_sticker_btn = QPushButton("Xóa")
+        self.delete_sticker_btn.clicked.connect(self.on_delete_sticker_clicked)
+        
         self.sticker_combo = self._make_combo(STICKER_OPTIONS, self.on_basic_settings_changed)
         self.sticker_scale_spin = SafeDoubleSpinBox()
         self.sticker_scale_spin.setRange(0.1, 5.0)
@@ -1379,6 +1391,24 @@ class WindowLayoutMixin:
         self.sticker_y_spin.setValue(-0.3)
         self.sticker_y_spin.setToolTip("Vi tri doc sticker: -1 tren, 0 giua, 1 duoi.")
         self.sticker_y_spin.valueChanged.connect(self.on_basic_settings_changed)
+
+        self.sticker_start_spin = SafeDoubleSpinBox()
+        self.sticker_start_spin.setRange(0.0, 3600.0)
+        self.sticker_start_spin.setDecimals(1)
+        self.sticker_start_spin.setSingleStep(0.5)
+        self.sticker_start_spin.setValue(0.0)
+        self.sticker_start_spin.setSuffix(" s")
+        self.sticker_start_spin.setToolTip("Thời gian bắt đầu xuất hiện sticker (giây)")
+        self.sticker_start_spin.valueChanged.connect(self.on_basic_settings_changed)
+        
+        self.sticker_end_spin = SafeDoubleSpinBox()
+        self.sticker_end_spin.setRange(0.0, 3600.0)
+        self.sticker_end_spin.setDecimals(1)
+        self.sticker_end_spin.setSingleStep(0.5)
+        self.sticker_end_spin.setValue(0.0)
+        self.sticker_end_spin.setSuffix(" s")
+        self.sticker_end_spin.setToolTip("Thời gian ẩn sticker (giây, 0.0 = hết video)")
+        self.sticker_end_spin.valueChanged.connect(self.on_basic_settings_changed)
         self.max_words_spin = SafeSpinBox()
         self.max_words_spin.setRange(2, 8)
         self.max_words_spin.valueChanged.connect(self.on_basic_settings_changed)
@@ -1400,22 +1430,30 @@ class WindowLayoutMixin:
         font_grid.addWidget(self.stroke_width_spin, 3, 1)
         font_grid.addWidget(self._field_label("Hiệu ứng CapCut"), 3, 2)
         font_grid.addWidget(self.text_effect_combo, 3, 3)
-        font_grid.addWidget(self._field_label("Sticker"), 4, 0)
-        font_grid.addWidget(self.sticker_combo, 4, 1, 1, 2)
-        font_grid.addWidget(self._field_label("Cỡ"), 4, 3)
-        font_grid.addWidget(self.sticker_scale_spin, 4, 4)
-        font_grid.addWidget(self._field_label("Sticker X"), 5, 0)
-        font_grid.addWidget(self.sticker_x_spin, 5, 1)
-        font_grid.addWidget(self._field_label("Sticker Y"), 5, 2)
-        font_grid.addWidget(self.sticker_y_spin, 5, 3)
-        font_grid.addWidget(self._field_label("Tối đa từ/dòng"), 6, 0)
-        font_grid.addWidget(self.max_words_spin, 6, 1)
-        font_grid.addWidget(self.font_color_btn, 6, 2, 1, 2)
-        font_grid.addWidget(self._field_label("Palette màu chữ"), 7, 0)
-        font_grid.addLayout(self._build_palette_row("fontColor", FONT_COLOR_SWATCHES), 7, 1, 1, 3)
-        font_grid.addWidget(self._field_label("Palette màu viền"), 8, 0)
-        font_grid.addLayout(self._build_palette_row("strokeColor", STROKE_COLOR_SWATCHES), 8, 1, 1, 3)
-        font_grid.addWidget(self.stroke_color_btn, 9, 0, 1, 2)
+        font_grid.addWidget(self._field_label("Sticker hiện tại"), 4, 0)
+        font_grid.addWidget(self.sticker_list_combo, 4, 1, 1, 2)
+        font_grid.addWidget(self.add_sticker_btn, 4, 3)
+        font_grid.addWidget(self.delete_sticker_btn, 4, 4)
+        font_grid.addWidget(self._field_label("Loại Sticker"), 5, 0)
+        font_grid.addWidget(self.sticker_combo, 5, 1, 1, 2)
+        font_grid.addWidget(self._field_label("Cỡ"), 5, 3)
+        font_grid.addWidget(self.sticker_scale_spin, 5, 4)
+        font_grid.addWidget(self._field_label("Sticker X"), 6, 0)
+        font_grid.addWidget(self.sticker_x_spin, 6, 1)
+        font_grid.addWidget(self._field_label("Sticker Y"), 6, 2)
+        font_grid.addWidget(self.sticker_y_spin, 6, 3)
+        font_grid.addWidget(self._field_label("Bắt đầu (s)"), 7, 0)
+        font_grid.addWidget(self.sticker_start_spin, 7, 1)
+        font_grid.addWidget(self._field_label("Kết thúc (s)"), 7, 2)
+        font_grid.addWidget(self.sticker_end_spin, 7, 3)
+        font_grid.addWidget(self._field_label("Tối đa từ/dòng"), 8, 0)
+        font_grid.addWidget(self.max_words_spin, 8, 1)
+        font_grid.addWidget(self.font_color_btn, 8, 2, 1, 2)
+        font_grid.addWidget(self._field_label("Palette màu chữ"), 9, 0)
+        font_grid.addLayout(self._build_palette_row("fontColor", FONT_COLOR_SWATCHES), 9, 1, 1, 3)
+        font_grid.addWidget(self._field_label("Palette màu viền"), 10, 0)
+        font_grid.addLayout(self._build_palette_row("strokeColor", STROKE_COLOR_SWATCHES), 10, 1, 1, 3)
+        font_grid.addWidget(self.stroke_color_btn, 11, 0, 1, 2)
         font_section.content_layout.addLayout(font_grid)
 
         # Box subtitle
@@ -1840,6 +1878,150 @@ class WindowLayoutMixin:
             clone_page = self._build_clone_page()
             self._page_stack.addWidget(clone_page)
 
+        # =========================================================
+        # PAGE 5: PRECUT (Exclude Ranges Page)
+        # =========================================================
+        precut_page = QWidget()
+        precut_page_layout = QHBoxLayout(precut_page)
+        precut_page_layout.setContentsMargins(0, 0, 0, 0)
+        precut_page_layout.setSpacing(10)
+
+        # Left Column: Video List (Queue)
+        precut_left_card = QWidget()
+        precut_left_card.setObjectName("PrecutCard")
+        precut_left_card.setStyleSheet("background: #080f1d; border-radius: 12px; border: 1px solid #1e293b;")
+        precut_left_layout = QVBoxLayout(precut_left_card)
+        precut_left_layout.setContentsMargins(12, 12, 12, 12)
+        precut_left_layout.setSpacing(8)
+
+        precut_left_title = QLabel("Video Hàng Đợi (Batch)")
+        precut_left_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        precut_left_title.setStyleSheet("color: #38bdf8;")
+        precut_left_layout.addWidget(precut_left_title)
+
+        self.precut_video_table = QTableWidget(0, 2)
+        self.precut_video_table.setHorizontalHeaderLabels(["#", "Tên video"])
+        self.precut_video_table.verticalHeader().setVisible(False)
+        self.precut_video_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.precut_video_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.precut_video_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.precut_video_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.precut_video_table.itemSelectionChanged.connect(self.on_precut_video_selected)
+        precut_left_layout.addWidget(self.precut_video_table, 1)
+
+        precut_left_btns = QHBoxLayout()
+        self.precut_add_video_btn = self._make_button("Thêm video", "ghost")
+        self.precut_add_video_btn.clicked.connect(self.batch_add_videos)
+        self.precut_remove_video_btn = self._make_button("Xóa video", "danger")
+        self.precut_remove_video_btn.clicked.connect(self.batch_remove_selected)
+        precut_left_btns.addWidget(self.precut_add_video_btn)
+        precut_left_btns.addWidget(self.precut_remove_video_btn)
+        precut_left_layout.addLayout(precut_left_btns)
+
+        # Middle Column: Video Player and time capturing
+        precut_mid_card = QWidget()
+        precut_mid_card.setObjectName("PrecutPlayerCard")
+        precut_mid_card.setStyleSheet("background: #080f1d; border-radius: 12px; border: 1px solid #1e293b;")
+        precut_mid_layout = QVBoxLayout(precut_mid_card)
+        precut_mid_layout.setContentsMargins(12, 12, 12, 12)
+        precut_mid_layout.setSpacing(8)
+
+        precut_mid_title = QLabel("Trình Phát Xem Trước")
+        precut_mid_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        precut_mid_title.setStyleSheet("color: #38bdf8;")
+        precut_mid_layout.addWidget(precut_mid_title)
+
+        self.precut_player = VideoPreviewWidget()
+        precut_mid_layout.addWidget(self.precut_player, 1)
+
+        precut_time_capture_layout = QHBoxLayout()
+        precut_time_capture_layout.setSpacing(10)
+
+        self.precut_set_start_btn = self._make_button("Đặt thời gian bắt đầu", "ghost")
+        self.precut_set_start_btn.clicked.connect(self.on_precut_set_start)
+        self.precut_start_time = QTimeEdit()
+        self.precut_start_time.setDisplayFormat("HH:mm:ss")
+        self.precut_start_time.setMinimumHeight(32)
+        self.precut_start_time.setStyleSheet("background: #0d1527; color: #f8fafc; border: 1px solid #1e293b; padding: 4px;")
+
+        self.precut_set_end_btn = self._make_button("Đặt thời gian kết thúc", "ghost")
+        self.precut_set_end_btn.clicked.connect(self.on_precut_set_end)
+        self.precut_end_time = QTimeEdit()
+        self.precut_end_time.setDisplayFormat("HH:mm:ss")
+        self.precut_end_time.setMinimumHeight(32)
+        self.precut_end_time.setStyleSheet("background: #0d1527; color: #f8fafc; border: 1px solid #1e293b; padding: 4px;")
+
+        precut_time_capture_layout.addWidget(self.precut_set_start_btn)
+        precut_time_capture_layout.addWidget(self.precut_start_time)
+        precut_time_capture_layout.addWidget(self.precut_set_end_btn)
+        precut_time_capture_layout.addWidget(self.precut_end_time)
+        precut_mid_layout.addLayout(precut_time_capture_layout)
+
+        # Right Column: Discard Intervals List
+        precut_right_card = QWidget()
+        precut_right_card.setObjectName("PrecutRangesCard")
+        precut_right_card.setStyleSheet("background: #080f1d; border-radius: 12px; border: 1px solid #1e293b;")
+        precut_right_layout = QVBoxLayout(precut_right_card)
+        precut_right_layout.setContentsMargins(12, 12, 12, 12)
+        precut_right_layout.setSpacing(8)
+
+        precut_right_title = QLabel("Khoảng Thời Gian Loại Bỏ")
+        precut_right_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        precut_right_title.setStyleSheet("color: #38bdf8;")
+        precut_right_layout.addWidget(precut_right_title)
+
+        self.precut_ranges_table = QTableWidget(0, 2)
+        self.precut_ranges_table.setHorizontalHeaderLabels(["Bắt đầu", "Kết thúc"])
+        self.precut_ranges_table.verticalHeader().setVisible(False)
+        self.precut_ranges_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.precut_ranges_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.precut_ranges_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.precut_ranges_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        precut_right_layout.addWidget(self.precut_ranges_table, 1)
+
+        # Right buttons
+        precut_action_grid = QGridLayout()
+        precut_action_grid.setSpacing(6)
+
+        self.precut_add_range_btn = self._make_button("Thêm khoảng", "ghost")
+        self.precut_add_range_btn.clicked.connect(self.on_precut_add_range)
+        self.precut_edit_range_btn = self._make_button("Sửa khoảng", "ghost")
+        self.precut_edit_range_btn.clicked.connect(self.on_precut_edit_range)
+        self.precut_delete_range_btn = self._make_button("Xóa khoảng", "ghost")
+        self.precut_delete_range_btn.clicked.connect(self.on_precut_delete_range)
+        self.precut_clear_ranges_btn = self._make_button("Xóa toàn bộ", "danger")
+        self.precut_clear_ranges_btn.clicked.connect(self.on_precut_clear_ranges)
+
+        precut_action_grid.addWidget(self.precut_add_range_btn, 0, 0)
+        precut_action_grid.addWidget(self.precut_edit_range_btn, 0, 1)
+        precut_action_grid.addWidget(self.precut_delete_range_btn, 1, 0)
+        precut_action_grid.addWidget(self.precut_clear_ranges_btn, 1, 1)
+        precut_right_layout.addLayout(precut_action_grid)
+
+        precut_right_layout.addSpacing(10)
+
+        self.precut_preview_cut_btn = self._make_button("Xem trước video sau khi cắt", "ghost")
+        self.precut_preview_cut_btn.setMinimumHeight(36)
+        self.precut_preview_cut_btn.clicked.connect(self.on_precut_preview_cut)
+        precut_right_layout.addWidget(self.precut_preview_cut_btn)
+
+        self.precut_save_btn = self._make_button("Lưu cấu hình", "ghost")
+        self.precut_save_btn.setMinimumHeight(36)
+        self.precut_save_btn.clicked.connect(self.on_precut_save_config)
+        precut_right_layout.addWidget(self.precut_save_btn)
+
+        self.precut_run_batch_btn = self._make_button("Bắt đầu xử lý batch", "ghost")
+        self.precut_run_batch_btn.setMinimumHeight(40)
+        self.precut_run_batch_btn.setStyleSheet("background: #0284c7; color: #ffffff; font-weight: bold; border-radius: 6px;")
+        self.precut_run_batch_btn.clicked.connect(self.batch_start)
+        precut_right_layout.addWidget(self.precut_run_batch_btn)
+
+        precut_page_layout.addWidget(precut_left_card, 2)
+        precut_page_layout.addWidget(precut_mid_card, 5)
+        precut_page_layout.addWidget(precut_right_card, 3)
+
+        self._page_stack.addWidget(precut_page)
+
         # Page navigation
         self.main_tabs = None
         self.preview_page = None
@@ -1856,7 +2038,8 @@ class WindowLayoutMixin:
                               (self._nav_preview_btn, index == 1),
                               (self._nav_config_btn, index == 2),
                               (self._nav_batch_btn, index == 3),
-                              (self._nav_clone_btn, index == 4)]:
+                              (self._nav_clone_btn, index == 4),
+                              (self._nav_precut_btn, index == 5)]:
             if btn:
                 btn.setObjectName("NavActive" if active else "")
                 btn.style().unpolish(btn)

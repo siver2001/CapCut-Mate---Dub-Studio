@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ class _BatchItem:
         "progress",
         "error",
         "output_path",
+        "excluded_ranges",
     )
 
     def __init__(self, input_path: str) -> None:
@@ -37,6 +39,7 @@ class _BatchItem:
         self.progress: float = 0.0
         self.error: str = ""
         self.output_path: str = ""
+        self.excluded_ranges: list[dict[str, float]] = []
 
 
 class WindowBatchMixin:
@@ -317,8 +320,26 @@ class WindowBatchMixin:
             if not input_path.exists():
                 raise RuntimeError(f"Không tìm thấy file: {item.input_path}")
 
+            effective_input_path = input_path
+            if getattr(item, "excluded_ranges", None):
+                item.detail_status = "✂️ Đang cắt bỏ các đoạn thừa..."
+                self._refresh_batch_ui()
+                
+                precut_dir = Path("temp/precut")
+                precut_dir.mkdir(parents=True, exist_ok=True)
+                precut_path = precut_dir / f"{input_path.stem}_precut_{uuid.uuid4().hex[:8]}.mp4"
+                
+                from tools.dub_studio.cli_parts.precut import precut_video
+                try:
+                    precut_video(input_path, item.excluded_ranges, precut_path)
+                    if precut_path.exists():
+                        effective_input_path = precut_path
+                        self._update_batch_log(f"  ✓ Đã cắt video thành công: {precut_path.name}")
+                except Exception as precut_err:
+                    self._update_batch_log(f"  ⚠ Lỗi tiền xử lý cắt video: {precut_err}. Tiếp tục xử lý video gốc.")
+
             job_id = self.controller.analyze_video(
-                str(input_path),
+                str(effective_input_path),
                 {"targetLanguage": self.settings.get("targetLanguage", "vi")},
             )
             item.job_id = job_id
@@ -666,6 +687,8 @@ class WindowBatchMixin:
             self.batch_up_btn.setEnabled(not self._batch_running)
         if hasattr(self, "batch_down_btn"):
             self.batch_down_btn.setEnabled(not self._batch_running)
+        
+        self.sync_precut_video_table()
 
     def batch_preview_selected(self) -> None:
         if not hasattr(self, "batch_table"):

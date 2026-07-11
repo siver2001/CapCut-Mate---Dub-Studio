@@ -1582,6 +1582,14 @@ def apply_sticker_overlay(
         f"sticker_id={sticker_id}, type={'GIF' if ext == 'gif' else 'PNG'}"
     )
 
+    # Build time filter for overlay
+    start_time = float(sticker_options.get("startTime") or 0.0)
+    end_time = float(sticker_options.get("endTime") or 0.0)
+    if end_time > start_time:
+        enable_str = f":enable='between(t,{start_time},{end_time})'"
+    else:
+        enable_str = f":enable='gte(t,{start_time})'"
+
     # Build ffmpeg command
     if ext == "gif":
         # For GIF stickers, loop forever and scale to desired size
@@ -1593,7 +1601,7 @@ def apply_sticker_overlay(
             "-filter_complex",
             f"[1:v]format=rgba,scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
             f"pad={sw_scaled}:{sh_scaled}:(ow-iw)/2:(oh-ih)/2:color=0x00000000@0"
-            f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}:format=auto",
+            f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}{enable_str}:format=auto",
             "-c:a", "copy",
             "-movflags", "+faststart",
             str(output_video_path),
@@ -1606,7 +1614,7 @@ def apply_sticker_overlay(
             "-filter_complex",
             f"[1:v]format=rgba,scale={sw_scaled}:{sh_scaled}:force_original_aspect_ratio=decrease,"
             f"pad={sw_scaled}:{sh_scaled}:(ow-iw)/2:(oh-ih)/2:color=0x00000000@0"
-            f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}:format=auto",
+            f"[sticker];[0:v][sticker]overlay={overlay_x}:{overlay_y}{enable_str}:format=auto",
             "-c:a", "copy",
             "-movflags", "+faststart",
             str(output_video_path),
@@ -1660,7 +1668,8 @@ def create_capcut_draft(
     analysis_name: str,
     flattened_video_path: Path | None = None,
     sticker_options: dict[str, Any] | None = None,
-    ) -> str:
+    stickers: list[dict[str, Any]] | None = None,
+) -> str:
     import sys
     src_path = str(ROOT / "src")
     if src_path not in sys.path:
@@ -1877,20 +1886,34 @@ def create_capcut_draft(
 
             script.add_segment(text_segment, "vietsub_track")
 
-    sticker_id = (sticker_options or {}).get("stickerId", "")
-    if sticker_id:
-        sticker_scale = max(0.1, min(float((sticker_options or {}).get("scale", 1.0)), 5.0))
-        sticker_transform_x = max(
-            -1.0, min(float((sticker_options or {}).get("transform_x", 0.0)), 1.0)
-        )
-        sticker_transform_y = max(
-            -1.0, min(float((sticker_options or {}).get("transform_y", -0.3)), 1.0)
-        )
-        sticker_track_name = "sticker_track"
-        script.add_track(TrackType.sticker, sticker_track_name, relative_index=30)
+    sticker_list = stickers or []
+    if not sticker_list and sticker_options and sticker_options.get("stickerId"):
+        sticker_list = [sticker_options]
+        
+    for idx, stk in enumerate(sticker_list):
+        stk_id = stk.get("stickerId") or stk.get("sticker_id")
+        if not stk_id:
+            continue
+        sticker_scale = max(0.1, min(float(stk.get("scale", 1.0)), 5.0))
+        sticker_transform_x = max(-1.0, min(float(stk.get("transform_x", 0.0)), 1.0))
+        sticker_transform_y = max(-1.0, min(float(stk.get("transform_y", -0.3)), 1.0))
+        
+        # Start and duration in microseconds
+        start_us = int(float(stk.get("startTime", 0.0)) * 1_000_000)
+        end_sec = float(stk.get("endTime", 0.0))
         video_duration_us = int(video_meta.get("durationMs", 0) or 0) * 1000
         if video_duration_us <= 0:
             video_duration_us = 3_000_000
+            
+        if end_sec > 0.0:
+            duration_us = int(end_sec * 1_000_000) - start_us
+        else:
+            duration_us = video_duration_us - start_us
+        duration_us = max(100_000, duration_us)
+        
+        sticker_track_name = f"sticker_track_{idx}"
+        script.add_track(TrackType.sticker, sticker_track_name, relative_index=30 + idx)
+        
         clip_settings = ClipSettings(
             scale_x=sticker_scale,
             scale_y=sticker_scale,
@@ -1898,8 +1921,8 @@ def create_capcut_draft(
             transform_y=sticker_transform_y,
         )
         sticker_seg = StickerSegment(
-            resource_id=sticker_id,
-            target_timerange=trange(0, video_duration_us),
+            resource_id=stk_id,
+            target_timerange=trange(start_us, start_us + duration_us),
             clip_settings=clip_settings,
         )
         script.add_segment(sticker_seg, sticker_track_name)
@@ -2915,6 +2938,9 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     }
 
     sticker_options = render_options.get("stickerOptions") or {}
+    stickers_list = render_options.get("stickers") or []
+    if not stickers_list and sticker_options.get("stickerId"):
+        stickers_list = [sticker_options]
     ending_video = render_options.get("endingVideo") or {}
 
     flattened_render_path: Path | None = None
@@ -3009,24 +3035,38 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                     extra={"warning": warning_message[:240]},
                 )
 
-    # Apply sticker overlay to MP4 output
-    if output_targets.get("mp4", True) and sticker_options.get("stickerId"):
-        emit_progress(phase="render", step="sticker", progress=0.88, message="Đang thêm sticker vào video")
+    # Apply sticker overlays to MP4 output
+    if output_targets.get("mp4", True) and stickers_list:
         sticker_video_path = outputs.get("outputVideoPath") or str(main_render_path or "")
         if sticker_video_path and Path(sticker_video_path).exists():
-            sticker_tmp = dirs["render"] / f"{Path(input_path).stem}_sticker_tmp.mp4"
-            apply_sticker_overlay(
-                input_video_path=Path(sticker_video_path),
-                output_video_path=sticker_tmp,
-                sticker_options=sticker_options,
-                scale=sticker_options.get("scale", 1.0),
-                transform_x=sticker_options.get("transform_x", 0.0),
-                transform_y=sticker_options.get("transform_y", -0.3),
-            )
-            if sticker_tmp.exists():
-                Path(sticker_video_path).unlink(missing_ok=True)
-                sticker_tmp.rename(Path(sticker_video_path))
-                outputs["outputVideoPath"] = sticker_video_path
+            current_path = Path(sticker_video_path)
+            applied_any = False
+            for idx, stk in enumerate(stickers_list):
+                stk_id = stk.get("stickerId") or stk.get("sticker_id")
+                if not stk_id:
+                    continue
+                emit_progress(phase="render", step="sticker", progress=0.88, message=f"Đang thêm sticker {idx+1}/{len(stickers_list)} vào video")
+                sticker_tmp = dirs["render"] / f"{Path(input_path).stem}_sticker_tmp_{idx}.mp4"
+                apply_sticker_overlay(
+                    input_video_path=current_path,
+                    output_video_path=sticker_tmp,
+                    sticker_options=stk,
+                    scale=stk.get("scale", 1.0),
+                    transform_x=stk.get("transform_x", 0.0),
+                    transform_y=stk.get("transform_y", -0.3),
+                )
+                if sticker_tmp.exists():
+                    if applied_any:
+                        # Clean up intermediate files
+                        current_path.unlink(missing_ok=True)
+                    current_path = sticker_tmp
+                    applied_any = True
+            
+            if applied_any:
+                final_dest = Path(sticker_video_path)
+                final_dest.unlink(missing_ok=True)
+                current_path.rename(final_dest)
+                outputs["outputVideoPath"] = str(final_dest)
 
     if output_targets.get("draft", True):
         try:
@@ -3042,6 +3082,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
                 analysis_name=Path(input_path).stem,
                 flattened_video_path=flattened_render_path,
                 sticker_options=render_options.get("stickerOptions"),
+                stickers=stickers_list,
             )
         except Exception as exc:
             outputs["warnings"].append(f"Tạo draft CapCut thất bại: {exc}")

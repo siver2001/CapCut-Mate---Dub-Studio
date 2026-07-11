@@ -30,10 +30,12 @@ from .voice import WindowVoiceMixin
 from .workflow import WindowWorkflowMixin
 from .batch import WindowBatchMixin
 from .clone_voice import WindowCloneVoiceMixin
+from .precut_mixin import WindowPrecutMixin
 
 
 class DubStudioWindow(
     WindowBatchMixin,
+    WindowPrecutMixin,
     WindowVoiceMixin,
     WindowCloneVoiceMixin,
     WindowRefreshMixin,
@@ -128,6 +130,7 @@ class DubStudioWindow(
 
         self._build_ui()
         self.sync_widgets_from_settings()
+        self.load_precut_configurations()
         if (
             self.render_preview_player is not None
             and self.render_preview_audio_output is not None

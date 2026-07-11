@@ -50,8 +50,8 @@ class _SubtitleOverlay(QGraphicsItem):
     def __init__(self, parent: QGraphicsItem | None = None) -> None:
         super().__init__(parent)
         self._subtitle_data: dict[str, Any] = {}
-        self._sticker_pixmap: QPixmap | None = None
-        self._sticker_opts: dict[str, Any] = {}
+        self._stickers: list[dict[str, Any]] = []
+        self._sticker_pixmaps: dict[str, QPixmap] = {}
         self._watermark_opts: dict[str, Any] = {}
 
     def boundingRect(self) -> QRectF:
@@ -93,13 +93,13 @@ class _SubtitleOverlay(QGraphicsItem):
     def update_overlay(
         self,
         subtitle_data: dict[str, Any],
-        sticker_opts: dict[str, Any],
-        sticker_pixmap: QPixmap | None,
+        stickers: list[dict[str, Any]],
+        sticker_pixmaps: dict[str, QPixmap],
         watermark_opts: dict[str, Any] | None = None,
     ) -> None:
         self._subtitle_data = subtitle_data
-        self._sticker_opts = sticker_opts
-        self._sticker_pixmap = sticker_pixmap
+        self._stickers = stickers
+        self._sticker_pixmaps = sticker_pixmaps
         self._watermark_opts = watermark_opts or {}
         self.update()
 
@@ -159,54 +159,63 @@ class _SubtitleOverlay(QGraphicsItem):
         painter.restore()
 
     def _paint_sticker(self, painter: QPainter) -> None:
-        sticker_opts = self._sticker_opts
-        sticker_id = str(sticker_opts.get("stickerId") or "")
-        if not sticker_id:
-            return
-        pixmap = self._sticker_pixmap
-        if pixmap is None or pixmap.isNull():
-            self._paint_sticker_placeholder(painter)
-            return
-            
-        frame_rect = self._get_video_frame_rect()
-        scale = float(sticker_opts.get("scale", 1.0))
-        base_w = frame_rect.width() // 4
-        sw = max(20, int(base_w * scale))
-        sw = min(sw, int(frame_rect.width() * 0.5))
-        sticker_pm = pixmap.scaledToWidth(sw, Qt.TransformationMode.SmoothTransformation)
-        transform_x = max(-1.0, min(float(sticker_opts.get("transform_x", 0.0)), 1.0))
-        transform_y = max(-1.0, min(float(sticker_opts.get("transform_y", -0.3)), 1.0))
-        sx = frame_rect.left() + (frame_rect.width() - sticker_pm.width()) * ((transform_x + 1.0) * 0.5)
-        sy = frame_rect.top() + (frame_rect.height() - sticker_pm.height()) * ((transform_y + 1.0) * 0.5)
-        sx = max(frame_rect.left(), min(sx, max(frame_rect.right() - sticker_pm.width(), frame_rect.left())))
-        sy = max(frame_rect.top(), min(sy, max(frame_rect.bottom() - sticker_pm.height(), frame_rect.top())))
-        painter.drawPixmap(int(sx), int(sy), sticker_pm)
-        border_rect = QRectF(sx, sy, sticker_pm.width(), sticker_pm.height())
-        painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine))
-        painter.drawRect(border_rect)
-
-    def _paint_sticker_placeholder(self, painter: QPainter) -> None:
-        sticker_opts = self._sticker_opts
-        sticker_id = str(sticker_opts.get("stickerId") or "")
-        if not sticker_id:
-            return
-        label = "[Sticker Animated]" if int(sticker_opts.get("sticker_type", 1)) == 2 else "[Sticker]"
+        position_ms = self._subtitle_data.get("position_ms", 0)
+        pos_sec = position_ms / 1000.0
         
-        frame_rect = self._get_video_frame_rect()
-        painter.setFont(QFont("Segoe UI", 10))
-        metrics = painter.fontMetrics()
-        rect_width = min(max(metrics.horizontalAdvance(label) + 28, 130), max(frame_rect.width() - 32, 80))
-        rect_height = metrics.height() + 16
-        transform_x = max(-1.0, min(float(sticker_opts.get("transform_x", 0.0)), 1.0))
-        transform_y = max(-1.0, min(float(sticker_opts.get("transform_y", -0.3)), 1.0))
-        left = frame_rect.left() + (frame_rect.width() - rect_width) * ((transform_x + 1.0) * 0.5)
-        top = frame_rect.top() + (frame_rect.height() - rect_height) * ((transform_y + 1.0) * 0.5)
-        rect = QRectF(left, top, rect_width, rect_height)
-        painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
-        painter.setBrush(QColor(8, 15, 29, 180))
-        painter.drawRoundedRect(rect, 10, 10)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), label)
+        for stk in self._stickers:
+            stk_id = str(stk.get("stickerId") or stk.get("sticker_id") or "")
+            if not stk_id:
+                continue
+            
+            # Check timeline range (startTime, endTime)
+            start_time = float(stk.get("startTime", 0.0))
+            end_time = float(stk.get("endTime", 0.0))
+            if pos_sec < start_time:
+                continue
+            if end_time > 0.0 and pos_sec > end_time:
+                continue
+                
+            pixmap = self._sticker_pixmaps.get(stk_id)
+            frame_rect = self._get_video_frame_rect()
+            scale = float(stk.get("scale", 1.0))
+            transform_x = max(-1.0, min(float(stk.get("transform_x", 0.0)), 1.0))
+            transform_y = max(-1.0, min(float(stk.get("transform_y", -0.3)), 1.0))
+            
+            if pixmap and not pixmap.isNull():
+                base_w = frame_rect.width() // 4
+                sw = max(20, int(base_w * scale))
+                sw = min(sw, int(frame_rect.width() * 0.5))
+                sticker_pm = pixmap.scaledToWidth(sw, Qt.TransformationMode.SmoothTransformation)
+                sx = frame_rect.left() + (frame_rect.width() - sticker_pm.width()) * ((transform_x + 1.0) * 0.5)
+                sy = frame_rect.top() + (frame_rect.height() - sticker_pm.height()) * ((transform_y + 1.0) * 0.5)
+                sx = max(frame_rect.left(), min(sx, max(frame_rect.right() - sticker_pm.width(), frame_rect.left())))
+                sy = max(frame_rect.top(), min(sy, max(frame_rect.bottom() - sticker_pm.height(), frame_rect.top())))
+                painter.drawPixmap(int(sx), int(sy), sticker_pm)
+                border_rect = QRectF(sx, sy, sticker_pm.width(), sticker_pm.height())
+                painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine))
+                painter.drawRect(border_rect)
+            else:
+                # Paint placeholder if pixmap not available
+                label = stk.get("stickerName") or "Sticker"
+                if not label.strip() or label == "Không":
+                    label = "[Sticker]"
+                else:
+                    label = f"[{label}]"
+                if int(stk.get("sticker_type", 1)) == 2:
+                    label += " (Anim)"
+                    
+                painter.setFont(QFont("Segoe UI", 10))
+                metrics = painter.fontMetrics()
+                rect_width = min(max(metrics.horizontalAdvance(label) + 28, 130), max(frame_rect.width() - 32, 80))
+                rect_height = metrics.height() + 16
+                left = frame_rect.left() + (frame_rect.width() - rect_width) * ((transform_x + 1.0) * 0.5)
+                top = frame_rect.top() + (frame_rect.height() - rect_height) * ((transform_y + 1.0) * 0.5)
+                rect = QRectF(left, top, rect_width, rect_height)
+                painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
+                painter.setBrush(QColor(8, 15, 29, 180))
+                painter.drawRoundedRect(rect, 10, 10)
+                painter.setPen(QColor("#ffffff"))
+                painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), label)
 
     def _paint_watermark(self, painter: QPainter) -> None:
         watermark = self._watermark_opts
@@ -418,6 +427,8 @@ class VideoPreviewWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(320)
+        self._stickers = []
+        self._sticker_pixmaps = {}
 
         # --- Media player ---
         self._player = QMediaPlayer(self)
@@ -644,6 +655,7 @@ class VideoPreviewWidget(QWidget):
         subtitle_data: dict[str, Any],
         sticker_opts: dict[str, Any],
         watermark_opts: dict[str, Any] | None = None,
+        stickers: list[dict[str, Any]] | None = None,
     ) -> None:
         """
         Update the overlay with new subtitle and sticker settings.
@@ -658,42 +670,36 @@ class VideoPreviewWidget(QWidget):
             or ""
         )
         self._sticker_opts = sticker_opts or {}
+        self._stickers = stickers or []
+        if not self._stickers and self._sticker_opts and self._sticker_opts.get("stickerId"):
+            self._stickers = [self._sticker_opts]
         self._watermark_opts = watermark_opts or {}
         self._load_sticker_pixmap()
         self._update_overlay()
 
     def _load_sticker_pixmap(self) -> None:
-        opts = self._sticker_opts
-        sticker_id = str(opts.get("stickerId") or "")
-        if not sticker_id:
-            self._sticker_pixmap = None
-            self._sticker_cache_key = ""
-            return
-        image_url = str(opts.get("image_url") or "").strip()
-        if not image_url:
-            self._sticker_pixmap = None
-            self._sticker_cache_key = ""
-            return
-        cache_key = "|".join(
-            [
-                sticker_id,
-                image_url,
-                str(opts.get("sticker_type") or ""),
-            ]
-        )
-        if cache_key == self._sticker_cache_key and self._sticker_pixmap is not None:
-            return
-        self._sticker_pixmap = None
-        try:
-            cached = ensure_qt_readable_sticker_preview(opts)
-            if cached is None:
-                return
-            img = QImage(str(cached))
-            if not img.isNull():
-                self._sticker_pixmap = QPixmap.fromImage(img)
-                self._sticker_cache_key = cache_key
-        except Exception:
-            pass
+        """Preload sticker images for player rendering of all stickers."""
+        # Clean up stale cache keys
+        active_ids = {str(stk.get("stickerId") or stk.get("sticker_id") or "") for stk in self._stickers}
+        self._sticker_pixmaps = {k: v for k, v in self._sticker_pixmaps.items() if k in active_ids}
+        
+        for stk in self._stickers:
+            stk_id = str(stk.get("stickerId") or stk.get("sticker_id") or "")
+            if not stk_id:
+                continue
+            image_url = str(stk.get("image_url") or "").strip()
+            if not image_url:
+                continue
+            if stk_id in self._sticker_pixmaps:
+                continue
+            try:
+                cached = ensure_qt_readable_sticker_preview(stk)
+                if cached is not None:
+                    img = QImage(str(cached))
+                    if not img.isNull():
+                        self._sticker_pixmaps[stk_id] = QPixmap.fromImage(img)
+            except Exception:
+                pass
 
     def _find_subtitle_at_position(self, position_ms: int) -> str:
         for segment in self._subtitle_timeline:
@@ -809,6 +815,7 @@ class VideoPreviewWidget(QWidget):
 
     def _update_overlay(self) -> None:
         is_playing = self.is_playing()
+        position_ms = self._player.position()
         self._overlay.update_overlay(
             {
                 "subtitlePreset": self._subtitle_preset,
@@ -817,9 +824,10 @@ class VideoPreviewWidget(QWidget):
                 "preview_text": self._preview_text,
                 "subtitleRegion": getattr(self, "_subtitle_region", {}),
                 "is_playing": is_playing,
+                "position_ms": position_ms,
             },
-            self._sticker_opts,
-            self._sticker_pixmap,
+            self._stickers,
+            self._sticker_pixmaps,
             self._watermark_opts,
         )
 

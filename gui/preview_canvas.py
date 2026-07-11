@@ -29,6 +29,8 @@ class PreviewCanvas(QWidget):
     subtitle_dragged = pyqtSignal(str, int)
     cleanup_region_changed = pyqtSignal(dict)
     watermark_scale_changed = pyqtSignal(float)
+    sticker_dragged = pyqtSignal(float, float)
+    sticker_scaled = pyqtSignal(float)
 
     def __init__(self) -> None:
         super().__init__()
@@ -42,6 +44,13 @@ class PreviewCanvas(QWidget):
         self._watermark_handle_rect = QRectF()
         self._sticker_pixmap = None
         self._sticker_cache_key = ""
+        self._sticker_pixmaps = {}
+        self._sticker_rect = QRectF()
+        self._sticker_handle_rect = QRectF()
+        self._dragging_sticker = False
+        self._resizing_sticker = False
+        self._drag_offset_x = 0.0
+        self._drag_offset_y = 0.0
         # Preload all Google Fonts in background to avoid delay on first paint
         self._preload_fonts_in_background()
 
@@ -81,36 +90,33 @@ class PreviewCanvas(QWidget):
         self.update()
 
     def _load_sticker_preview(self) -> None:
-        """Preload sticker image for preview rendering."""
-        self._sticker_pixmap = None
-        sticker_opts = self.settings.get("stickerOptions") or {}
-        sticker_id = str(sticker_opts.get("stickerId") or "")
-        if not sticker_id:
-            self._sticker_cache_key = ""
-            return
-        image_url = str(sticker_opts.get("image_url") or "").strip()
-        if not image_url:
-            self._sticker_cache_key = ""
-            return
-        cache_key = "|".join(
-            [
-                sticker_id,
-                image_url,
-                str(sticker_opts.get("sticker_type") or ""),
-            ]
-        )
-        if cache_key == self._sticker_cache_key and self._sticker_pixmap is not None:
-            return
-        try:
-            cached = ensure_qt_readable_sticker_preview(sticker_opts)
-            if cached is None:
-                return
-            img = QImage(str(cached))
-            if not img.isNull():
-                self._sticker_pixmap = QPixmap.fromImage(img)
-                self._sticker_cache_key = cache_key
-        except Exception:
-            pass
+        """Preload sticker images for preview rendering of all stickers."""
+        stickers_list = self.settings.get("stickers") or []
+        if not stickers_list:
+            old_opts = self.settings.get("stickerOptions") or {}
+            stickers_list = [old_opts]
+            
+        # Clean up stale cache keys
+        active_ids = {str(stk.get("stickerId") or stk.get("sticker_id") or "") for stk in stickers_list}
+        self._sticker_pixmaps = {k: v for k, v in self._sticker_pixmaps.items() if k in active_ids}
+        
+        for stk in stickers_list:
+            stk_id = str(stk.get("stickerId") or stk.get("sticker_id") or "")
+            if not stk_id:
+                continue
+            image_url = str(stk.get("image_url") or "").strip()
+            if not image_url:
+                continue
+            if stk_id in self._sticker_pixmaps:
+                continue
+            try:
+                cached = ensure_qt_readable_sticker_preview(stk)
+                if cached is not None:
+                    img = QImage(str(cached))
+                    if not img.isNull():
+                        self._sticker_pixmaps[stk_id] = QPixmap.fromImage(img)
+            except Exception:
+                pass
 
     @staticmethod
     def _build_preview_text(text: str, max_words_per_line: int) -> str:
@@ -193,38 +199,93 @@ class PreviewCanvas(QWidget):
             painter.drawText(rect_to_draw, int(Qt.AlignmentFlag.AlignCenter), "[Vùng sub cũ]")
             painter.restore()
 
-        # Sticker Preview
-        sticker_opts = self.settings.get("stickerOptions") or {}
-        sticker_id = str(sticker_opts.get("stickerId") or "")
-        if sticker_id and self._sticker_pixmap and not self._sticker_pixmap.isNull():
-            scale = float(sticker_opts.get("scale", 1.0))
-            base_w = target.width() // 4
-            sw = max(20, int(base_w * scale))
-            sw = min(sw, int(target.width() * 0.5))
-            sticker_pm = self._sticker_pixmap.scaledToWidth(
-                sw, Qt.TransformationMode.SmoothTransformation
-            )
-            # Position: upper area, center horizontally
-            sx = target.center().x() - sticker_pm.width() * 0.5
-            sy = target.top() + 16
-            painter.drawPixmap(int(sx), int(sy), sticker_pm)
-            # Subtle dashed border
-            sticker_border_rect = QRectF(
-                sx, sy, sticker_pm.width(), sticker_pm.height()
-            )
-            painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine))
-            painter.drawRect(sticker_border_rect)
-        elif sticker_id:
-            # Sticker selected but image not cached (or is GIF) — show label
-            painter.setPen(QColor(255, 200, 0, 200))
-            painter.setFont(QFont("Segoe UI", 9))
-            label = "[Sticker]"
-            if int(sticker_opts.get("sticker_type", 1)) == 2:
-                label = "[Sticker Animated]"
-            tw = painter.fontMetrics().horizontalAdvance(label)
-            painter.drawText(
-                int(target.center().x() - tw * 0.5), int(target.top() + 30), label
-            )
+        # Stickers Preview
+        stickers_list = self.settings.get("stickers") or []
+        if not stickers_list:
+            old_opts = self.settings.get("stickerOptions") or {}
+            stickers_list = [old_opts]
+            
+        current_idx = self.settings.get("currentStickerIndex", 0)
+        
+        # Reset current sticker rects
+        self._sticker_rect = QRectF()
+        self._sticker_handle_rect = QRectF()
+        
+        for i, stk in enumerate(stickers_list):
+            stk_id = str(stk.get("stickerId") or stk.get("sticker_id") or "")
+            if not stk_id:
+                continue
+            
+            # Position calculation using transform_x, transform_y
+            scale = float(stk.get("scale", 1.0))
+            transform_x = max(-1.0, min(float(stk.get("transform_x", 0.0)), 1.0))
+            transform_y = max(-1.0, min(float(stk.get("transform_y", -0.3)), 1.0))
+            
+            # Find preloaded pixmap
+            pixmap_cached = self._sticker_pixmaps.get(stk_id)
+            is_current = (i == current_idx)
+            
+            if pixmap_cached and not pixmap_cached.isNull():
+                base_w = target.width() // 4
+                sw = max(20, int(base_w * scale))
+                sw = min(sw, int(target.width() * 0.5))
+                sticker_pm = pixmap_cached.scaledToWidth(
+                    sw, Qt.TransformationMode.SmoothTransformation
+                )
+                sh = sticker_pm.height()
+                
+                sx = target.left() + (target.width() - sw) * ((transform_x + 1.0) * 0.5)
+                sy = target.top() + (target.height() - sh) * ((transform_y + 1.0) * 0.5)
+                
+                stk_rect = QRectF(sx, sy, sw, sh)
+                painter.drawPixmap(int(sx), int(sy), sticker_pm)
+            else:
+                # Placeholder label if no pixmap
+                label = stk.get("stickerName") or f"Sticker {i+1}"
+                if not label.strip() or label == "Không":
+                    label = f"[Sticker {i+1}]"
+                else:
+                    label = f"[{label}]"
+                if int(stk.get("sticker_type", 1)) == 2:
+                    label += " (Anim)"
+                    
+                painter.save()
+                painter.setFont(QFont("Segoe UI", 9))
+                tw = painter.fontMetrics().horizontalAdvance(label)
+                th = painter.fontMetrics().height()
+                sw = max(60, tw + 10)
+                sh = max(30, th + 10)
+                
+                sx = target.left() + (target.width() - sw) * ((transform_x + 1.0) * 0.5)
+                sy = target.top() + (target.height() - sh) * ((transform_y + 1.0) * 0.5)
+                stk_rect = QRectF(sx, sy, sw, sh)
+                
+                # Draw a placeholder rect
+                painter.setPen(QPen(QColor(255, 200, 0, 150), 1, Qt.PenStyle.SolidLine))
+                painter.setBrush(QColor(0, 0, 0, 100))
+                painter.drawRect(stk_rect)
+                painter.setPen(QColor(255, 200, 0, 200))
+                painter.drawText(stk_rect, int(Qt.AlignmentFlag.AlignCenter), label)
+                painter.restore()
+                
+            if is_current:
+                self._sticker_rect = stk_rect
+                # Draw dashed border
+                painter.save()
+                painter.setPen(QPen(QColor(255, 255, 255, 200), 1.5, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(self._sticker_rect)
+                
+                # Draw resize handle (10x10 yellow box at bottom right)
+                handle_size = 10.0
+                self._sticker_handle_rect = QRectF(
+                    self._sticker_rect.right() - handle_size / 2,
+                    self._sticker_rect.bottom() - handle_size / 2,
+                    handle_size,
+                    handle_size
+                )
+                painter.fillRect(self._sticker_handle_rect, QColor("#facc15"))
+                painter.restore()
 
         subtitle_preset = self.settings.get("subtitlePreset") or {}
         if subtitle_preset.get("enabled", True):
@@ -455,13 +516,33 @@ class PreviewCanvas(QWidget):
     def mousePressEvent(self, event) -> None:
         if (
             event.button() == Qt.MouseButton.LeftButton
+            and self._sticker_handle_rect.contains(event.position())
+        ):
+            self._resizing_sticker = True
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            event.accept()
+            return
+            
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._sticker_rect.contains(event.position())
+        ):
+            self._dragging_sticker = True
+            self._drag_offset_x = float(event.position().x() - self._sticker_rect.center().x())
+            self._drag_offset_y = float(event.position().y() - self._sticker_rect.center().y())
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            event.accept()
+            return
+
+        if (
+            event.button() == Qt.MouseButton.LeftButton
             and self._watermark_handle_rect.contains(event.position())
         ):
             self._resizing_watermark = True
             self.setCursor(Qt.CursorShape.SizeFDiagCursor)
             event.accept()
             return
-  # noqa: N802
+
         if event.button() == Qt.MouseButton.LeftButton and self._caption_rect.contains(
             event.position()
         ):
@@ -473,6 +554,42 @@ class PreviewCanvas(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._resizing_sticker and self._target_rect.width() > 0:
+            new_w = float(event.position().x() - self._sticker_rect.left())
+            base_w = self._target_rect.width() / 4.0
+            if base_w > 0:
+                new_scale = new_w / base_w
+                new_scale = max(0.1, min(5.0, new_scale))
+                self.sticker_scaled.emit(new_scale)
+            event.accept()
+            return
+            
+        if self._dragging_sticker and self._target_rect.width() > 0 and self._target_rect.height() > 0:
+            target = self._target_rect
+            new_cx = float(event.position().x() - self._drag_offset_x)
+            new_cy = float(event.position().y() - self._drag_offset_y)
+            sw = self._sticker_rect.width()
+            sh = self._sticker_rect.height()
+            
+            denom_x = target.width() - sw
+            denom_y = target.height() - sh
+            
+            if denom_x > 0:
+                tx = ((new_cx - target.left() - sw * 0.5) / denom_x) * 2.0 - 1.0
+                tx = max(-1.0, min(tx, 1.0))
+            else:
+                tx = 0.0
+                
+            if denom_y > 0:
+                ty = ((new_cy - target.top() - sh * 0.5) / denom_y) * 2.0 - 1.0
+                ty = max(-1.0, min(ty, 1.0))
+            else:
+                ty = 0.0
+                
+            self.sticker_dragged.emit(tx, ty)
+            event.accept()
+            return
+
         if self._resizing_watermark and self._target_rect.width() > 0:
             new_width = float(event.position().x() - self._watermark_rect.left())
             new_scale = new_width / self._target_rect.width()
@@ -488,7 +605,11 @@ class PreviewCanvas(QWidget):
             event.accept()
             return
 
-        if self._caption_rect.contains(event.position()):
+        if self._sticker_handle_rect.contains(event.position()):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif self._sticker_rect.contains(event.position()):
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+        elif self._caption_rect.contains(event.position()):
             self.setCursor(Qt.CursorShape.SizeVerCursor)
         elif self._watermark_handle_rect.contains(event.position()):
             self.setCursor(Qt.CursorShape.SizeFDiagCursor)
@@ -497,6 +618,14 @@ class PreviewCanvas(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._resizing_sticker:
+            self._resizing_sticker = False
+            self.unsetCursor()
+        if self._dragging_sticker:
+            self._dragging_sticker = False
+            self.unsetCursor()
+            event.accept()
+            return
         if self._resizing_watermark:
             self._resizing_watermark = False
             self.unsetCursor()

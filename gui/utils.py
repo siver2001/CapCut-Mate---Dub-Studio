@@ -771,6 +771,21 @@ def default_settings() -> dict[str, Any]:
             "transform_x": 0.0,
             "transform_y": -0.3,
         },
+        "stickers": [
+            {
+                "stickerId": "",
+                "sticker_id": "",
+                "stickerName": "",
+                "image_url": "",
+                "sticker_type": 1,
+                "scale": 1.0,
+                "transform_x": 0.0,
+                "transform_y": -0.3,
+                "startTime": 0.0,
+                "endTime": 0.0,
+            }
+        ],
+        "currentStickerIndex": 0,
         "draftRoot": str(getattr(config, "DRAFT_DIR", "") or ""),
         "outputDirectory": "",
     }

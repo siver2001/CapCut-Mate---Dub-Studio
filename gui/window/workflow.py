@@ -2073,6 +2073,89 @@ class WindowWorkflowMixin:
         self.sync_widgets_from_settings()
         self.refresh_preview()
 
+    def on_sticker_selection_changed(self, index: int) -> None:
+        if index < 0:
+            return
+        # Save current state first
+        self.read_settings_from_widgets()
+        self.settings["currentStickerIndex"] = index
+        self.sync_widgets_from_settings()
+        self.refresh_preview()
+
+    def on_add_sticker_clicked(self) -> None:
+        self.read_settings_from_widgets()
+        new_sticker = {
+            "stickerId": "",
+            "sticker_id": "",
+            "stickerName": "",
+            "image_url": "",
+            "sticker_type": 1,
+            "scale": 1.0,
+            "transform_x": 0.0,
+            "transform_y": -0.3,
+            "startTime": 0.0,
+            "endTime": 0.0,
+        }
+        self.settings.setdefault("stickers", []).append(new_sticker)
+        self.settings["currentStickerIndex"] = len(self.settings["stickers"]) - 1
+        self.sync_widgets_from_settings()
+        self.refresh_preview()
+
+    def on_delete_sticker_clicked(self) -> None:
+        self.read_settings_from_widgets()
+        stickers = self.settings.setdefault("stickers", [])
+        if len(stickers) <= 1:
+            stickers[0] = {
+                "stickerId": "",
+                "sticker_id": "",
+                "stickerName": "",
+                "image_url": "",
+                "sticker_type": 1,
+                "scale": 1.0,
+                "transform_x": 0.0,
+                "transform_y": -0.3,
+                "startTime": 0.0,
+                "endTime": 0.0,
+            }
+            self.settings["currentStickerIndex"] = 0
+        else:
+            current_idx = self.settings.get("currentStickerIndex", 0)
+            stickers.pop(current_idx)
+            self.settings["currentStickerIndex"] = max(0, current_idx - 1)
+        self.sync_widgets_from_settings()
+        self.refresh_preview()
+
+    def on_preview_sticker_dragged(self, tx: float, ty: float) -> None:
+        current_idx = self.settings.setdefault("currentStickerIndex", 0)
+        stickers = self.settings.setdefault("stickers", [])
+        if 0 <= current_idx < len(stickers):
+            stickers[current_idx]["transform_x"] = float(tx)
+            stickers[current_idx]["transform_y"] = float(ty)
+            self.settings["stickerOptions"] = copy.deepcopy(stickers[current_idx])
+            
+        if hasattr(self, "sticker_x_spin"):
+            self.sticker_x_spin.blockSignals(True)
+            self.sticker_x_spin.setValue(float(tx))
+            self.sticker_x_spin.blockSignals(False)
+        if hasattr(self, "sticker_y_spin"):
+            self.sticker_y_spin.blockSignals(True)
+            self.sticker_y_spin.setValue(float(ty))
+            self.sticker_y_spin.blockSignals(False)
+        self.refresh_preview()
+
+    def on_preview_sticker_scaled(self, scale: float) -> None:
+        current_idx = self.settings.setdefault("currentStickerIndex", 0)
+        stickers = self.settings.setdefault("stickers", [])
+        if 0 <= current_idx < len(stickers):
+            stickers[current_idx]["scale"] = float(scale)
+            self.settings["stickerOptions"] = copy.deepcopy(stickers[current_idx])
+            
+        if hasattr(self, "sticker_scale_spin"):
+            self.sticker_scale_spin.blockSignals(True)
+            self.sticker_scale_spin.setValue(float(scale))
+            self.sticker_scale_spin.blockSignals(False)
+        self.refresh_preview()
+
     def apply_caption_position(self, position_preset: str) -> None:
         default_offset = {"top": 24, "middle": 0, "bottom": 54}
         self.settings["subtitlePreset"]["positionPreset"] = position_preset
@@ -2339,28 +2422,51 @@ class WindowWorkflowMixin:
             self.settings["subtitlePreset"]["subtitleAnimation"] = str(self.subtitle_animation_combo.currentData() or "None")
         if hasattr(self, "localization_mode_combo"):
             self.settings["localizationMode"] = str(self.localization_mode_combo.currentData() or "creative")
+        # Ensure "stickers" list exists
+        self.settings.setdefault("stickers", [
+            {
+                "stickerId": "",
+                "sticker_id": "",
+                "stickerName": "",
+                "image_url": "",
+                "sticker_type": 1,
+                "scale": 1.0,
+                "transform_x": 0.0,
+                "transform_y": -0.3,
+                "startTime": 0.0,
+                "endTime": 0.0,
+            }
+        ])
+        
+        current_idx = self.settings.setdefault("currentStickerIndex", 0)
+        if current_idx < 0 or current_idx >= len(self.settings["stickers"]):
+            current_idx = 0
+            self.settings["currentStickerIndex"] = 0
+            
         sticker_id = str(self.sticker_combo.currentData() or "none")
         sticker_data = get_sticker_by_id(sticker_id) if sticker_id != "none" else {}
-        sticker_transform_x = float(
-            self.sticker_x_spin.value()
-            if hasattr(self, "sticker_x_spin")
-            else (self.settings.get("stickerOptions") or {}).get("transform_x", 0.0)
-        )
-        sticker_transform_y = float(
-            self.sticker_y_spin.value()
-            if hasattr(self, "sticker_y_spin")
-            else (self.settings.get("stickerOptions") or {}).get("transform_y", -0.3)
-        )
-        self.settings["stickerOptions"] = {
+        
+        sticker_scale = float(self.sticker_scale_spin.value() if hasattr(self, "sticker_scale_spin") else 1.0)
+        sticker_transform_x = float(self.sticker_x_spin.value() if hasattr(self, "sticker_x_spin") else 0.0)
+        sticker_transform_y = float(self.sticker_y_spin.value() if hasattr(self, "sticker_y_spin") else -0.3)
+        sticker_start = float(self.sticker_start_spin.value() if hasattr(self, "sticker_start_spin") else 0.0)
+        sticker_end = float(self.sticker_end_spin.value() if hasattr(self, "sticker_end_spin") else 0.0)
+        
+        self.settings["stickers"][current_idx] = {
             "stickerId": sticker_id if sticker_id != "none" else "",
             "sticker_id": sticker_id if sticker_id != "none" else "",
             "stickerName": str(self.sticker_combo.currentText() or ""),
             "image_url": str(sticker_data.get("image_url", "") or ""),
             "sticker_type": int(sticker_data.get("sticker_type", 1)),
-            "scale": float(getattr(self, "sticker_scale_spin", None) and self.sticker_scale_spin.value() or 1.0),
+            "scale": sticker_scale,
             "transform_x": max(-1.0, min(sticker_transform_x, 1.0)),
             "transform_y": max(-1.0, min(sticker_transform_y, 1.0)),
+            "startTime": sticker_start,
+            "endTime": sticker_end,
         }
+        
+        # Keep stickerOptions in sync with the current active sticker for backward compatibility
+        self.settings["stickerOptions"] = copy.deepcopy(self.settings["stickers"][current_idx])
         self.settings["introHook"]["enabled"] = self.intro_enabled_check.isChecked()
         self.settings["introHook"]["clipDurationMs"] = int(
             round(self.intro_duration_spin.value() * 1000)
@@ -2490,6 +2596,7 @@ class WindowWorkflowMixin:
             "watermarkPosition": self.settings.get("watermark", {}).get("position", "top-right"),
             "watermarkScale": self.settings.get("watermark", {}).get("scale", 0.15),
             "stickerOptions": copy.deepcopy(self.settings.get("stickerOptions", {})),
+            "stickers": copy.deepcopy(self.settings.get("stickers") or []),
         }
 
     def _push_analysis_overrides(self, *, rebuild_voice_ui: bool = True) -> None:
@@ -2510,6 +2617,23 @@ class WindowWorkflowMixin:
         
         # 2. Use current settings as the base to keep user modifications
         merged = copy.deepcopy(self.settings)
+        if "stickers" not in merged:
+            old_opts = merged.get("stickerOptions") or {}
+            merged["stickers"] = [
+                {
+                    "stickerId": old_opts.get("stickerId") or old_opts.get("sticker_id") or "",
+                    "sticker_id": old_opts.get("stickerId") or old_opts.get("sticker_id") or "",
+                    "stickerName": old_opts.get("stickerName") or "",
+                    "image_url": old_opts.get("image_url") or "",
+                    "sticker_type": int(old_opts.get("sticker_type") or 1),
+                    "scale": float(old_opts.get("scale") or 1.0),
+                    "transform_x": float(old_opts.get("transform_x") or 0.0),
+                    "transform_y": float(old_opts.get("transform_y") or -0.3),
+                    "startTime": float(old_opts.get("startTime") or 0.0),
+                    "endTime": float(old_opts.get("endTime") or 0.0),
+                }
+            ]
+            merged["currentStickerIndex"] = 0
         render_defaults = analysis.get("renderDefaults") or {}
         
         # 3. Update only newly detected or generated fields from analysis
@@ -2755,14 +2879,69 @@ class WindowWorkflowMixin:
             self._set_combo_value(self.subtitle_animation_combo, self.settings["subtitlePreset"].get("subtitleAnimation", "None"))
         if hasattr(self, "localization_mode_combo"):
             self._set_combo_value(self.localization_mode_combo, self.settings.get("localizationMode", "creative"))
-        sticker_options = self.settings.get("stickerOptions") or {}
+        # Populate and sync self.sticker_list_combo
+        stickers_list = self.settings.get("stickers") or []
+        if not stickers_list:
+            old_opts = self.settings.get("stickerOptions") or {}
+            self.settings["stickers"] = [
+                {
+                    "stickerId": old_opts.get("stickerId") or old_opts.get("sticker_id") or "",
+                    "sticker_id": old_opts.get("stickerId") or old_opts.get("sticker_id") or "",
+                    "stickerName": old_opts.get("stickerName") or "",
+                    "image_url": old_opts.get("image_url") or "",
+                    "sticker_type": int(old_opts.get("sticker_type") or 1),
+                    "scale": float(old_opts.get("scale") or 1.0),
+                    "transform_x": float(old_opts.get("transform_x") or 0.0),
+                    "transform_y": float(old_opts.get("transform_y") or -0.3),
+                    "startTime": float(old_opts.get("startTime") or 0.0),
+                    "endTime": float(old_opts.get("endTime") or 0.0),
+                }
+            ]
+            self.settings["currentStickerIndex"] = 0
+            stickers_list = self.settings["stickers"]
+            
+        current_idx = self.settings.setdefault("currentStickerIndex", 0)
+        if current_idx < 0 or current_idx >= len(stickers_list):
+            current_idx = 0
+            self.settings["currentStickerIndex"] = 0
+            
+        self.sticker_list_combo.blockSignals(True)
+        self.sticker_list_combo.clear()
+        for i, stk in enumerate(stickers_list):
+            name = stk.get("stickerName") or f"Sticker {i+1}"
+            if not name.strip() or name == "Không":
+                name = f"Sticker {i+1} (Chưa chọn)"
+            self.sticker_list_combo.addItem(name, i)
+        self.sticker_list_combo.setCurrentIndex(current_idx)
+        self.sticker_list_combo.blockSignals(False)
+        
+        active_sticker = stickers_list[current_idx]
+        self.sticker_combo.blockSignals(True)
         self._set_combo_value(
             self.sticker_combo,
-            str(sticker_options.get("stickerId") or sticker_options.get("sticker_id") or "none"),
+            str(active_sticker.get("stickerId") or active_sticker.get("sticker_id") or "none"),
         )
-        self.sticker_scale_spin.setValue(float(sticker_options.get("scale", 1.0)))
-        self.sticker_x_spin.setValue(float(sticker_options.get("transform_x", 0.0)))
-        self.sticker_y_spin.setValue(float(sticker_options.get("transform_y", -0.3)))
+        self.sticker_combo.blockSignals(False)
+        
+        self.sticker_scale_spin.blockSignals(True)
+        self.sticker_scale_spin.setValue(float(active_sticker.get("scale", 1.0)))
+        self.sticker_scale_spin.blockSignals(False)
+        
+        self.sticker_x_spin.blockSignals(True)
+        self.sticker_x_spin.setValue(float(active_sticker.get("transform_x", 0.0)))
+        self.sticker_x_spin.blockSignals(False)
+        
+        self.sticker_y_spin.blockSignals(True)
+        self.sticker_y_spin.setValue(float(active_sticker.get("transform_y", -0.3)))
+        self.sticker_y_spin.blockSignals(False)
+        
+        self.sticker_start_spin.blockSignals(True)
+        self.sticker_start_spin.setValue(float(active_sticker.get("startTime", 0.0)))
+        self.sticker_start_spin.blockSignals(False)
+        
+        self.sticker_end_spin.blockSignals(True)
+        self.sticker_end_spin.setValue(float(active_sticker.get("endTime", 0.0)))
+        self.sticker_end_spin.blockSignals(False)
         self.intro_enabled_check.setChecked(bool(self.settings["introHook"]["enabled"]))
         self.intro_duration_spin.setValue(
             float(self.settings["introHook"]["clipDurationMs"]) / 1000.0
