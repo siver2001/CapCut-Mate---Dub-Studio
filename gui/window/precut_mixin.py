@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtWidgets import QTableWidgetItem, QMessageBox, QHeaderView
 
 from tools.dub_studio.cli_parts.precut import merge_intervals, validate_interval, precut_video
+from tools.dub_studio.media_utils import get_video_meta
 from gui.utils import repair_mojibake_text
 
 logger = logging.getLogger("dub_studio.precut_mixin")

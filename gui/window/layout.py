@@ -4,7 +4,7 @@ import copy
 from typing import Any
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QTextOption
+from PyQt6.QtGui import QTextOption, QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QStyle,
     QTabWidget,
     QTableWidget,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
