@@ -53,6 +53,10 @@ class _SubtitleOverlay(QGraphicsItem):
         self._stickers: list[dict[str, Any]] = []
         self._sticker_pixmaps: dict[str, QPixmap] = {}
         self._watermark_opts: dict[str, Any] = {}
+        self._sticker_rect = QRectF()
+        self._sticker_handle_rect = QRectF()
+        self._watermark_rect = QRectF()
+        self._watermark_handle_rect = QRectF()
 
     def boundingRect(self) -> QRectF:
         return QRectF(0, 0, 4000, 4000)
@@ -162,7 +166,12 @@ class _SubtitleOverlay(QGraphicsItem):
         position_ms = self._subtitle_data.get("position_ms", 0)
         pos_sec = position_ms / 1000.0
         
-        for stk in self._stickers:
+        self._sticker_rect = QRectF()
+        self._sticker_handle_rect = QRectF()
+        
+        current_idx = self._subtitle_data.get("currentStickerIndex", 0)
+        
+        for i, stk in enumerate(self._stickers):
             stk_id = str(stk.get("stickerId") or stk.get("sticker_id") or "")
             if not stk_id:
                 continue
@@ -190,10 +199,8 @@ class _SubtitleOverlay(QGraphicsItem):
                 sy = frame_rect.top() + (frame_rect.height() - sticker_pm.height()) * ((transform_y + 1.0) * 0.5)
                 sx = max(frame_rect.left(), min(sx, max(frame_rect.right() - sticker_pm.width(), frame_rect.left())))
                 sy = max(frame_rect.top(), min(sy, max(frame_rect.bottom() - sticker_pm.height(), frame_rect.top())))
+                stk_rect = QRectF(sx, sy, sticker_pm.width(), sticker_pm.height())
                 painter.drawPixmap(int(sx), int(sy), sticker_pm)
-                border_rect = QRectF(sx, sy, sticker_pm.width(), sticker_pm.height())
-                painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine))
-                painter.drawRect(border_rect)
             else:
                 # Paint placeholder if pixmap not available
                 label = stk.get("stickerName") or "Sticker"
@@ -210,14 +217,46 @@ class _SubtitleOverlay(QGraphicsItem):
                 rect_height = metrics.height() + 16
                 left = frame_rect.left() + (frame_rect.width() - rect_width) * ((transform_x + 1.0) * 0.5)
                 top = frame_rect.top() + (frame_rect.height() - rect_height) * ((transform_y + 1.0) * 0.5)
-                rect = QRectF(left, top, rect_width, rect_height)
+                stk_rect = QRectF(left, top, rect_width, rect_height)
+                
+                painter.save()
                 painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
                 painter.setBrush(QColor(8, 15, 29, 180))
-                painter.drawRoundedRect(rect, 10, 10)
+                painter.drawRoundedRect(stk_rect, 10, 10)
                 painter.setPen(QColor("#ffffff"))
-                painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), label)
+                painter.drawText(stk_rect, int(Qt.AlignmentFlag.AlignCenter), label)
+                painter.restore()
+                
+            is_current = (i == current_idx)
+            if is_current:
+                self._sticker_rect = stk_rect
+                # Draw white dashed border
+                painter.save()
+                painter.setPen(QPen(QColor(255, 255, 255, 200), 1.5, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(self._sticker_rect)
+                
+                # Draw resize handle (10x10 yellow box at bottom right)
+                handle_size = 10.0
+                self._sticker_handle_rect = QRectF(
+                    self._sticker_rect.right() - handle_size / 2,
+                    self._sticker_rect.bottom() - handle_size / 2,
+                    handle_size,
+                    handle_size
+                )
+                painter.fillRect(self._sticker_handle_rect, QColor("#facc15"))
+                painter.restore()
+            else:
+                # Border for non-selected sticker
+                painter.save()
+                painter.setPen(QPen(QColor(255, 255, 255, 80), 1, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(stk_rect)
+                painter.restore()
 
     def _paint_watermark(self, painter: QPainter) -> None:
+        self._watermark_rect = QRectF()
+        self._watermark_handle_rect = QRectF()
         watermark = self._watermark_opts
         if watermark.get("enabled"):
             frame_rect = self._get_video_frame_rect()
@@ -252,20 +291,36 @@ class _SubtitleOverlay(QGraphicsItem):
                 wm_x = frame_rect.right() - wm_w - margin
                 wm_y = frame_rect.bottom() - wm_h - margin
                 
+            self._watermark_rect = QRectF(wm_x, wm_y, wm_w, wm_h)
             painter.save()
             if wm_pm_scaled:
                 painter.setOpacity(opacity)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPixmap(int(wm_x), int(wm_y), wm_pm_scaled)
             else:
-                rect = QRectF(wm_x, wm_y, wm_w, wm_h)
                 painter.setOpacity(max(0.3, opacity))
                 painter.setPen(QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine))
                 painter.setBrush(QColor(8, 15, 29, 180))
-                painter.drawRoundedRect(rect, 4, 4)
+                painter.drawRoundedRect(self._watermark_rect, 4, 4)
                 painter.setPen(QColor("#ffffff"))
                 painter.setFont(QFont("Segoe UI", max(6, int(wm_h * 0.4))))
-                painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "[Watermark]")
+                painter.drawText(self._watermark_rect, int(Qt.AlignmentFlag.AlignCenter), "[Watermark]")
+            painter.restore()
+            
+            # Draw a subtle border around watermark and a resize handle
+            painter.save()
+            painter.setPen(QPen(QColor(255, 255, 255, 150), 1, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._watermark_rect)
+            
+            handle_size = 10.0
+            self._watermark_handle_rect = QRectF(
+                self._watermark_rect.right() - handle_size/2,
+                self._watermark_rect.bottom() - handle_size/2,
+                handle_size,
+                handle_size
+            )
+            painter.fillRect(self._watermark_handle_rect, QColor("#facc15"))
             painter.restore()
 
     def _paint_subtitle(self, painter: QPainter) -> None:
@@ -423,12 +478,23 @@ class VideoPreviewWidget(QWidget):
     """
 
     play_toggled = pyqtSignal(bool)  # True = playing, False = paused
+    watermark_scale_changed = pyqtSignal(float)
+    sticker_dragged = pyqtSignal(float, float)
+    sticker_scaled = pyqtSignal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(320)
         self._stickers = []
         self._sticker_pixmaps = {}
+        self._current_sticker_idx = 0
+
+        # --- Drag/Resize State ---
+        self._dragging_sticker = False
+        self._resizing_sticker = False
+        self._resizing_watermark = False
+        self._drag_offset_x = 0.0
+        self._drag_offset_y = 0.0
 
         # --- Media player ---
         self._player = QMediaPlayer(self)
@@ -466,7 +532,9 @@ class VideoPreviewWidget(QWidget):
         self._video_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._video_view.setStyleSheet("background: #000000; border: none;")
         self._video_view.installEventFilter(self)
+        self._video_view.setMouseTracking(True)
         self._video_view.viewport().installEventFilter(self)
+        self._video_view.viewport().setMouseTracking(True)
         self._player.setVideoOutput(self._video_item)
 
         surface_layout.addWidget(self._video_view)
@@ -664,6 +732,7 @@ class VideoPreviewWidget(QWidget):
         self._subtitle_preset = subtitle_data.get("subtitlePreset") or {}
         self._subtitle_timeline = subtitle_data.get("subtitleTimeline") or []
         self._subtitle_region = subtitle_data.get("subtitleRegion") or {}
+        self._current_sticker_idx = subtitle_data.get("currentStickerIndex", 0)
         self._preview_text = str(
             subtitle_data.get("preview_text")
             or subtitle_data.get("current_text")
@@ -825,6 +894,7 @@ class VideoPreviewWidget(QWidget):
                 "subtitleRegion": getattr(self, "_subtitle_region", {}),
                 "is_playing": is_playing,
                 "position_ms": position_ms,
+                "currentStickerIndex": self._current_sticker_idx,
             },
             self._stickers,
             self._sticker_pixmaps,
@@ -852,6 +922,101 @@ class VideoPreviewWidget(QWidget):
             watch_targets.add(video_view.viewport())
         if watched in watch_targets:
             event_type = event.type()
+            
+            # Dragging and Resizing on QGraphicsView Viewport
+            if video_view is not None and watched is video_view.viewport():
+                if event_type == QEvent.Type.MouseButtonPress:
+                    if event.button() == Qt.MouseButton.LeftButton:
+                        pos = event.position()
+                        scene_pos = self._video_view.mapToScene(pos.toPoint())
+                        
+                        if hasattr(self._overlay, "_sticker_handle_rect") and self._overlay._sticker_handle_rect.contains(scene_pos):
+                            self._resizing_sticker = True
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+                            return True
+                            
+                        if hasattr(self._overlay, "_sticker_rect") and self._overlay._sticker_rect.contains(scene_pos):
+                            self._dragging_sticker = True
+                            self._drag_offset_x = float(scene_pos.x() - self._overlay._sticker_rect.center().x())
+                            self._drag_offset_y = float(scene_pos.y() - self._overlay._sticker_rect.center().y())
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
+                            return True
+                            
+                        if hasattr(self._overlay, "_watermark_handle_rect") and self._overlay._watermark_handle_rect.contains(scene_pos):
+                            self._resizing_watermark = True
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+                            return True
+                            
+                elif event_type == QEvent.Type.MouseMove:
+                    pos = event.position()
+                    scene_pos = self._video_view.mapToScene(pos.toPoint())
+                    
+                    if self._resizing_sticker:
+                        frame_rect = self._overlay._get_video_frame_rect()
+                        if frame_rect.width() > 0:
+                            new_w = float(scene_pos.x() - self._overlay._sticker_rect.left())
+                            base_w = frame_rect.width() / 4.0
+                            if base_w > 0:
+                                new_scale = new_w / base_w
+                                new_scale = max(0.1, min(5.0, new_scale))
+                                self.sticker_scaled.emit(new_scale)
+                        return True
+                        
+                    elif self._dragging_sticker:
+                        frame_rect = self._overlay._get_video_frame_rect()
+                        if frame_rect.width() > 0 and frame_rect.height() > 0:
+                            new_cx = float(scene_pos.x() - self._drag_offset_x)
+                            new_cy = float(scene_pos.y() - self._drag_offset_y)
+                            sw = self._overlay._sticker_rect.width()
+                            sh = self._overlay._sticker_rect.height()
+                            
+                            denom_x = frame_rect.width() - sw
+                            denom_y = frame_rect.height() - sh
+                            
+                            if denom_x > 0:
+                                tx = ((new_cx - frame_rect.left() - sw * 0.5) / denom_x) * 2.0 - 1.0
+                                tx = max(-1.0, min(tx, 1.0))
+                            else:
+                                tx = 0.0
+                                
+                            if denom_y > 0:
+                                ty = ((new_cy - frame_rect.top() - sh * 0.5) / denom_y) * 2.0 - 1.0
+                                ty = max(-1.0, min(ty, 1.0))
+                            else:
+                                ty = 0.0
+                                
+                            self.sticker_dragged.emit(tx, ty)
+                        return True
+                        
+                    elif self._resizing_watermark:
+                        frame_rect = self._overlay._get_video_frame_rect()
+                        if frame_rect.width() > 0:
+                            new_width = float(scene_pos.x() - self._overlay._watermark_rect.left())
+                            new_scale = new_width / frame_rect.width()
+                            new_scale = max(0.05, min(0.5, new_scale))
+                            self.watermark_scale_changed.emit(new_scale)
+                        return True
+                        
+                    else:
+                        # Update hover cursor shape
+                        if hasattr(self._overlay, "_sticker_handle_rect") and self._overlay._sticker_handle_rect.contains(scene_pos):
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+                        elif hasattr(self._overlay, "_sticker_rect") and self._overlay._sticker_rect.contains(scene_pos):
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
+                        elif hasattr(self._overlay, "_watermark_handle_rect") and self._overlay._watermark_handle_rect.contains(scene_pos):
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+                        else:
+                            self._video_view.viewport().unsetCursor()
+                            
+                elif event_type == QEvent.Type.MouseButtonRelease:
+                    if event.button() == Qt.MouseButton.LeftButton:
+                        if self._resizing_sticker or self._dragging_sticker or self._resizing_watermark:
+                            self._resizing_sticker = False
+                            self._dragging_sticker = False
+                            self._resizing_watermark = False
+                            self._video_view.viewport().unsetCursor()
+                            return True
+                            
             if event_type == QEvent.Type.MouseButtonDblClick:
                 self.toggle_fullscreen()
                 return True
