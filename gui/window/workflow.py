@@ -2322,6 +2322,58 @@ class WindowWorkflowMixin:
         self._push_analysis_overrides()
         self.refresh_all()
 
+    def on_sticker_search_changed(self, text: str) -> None:
+        curr_val = self.sticker_combo.currentData()
+        text_lower = text.lower().strip()
+        
+        import re
+        def no_diacritics(s: str) -> str:
+            patterns = {
+                '[àáảãạăằắẳẵặâầấẩẫậ]': 'a',
+                '[èéẻẽẹêềếểễệ]': 'e',
+                '[ìíỉĩị]': 'i',
+                '[òóỏõọôồốổỗộơờớởỡợ]': 'o',
+                '[ùúủũụưừứửữự]': 'u',
+                '[ỳýỷỹỵ]': 'y',
+                '[đ]': 'd',
+                '[ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬ]': 'a',
+                '[ÈÉẺẼẸÊỀẾỂỄỆ]': 'e',
+                '[ÌÍỈĨỊ]': 'i',
+                '[ÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢ]': 'o',
+                '[ÙÚỦŨỤƯỪỨỬỮỰ]': 'u',
+                '[ÝỶỸỴ]': 'y',
+                '[Đ]': 'd'
+            }
+            res = s
+            for pat, rep in patterns.items():
+                res = re.sub(pat, rep, res)
+            return res.lower()
+            
+        search_term = no_diacritics(text_lower)
+        
+        self.sticker_combo.blockSignals(True)
+        self.sticker_combo.clear()
+        
+        # Always keep fallback at the top
+        self.sticker_combo.addItem("Không dùng sticker", "none")
+        
+        from gui.config import STICKER_OPTIONS
+        for val, label in STICKER_OPTIONS:
+            if val == "none":
+                continue
+            label_lower = label.lower()
+            if not search_term or search_term in label_lower or search_term in no_diacritics(label_lower):
+                self.sticker_combo.addItem(label, val)
+                
+        # Restore selection if it's still in the list, else default to "none"
+        idx = self.sticker_combo.findData(curr_val)
+        if idx >= 0:
+            self.sticker_combo.setCurrentIndex(idx)
+        else:
+            self.sticker_combo.setCurrentIndex(0)
+            
+        self.sticker_combo.blockSignals(False)
+
     def pick_color(self, key: str) -> None:
         current = QColor(self.settings["subtitlePreset"].get(key, "#ffffff"))
         color = QColorDialog.getColor(current, self, "Chọn màu")
@@ -2953,6 +3005,19 @@ class WindowWorkflowMixin:
         self.sticker_list_combo.blockSignals(False)
         
         active_sticker = stickers_list[current_idx]
+        if hasattr(self, "sticker_search_input"):
+            self.sticker_search_input.blockSignals(True)
+            self.sticker_search_input.clear()
+            self.sticker_search_input.blockSignals(False)
+            
+            # Reload all STICKER_OPTIONS in sticker_combo
+            self.sticker_combo.blockSignals(True)
+            self.sticker_combo.clear()
+            from gui.config import STICKER_OPTIONS
+            for val, label in STICKER_OPTIONS:
+                self.sticker_combo.addItem(label, val)
+            self.sticker_combo.blockSignals(False)
+
         self.sticker_combo.blockSignals(True)
         self._set_combo_value(
             self.sticker_combo,
