@@ -2477,8 +2477,17 @@ class WindowWorkflowMixin:
         sticker_scale = float(self.sticker_scale_spin.value() if hasattr(self, "sticker_scale_spin") else 1.0)
         sticker_transform_x = float(self.sticker_x_spin.value() if hasattr(self, "sticker_x_spin") else 0.0)
         sticker_transform_y = float(self.sticker_y_spin.value() if hasattr(self, "sticker_y_spin") else -0.3)
-        sticker_start = float(self.sticker_start_spin.value() if hasattr(self, "sticker_start_spin") else 0.0)
-        sticker_end = float(self.sticker_end_spin.value() if hasattr(self, "sticker_end_spin") else 0.0)
+        if getattr(self, "sticker_start_time", None) is not None:
+            t = self.sticker_start_time.time()
+            sticker_start = float(t.hour() * 3600 + t.minute() * 60 + t.second())
+        else:
+            sticker_start = float(self.sticker_start_spin.value() if hasattr(self, "sticker_start_spin") else 0.0)
+            
+        if getattr(self, "sticker_end_time", None) is not None:
+            t = self.sticker_end_time.time()
+            sticker_end = float(t.hour() * 3600 + t.minute() * 60 + t.second())
+        else:
+            sticker_end = float(self.sticker_end_spin.value() if hasattr(self, "sticker_end_spin") else 0.0)
         
         self.settings["stickers"][current_idx] = {
             "stickerId": sticker_id if sticker_id != "none" else "",
@@ -2963,13 +2972,35 @@ class WindowWorkflowMixin:
         self.sticker_y_spin.setValue(float(active_sticker.get("transform_y", -0.3)))
         self.sticker_y_spin.blockSignals(False)
         
-        self.sticker_start_spin.blockSignals(True)
-        self.sticker_start_spin.setValue(float(active_sticker.get("startTime", 0.0)))
-        self.sticker_start_spin.blockSignals(False)
-        
-        self.sticker_end_spin.blockSignals(True)
-        self.sticker_end_spin.setValue(float(active_sticker.get("endTime", 0.0)))
-        self.sticker_end_spin.blockSignals(False)
+        # Sync start time
+        if getattr(self, "sticker_start_time", None) is not None:
+            self.sticker_start_time.blockSignals(True)
+            seconds = float(active_sticker.get("startTime", 0.0))
+            h = int(seconds) // 3600
+            m = (int(seconds) % 3600) // 60
+            s = int(seconds) % 60
+            from PyQt6.QtCore import QTime
+            self.sticker_start_time.setTime(QTime(h, m, s))
+            self.sticker_start_time.blockSignals(False)
+        else:
+            self.sticker_start_spin.blockSignals(True)
+            self.sticker_start_spin.setValue(float(active_sticker.get("startTime", 0.0)))
+            self.sticker_start_spin.blockSignals(False)
+            
+        # Sync end time
+        if getattr(self, "sticker_end_time", None) is not None:
+            self.sticker_end_time.blockSignals(True)
+            seconds = float(active_sticker.get("endTime", 0.0))
+            h = int(seconds) // 3600
+            m = (int(seconds) % 3600) // 60
+            s = int(seconds) % 60
+            from PyQt6.QtCore import QTime
+            self.sticker_end_time.setTime(QTime(h, m, s))
+            self.sticker_end_time.blockSignals(False)
+        else:
+            self.sticker_end_spin.blockSignals(True)
+            self.sticker_end_spin.setValue(float(active_sticker.get("endTime", 0.0)))
+            self.sticker_end_spin.blockSignals(False)
         self.intro_enabled_check.setChecked(bool(self.settings["introHook"]["enabled"]))
         self.intro_duration_spin.setValue(
             float(self.settings["introHook"]["clipDurationMs"]) / 1000.0
