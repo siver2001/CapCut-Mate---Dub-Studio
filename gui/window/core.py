@@ -128,6 +128,7 @@ class DubStudioWindow(
             self.voice_player.setAudioOutput(self.voice_audio_output)
             self.voice_player.errorOccurred.connect(self._handle_voice_player_error)
 
+        self._global_stickers = None
         self._build_ui()
         self.sync_widgets_from_settings()
         self.load_precut_configurations()

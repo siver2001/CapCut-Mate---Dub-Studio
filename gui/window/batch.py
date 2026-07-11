@@ -29,6 +29,7 @@ class _BatchItem:
         "error",
         "output_path",
         "excluded_ranges",
+        "stickers",
     )
 
     def __init__(self, input_path: str) -> None:
@@ -40,6 +41,7 @@ class _BatchItem:
         self.error: str = ""
         self.output_path: str = ""
         self.excluded_ranges: list[dict[str, float]] = []
+        self.stickers: list[dict[str, Any]] | None = None
 
 
 class WindowBatchMixin:
@@ -392,7 +394,7 @@ class WindowBatchMixin:
             self.controller.update_analysis_config(job_id, overrides)
 
             # Prepare render options using the shared settings
-            render_options = self._batch_build_render_options(analysis)
+            render_options = self._batch_build_render_options(analysis, item)
             self.controller.render_video(job_id, render_options)
         except Exception as exc:
             item.status = "error"
@@ -541,9 +543,17 @@ class WindowBatchMixin:
             overrides["subtitleRegion"] = copy.deepcopy(analysis["subtitleRegion"])
         return overrides
 
-    def _batch_build_render_options(self, analysis: dict[str, Any]) -> dict[str, Any]:
+    def _batch_build_render_options(self, analysis: dict[str, Any], item: _BatchItem) -> dict[str, Any]:
         """Build render options from the shared settings for a batch item."""
         options = self.current_render_options()
+        
+        # Override stickers from the batch item's custom stickers list!
+        if getattr(item, "stickers", None) is not None:
+            active_stickers = [
+                s for s in item.stickers
+                if s.get("stickerId") or s.get("image_url")
+            ]
+            options["stickers"] = active_stickers
         
         effective_source_language = (
             analysis.get("sourceLanguage")
@@ -694,11 +704,40 @@ class WindowBatchMixin:
         if not hasattr(self, "batch_table"):
             return
         row = self.batch_table.currentRow()
+        
+        # Back up global stickers if not done yet
+        if getattr(self, "_global_stickers", None) is None:
+            self._global_stickers = copy.deepcopy(self.settings.get("stickers", []))
+            
         if 0 <= row < len(self._batch_queue):
+            item = self._batch_queue[row]
+            if item.stickers is None:
+                # Initialize item stickers with a copy of current global stickers
+                item.stickers = copy.deepcopy(self._global_stickers)
+            
+            # Map settings["stickers"] to point to the item's custom stickers list
+            self.settings["stickers"] = item.stickers
+            
+            # Synchronize widgets and active sticker index
+            current_sticker_idx = self.settings.get("currentStickerIndex", 0)
+            if current_sticker_idx < 0 or current_sticker_idx >= len(item.stickers):
+                self.settings["currentStickerIndex"] = 0
+            
+            self.sync_widgets_from_settings()
             self.show_source_video_preview(
-                self._batch_queue[row].input_path,
+                item.input_path,
                 switch_to_preview_tab=False,
             )
+            self.refresh_preview()
+        else:
+            # Revert to global stickers if selection is cleared
+            if getattr(self, "_global_stickers", None) is not None:
+                self.settings["stickers"] = self._global_stickers
+                current_sticker_idx = self.settings.get("currentStickerIndex", 0)
+                if current_sticker_idx < 0 or current_sticker_idx >= len(self._global_stickers):
+                    self.settings["currentStickerIndex"] = 0
+                self.sync_widgets_from_settings()
+                self.refresh_preview()
 
     def on_batch_table_double_clicked(self, item) -> None:
         if not item:
