@@ -140,7 +140,17 @@ class UpdateThread(QThread):
 
                 self.progress_signal.emit(85, "Đang chuẩn bị cài đặt các thay đổi...")
                 
-                skip_dirs = {"temp", "output", "config", ".git", "__pycache__", ".github", ".gemini"}
+                def should_skip_path(rel_path: Path) -> bool:
+                    # Exclude temporary, dev, and output folders
+                    if any(d in rel_path.parts for d in ("temp", "output", ".git", "__pycache__", ".github", ".gemini")):
+                        return True
+                    # Exclude user configuration files inside config folder to preserve user voices/tokens
+                    if "config" in rel_path.parts:
+                        if "voices" in rel_path.parts:
+                            return True
+                        if rel_path.name in ("custom_cloud_voices.json", "custom_omnivoice_voices.json", "shortcut_setup.done"):
+                            return True
+                    return False
 
                 if self.is_frozen:
                     # For packaged EXE: We must copy files using a detached batch script after the app closes
@@ -154,7 +164,7 @@ class UpdateThread(QThread):
                     for src_item in update_src.rglob("*"):
                         if src_item.is_file():
                             rel_path = src_item.relative_to(update_src)
-                            if any(skip_dir in rel_path.parts for skip_dir in skip_dirs):
+                            if should_skip_path(rel_path):
                                 continue
                             target_file = persistent_temp_update / rel_path
                             target_file.parent.mkdir(parents=True, exist_ok=True)
@@ -174,7 +184,7 @@ timeout /t 3 /nobreak > nul
 
 echo.
 echo Dang sao chep cac file cap nhat...
-robocopy "{persistent_temp_update}" "{self.root_path}" /E /R:3 /W:1 /XD temp output config .git .github .gemini > nul
+robocopy "{persistent_temp_update}" "{self.root_path}" /E /R:3 /W:1 /XD temp output .git .github .gemini > nul
 
 echo.
 echo Dang don dep...
@@ -206,7 +216,7 @@ del "%~f0"
                         if src_item.is_file():
                             rel_path = src_item.relative_to(update_src)
                             
-                            if any(skip_dir in rel_path.parts for skip_dir in skip_dirs):
+                            if should_skip_path(rel_path):
                                 continue
                                 
                             target_file = self.root_path / rel_path
