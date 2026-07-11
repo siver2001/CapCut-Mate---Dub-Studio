@@ -4,12 +4,14 @@ import atexit
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
 class OmnivoiceProvider:
     _instance: "OmnivoiceProvider | None" = None
     _model: Any = None
+    _lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -135,75 +137,76 @@ class OmnivoiceProvider:
         ref_audio: Path | None = None,
         ref_text: str | None = None,
     ) -> bool:
-        clean_text = str(text or "").strip()
-        if not clean_text:
-            raise RuntimeError("OmniVoice-TTS synthesis skipped because text is empty.")
+        with self._lock:
+            clean_text = str(text or "").strip()
+            if not clean_text:
+                raise RuntimeError("OmniVoice-TTS synthesis skipped because text is empty.")
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if ref_audio is not None and Path(ref_audio).exists():
-            # Load audio using soundfile to bypass torchcodec (avoids libtorchcodec loading errors on Windows / packaged builds)
-            import torch
-            import soundfile as sf
-            try:
-                data, samplerate = sf.read(str(ref_audio))
-                if data.ndim > 1:
-                    data = data.mean(axis=1)
-                waveform_tensor = torch.from_numpy(data).float().unsqueeze(0)
-                ref_audio_param = (waveform_tensor, samplerate)
-                
-                # Truncate ref_text if it is too long for the audio duration to prevent OmniVoice from generating prefix text
-                if ref_text:
-                    duration_sec = len(data) / samplerate
-                    words = str(ref_text).split()
-                    max_words = max(5, int(duration_sec * 3.5))
-                    if len(words) > max_words:
-                        old_ref_text = ref_text
-                        ref_text = " ".join(words[:max_words])
-                        print(f"[info] Truncating ref_text from {len(words)} to {max_words} words (duration: {duration_sec:.2f}s) to match audio length. Old: {repr(old_ref_text)} -> New: {repr(ref_text)}", file=sys.stderr, flush=True)
-            except Exception:
-                ref_audio_param = str(ref_audio)
-
-            # Synthesize audio using OmniVoice voice cloning
-            print(f"[debug-omnivoice] Generating text='{clean_text}', ref_audio_param_type={type(ref_audio_param)}, ref_text='{ref_text}'", file=sys.stderr, flush=True)
-            try:
-                audio = self._model.generate(
-                    text=clean_text,
-                    ref_audio=ref_audio_param,
-                    ref_text=str(ref_text or "").strip() or None
-                )
-                print(f"[debug-omnivoice] Generated successfully, audio type={type(audio)}, len={len(audio) if audio is not None else 'None'}", file=sys.stderr, flush=True)
-                if audio is not None and len(audio) > 0:
-                    print(f"[debug-omnivoice] audio[0] shape={audio[0].shape}", file=sys.stderr, flush=True)
-            except Exception as e:
-                print(f"[debug-omnivoice] Error during generate: {e}", file=sys.stderr, flush=True)
-                raise
-        else:
-            resolved_instruct = str(voice_name or "").strip()
-            if not resolved_instruct:
-                resolved_instruct = "female, young adult, moderate pitch"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Synthesize audio using OmniVoice voice design
-            print(f"[debug-omnivoice] Generating design text='{clean_text}', instruct='{resolved_instruct}'", file=sys.stderr, flush=True)
-            try:
-                audio = self._model.generate(
-                    text=clean_text,
-                    instruct=resolved_instruct
-                )
-                print(f"[debug-omnivoice] Generated design successfully, audio type={type(audio)}, len={len(audio) if audio is not None else 'None'}", file=sys.stderr, flush=True)
-                if audio is not None and len(audio) > 0:
-                    print(f"[debug-omnivoice] audio[0] shape={audio[0].shape}", file=sys.stderr, flush=True)
-            except Exception as e:
-                print(f"[debug-omnivoice] Error during generate: {e}", file=sys.stderr, flush=True)
-                raise
-        
-        # Save output audio using soundfile at 24000 Hz sample rate
-        import soundfile as sf
-        if audio is None or len(audio) == 0 or audio[0] is None or len(audio[0]) == 0:
-            raise RuntimeError("OmniVoice-TTS returned empty or null audio waveform.")
-        sf.write(str(output_path), audio[0], 24000)
-        
-        return output_path.exists() and output_path.stat().st_size > 0
+            if ref_audio is not None and Path(ref_audio).exists():
+                # Load audio using soundfile to bypass torchcodec (avoids libtorchcodec loading errors on Windows / packaged builds)
+                import torch
+                import soundfile as sf
+                try:
+                    data, samplerate = sf.read(str(ref_audio))
+                    if data.ndim > 1:
+                        data = data.mean(axis=1)
+                    waveform_tensor = torch.from_numpy(data).float().unsqueeze(0)
+                    ref_audio_param = (waveform_tensor, samplerate)
+                    
+                    # Truncate ref_text if it is too long for the audio duration to prevent OmniVoice from generating prefix text
+                    if ref_text:
+                        duration_sec = len(data) / samplerate
+                        words = str(ref_text).split()
+                        max_words = max(5, int(duration_sec * 3.5))
+                        if len(words) > max_words:
+                            old_ref_text = ref_text
+                            ref_text = " ".join(words[:max_words])
+                            print(f"[info] Truncating ref_text from {len(words)} to {max_words} words (duration: {duration_sec:.2f}s) to match audio length. Old: {repr(old_ref_text)} -> New: {repr(ref_text)}", file=sys.stderr, flush=True)
+                except Exception:
+                    ref_audio_param = str(ref_audio)
+
+                # Synthesize audio using OmniVoice voice cloning
+                print(f"[debug-omnivoice] Generating text='{clean_text}', ref_audio_param_type={type(ref_audio_param)}, ref_text='{ref_text}'", file=sys.stderr, flush=True)
+                try:
+                    audio = self._model.generate(
+                        text=clean_text,
+                        ref_audio=ref_audio_param,
+                        ref_text=str(ref_text or "").strip() or None
+                    )
+                    print(f"[debug-omnivoice] Generated successfully, audio type={type(audio)}, len={len(audio) if audio is not None else 'None'}", file=sys.stderr, flush=True)
+                    if audio is not None and len(audio) > 0:
+                        print(f"[debug-omnivoice] audio[0] shape={audio[0].shape}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[debug-omnivoice] Error during generate: {e}", file=sys.stderr, flush=True)
+                    raise
+            else:
+                resolved_instruct = str(voice_name or "").strip()
+                if not resolved_instruct:
+                    resolved_instruct = "female, young adult, moderate pitch"
+                
+                # Synthesize audio using OmniVoice voice design
+                print(f"[debug-omnivoice] Generating design text='{clean_text}', instruct='{resolved_instruct}'", file=sys.stderr, flush=True)
+                try:
+                    audio = self._model.generate(
+                        text=clean_text,
+                        instruct=resolved_instruct
+                    )
+                    print(f"[debug-omnivoice] Generated design successfully, audio type={type(audio)}, len={len(audio) if audio is not None else 'None'}", file=sys.stderr, flush=True)
+                    if audio is not None and len(audio) > 0:
+                        print(f"[debug-omnivoice] audio[0] shape={audio[0].shape}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[debug-omnivoice] Error during generate: {e}", file=sys.stderr, flush=True)
+                    raise
+            
+            # Save output audio using soundfile at 24000 Hz sample rate
+            import soundfile as sf
+            if audio is None or len(audio) == 0 or audio[0] is None or len(audio[0]) == 0:
+                raise RuntimeError("OmniVoice-TTS returned empty or null audio waveform.")
+            sf.write(str(output_path), audio[0], 24000)
+            
+            return output_path.exists() and output_path.stat().st_size > 0
 
     def close(self) -> None:
         self._model = None

@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import importlib
 import wave
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -75,6 +76,7 @@ def append_silence_to_wav(wav_path: Path, duration_seconds: float) -> None:
         print(f"[!] Error appending silence to wave: {e}", flush=True)
 
 class ValtecProvider:
+    _lock = threading.Lock()
     def __init__(self):
         if getattr(sys, 'frozen', False):
             root = Path(sys.executable).resolve().parent
@@ -155,61 +157,62 @@ class ValtecProvider:
         prompt_audio: Path | None = None,
         speed: float = 1.0,
     ) -> bool:
-        # Standard speaker mapping for VITS native speakers
-        VALTEC_PRESET_SPEAKER_IDS = {
-            "valtec:nf": "NF", "valtec:sf": "SF", "valtec:nm1": "NM1",
-            "valtec:sm": "SM", "valtec:nm2": "NM2"
-        }
-        
-        selected_voice = voice_name or "valtec:nf"
-        
-        # 1. Native VITS presets (speak directly using internal weights)
-        if selected_voice in VALTEC_PRESET_SPEAKER_IDS:
-            speaker_id = VALTEC_PRESET_SPEAKER_IDS[selected_voice]
-            engine = self._load_tts()
-            engine.speak(
-                text=text,
-                speaker=speaker_id,
-                output_path=str(output_path),
-                speed=speed
-            )
-        # 2. Custom Zero-shot cloning (from the original video's character audio prompt)
-        else:
-            if prompt_audio and prompt_audio.exists():
-                engine = self._load_zero_shot()
-                engine.clone_voice(
-                    text=text,
-                    reference_audio=str(prompt_audio),
-                    output_path=str(output_path),
-                    length_scale=speed
-                )
-            else:
-                # Fallback to NF preset
+        with self._lock:
+            # Standard speaker mapping for VITS native speakers
+            VALTEC_PRESET_SPEAKER_IDS = {
+                "valtec:nf": "NF", "valtec:sf": "SF", "valtec:nm1": "NM1",
+                "valtec:sm": "SM", "valtec:nm2": "NM2"
+            }
+            
+            selected_voice = voice_name or "valtec:nf"
+            
+            # 1. Native VITS presets (speak directly using internal weights)
+            if selected_voice in VALTEC_PRESET_SPEAKER_IDS:
+                speaker_id = VALTEC_PRESET_SPEAKER_IDS[selected_voice]
                 engine = self._load_tts()
                 engine.speak(
                     text=text,
-                    speaker="NF",
+                    speaker=speaker_id,
                     output_path=str(output_path),
                     speed=speed
                 )
-        
-        # Apply dynamic sentence silence gaps to ensure clean natural pauses at punctuation marks
-        if output_path.exists() and output_path.stat().st_size > 0:
-            stripped_text = text.strip()
-            silence_duration = 0.0
-            if stripped_text:
-                last_char = stripped_text[-1]
-                if last_char in (".", "?", "!", "…"):
-                    silence_duration = 0.40  # 400ms pause for full sentence ends
-                elif last_char in (",", ";", ":"):
-                    silence_duration = 0.18  # 180ms pause for clause transitions
+            # 2. Custom Zero-shot cloning (from the original video's character audio prompt)
+            else:
+                if prompt_audio and prompt_audio.exists():
+                    engine = self._load_zero_shot()
+                    engine.clone_voice(
+                        text=text,
+                        reference_audio=str(prompt_audio),
+                        output_path=str(output_path),
+                        length_scale=speed
+                    )
+                else:
+                    # Fallback to NF preset
+                    engine = self._load_tts()
+                    engine.speak(
+                        text=text,
+                        speaker="NF",
+                        output_path=str(output_path),
+                        speed=speed
+                    )
             
-            if silence_duration > 0:
-                append_silence_to_wav(output_path, silence_duration)
-            
-            return True
-            
-        return False
+            # Apply dynamic sentence silence gaps to ensure clean natural pauses at punctuation marks
+            if output_path.exists() and output_path.stat().st_size > 0:
+                stripped_text = text.strip()
+                silence_duration = 0.0
+                if stripped_text:
+                    last_char = stripped_text[-1]
+                    if last_char in (".", "?", "!", "…"):
+                        silence_duration = 0.40  # 400ms pause for full sentence ends
+                    elif last_char in (",", ";", ":"):
+                        silence_duration = 0.18  # 180ms pause for clause transitions
+                
+                if silence_duration > 0:
+                    append_silence_to_wav(output_path, silence_duration)
+                
+                return True
+                
+            return False
 
     def close(self):
         if self._tts:
