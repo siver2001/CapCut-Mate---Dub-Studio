@@ -1887,7 +1887,7 @@ class WindowLayoutMixin:
         # Left Column: Video List (Queue)
         precut_left_card = QWidget()
         precut_left_card.setObjectName("PrecutCard")
-        precut_left_card.setStyleSheet("background: #080f1d; border-radius: 12px; border: 1px solid #1e293b;")
+        precut_left_card.setStyleSheet("QWidget#PrecutCard { background: #080f1d; border-radius: 12px; border: 1px solid #1e293b; }")
         precut_left_layout = QVBoxLayout(precut_left_card)
         precut_left_layout.setContentsMargins(12, 12, 12, 12)
         precut_left_layout.setSpacing(8)
@@ -1919,7 +1919,7 @@ class WindowLayoutMixin:
         # Middle Column: Video Player and time capturing
         precut_mid_card = QWidget()
         precut_mid_card.setObjectName("PrecutPlayerCard")
-        precut_mid_card.setStyleSheet("background: #080f1d; border-radius: 12px; border: 1px solid #1e293b;")
+        precut_mid_card.setStyleSheet("QWidget#PrecutPlayerCard { background: #080f1d; border-radius: 12px; border: 1px solid #1e293b; }")
         precut_mid_layout = QVBoxLayout(precut_mid_card)
         precut_mid_layout.setContentsMargins(12, 12, 12, 12)
         precut_mid_layout.setSpacing(8)
@@ -1958,7 +1958,7 @@ class WindowLayoutMixin:
         # Right Column: Discard Intervals List
         precut_right_card = QWidget()
         precut_right_card.setObjectName("PrecutRangesCard")
-        precut_right_card.setStyleSheet("background: #080f1d; border-radius: 12px; border: 1px solid #1e293b;")
+        precut_right_card.setStyleSheet("QWidget#PrecutRangesCard { background: #080f1d; border-radius: 12px; border: 1px solid #1e293b; }")
         precut_right_layout = QVBoxLayout(precut_right_card)
         precut_right_layout.setContentsMargins(12, 12, 12, 12)
         precut_right_layout.setSpacing(8)

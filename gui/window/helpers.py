@@ -401,6 +401,8 @@ class WindowHelpersMixin:
     def _make_button(self, text: str, variant: str = "ghost") -> QPushButton:
         button = QPushButton(text)
         button.setProperty("variant", variant)
+        button.style().unpolish(button)
+        button.style().polish(button)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setIconSize(QSize(15, 15))
         button.setMinimumHeight(24)
