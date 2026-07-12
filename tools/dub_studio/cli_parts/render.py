@@ -552,8 +552,7 @@ def burn_subtitles(
             f"MarginV={margin_v},Alignment={8 if str(subtitle_preset.get('positionPreset') or 'bottom').strip().lower() == 'top' else 5 if str(subtitle_preset.get('positionPreset') or 'bottom').strip().lower() == 'middle' else 2}'"
         )
 
-    if video_speed != 1.0:
-        subtitles_filter = f"{subtitles_filter},setpts=PTS/{video_speed}"
+
 
     cleanup_region = expand_cleanup_region_for_render(
         effective_region,
@@ -723,6 +722,12 @@ def burn_subtitles(
             video_filter = subtitles_filter
             filter_arg = "-vf"
             video_map = "0:v:0"
+
+    if video_speed != 1.0:
+        if filter_arg == "-filter_complex":
+            video_filter = f"[0:v]setpts=PTS/{video_speed}[speed_v];" + video_filter.replace("[0:v]", "[speed_v]")
+        else:
+            video_filter = f"setpts=PTS/{video_speed}," + video_filter
 
     command = [
         "ffmpeg",
@@ -2909,12 +2914,17 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
             for segment in segments
             if segment.get("id")
         }
-        for item in subtitle_timeline:
+        for idx, item in enumerate(subtitle_timeline):
             segment_id = str(item.get("segmentId") or item.get("id") or "")
             if segment_id in final_timings:
                 final_start, final_end = final_timings[segment_id]
                 item["startMs"] = final_start
                 item["endMs"] = final_end
+            elif idx < len(segments):
+                # Fallback: Align by index if IDs do not match (highly common for edited/imported subtitles)
+                seg = segments[idx]
+                item["startMs"] = int(seg.get("startMs", 0))
+                item["endMs"] = int(seg.get("endMs", 0))
         
         display_subtitles = split_subtitle_lines_for_display(
             subtitle_timeline_to_lines(subtitle_timeline),

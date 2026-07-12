@@ -1721,7 +1721,8 @@ def prepare_tts_clip_for_timeline(source_path: Path, output_path: Path) -> Path:
             return output_path
         except Exception:
             output_path.unlink(missing_ok=True)
-    trim_boundaries = source_path.suffix.lower() in {".mp3", ".aac", ".m4a"}
+    # Always trim silence boundaries to guarantee dubbing and subtitle sync across all providers (Edge, OmniVoice, Valtec)
+    trim_boundaries = True
     command = [
         "ffmpeg",
         "-y",
