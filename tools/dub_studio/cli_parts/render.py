@@ -1894,7 +1894,8 @@ def create_capcut_draft(
         stk_id = stk.get("stickerId") or stk.get("sticker_id")
         if not stk_id:
             continue
-        sticker_scale = max(0.1, min(float(stk.get("scale", 1.0)), 5.0))
+        sticker_scale_x = max(0.1, min(float(stk.get("scale_x") or stk.get("scale") or 1.0), 5.0))
+        sticker_scale_y = max(0.1, min(float(stk.get("scale_y") or stk.get("scale") or 1.0), 5.0))
         sticker_transform_x = max(-1.0, min(float(stk.get("transform_x", 0.0)), 1.0))
         sticker_transform_y = max(-1.0, min(float(stk.get("transform_y", -0.3)), 1.0))
         
@@ -1915,8 +1916,8 @@ def create_capcut_draft(
         script.add_track(TrackType.sticker, sticker_track_name, relative_index=30 + idx)
         
         clip_settings = ClipSettings(
-            scale_x=sticker_scale,
-            scale_y=sticker_scale,
+            scale_x=sticker_scale_x,
+            scale_y=sticker_scale_y,
             transform_x=sticker_transform_x,
             transform_y=sticker_transform_y,
         )

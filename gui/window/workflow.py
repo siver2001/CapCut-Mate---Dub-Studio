@@ -2255,17 +2255,41 @@ class WindowWorkflowMixin:
             self.sticker_y_spin.blockSignals(False)
         self.refresh_preview()
 
-    def on_preview_sticker_scaled(self, scale: float) -> None:
+    def on_sticker_global_scale_changed(self) -> None:
+        val = float(self.sticker_scale_spin.value())
+        if hasattr(self, "sticker_scale_x_spin"):
+            self.sticker_scale_x_spin.blockSignals(True)
+            self.sticker_scale_x_spin.setValue(val)
+            self.sticker_scale_x_spin.blockSignals(False)
+        if hasattr(self, "sticker_scale_y_spin"):
+            self.sticker_scale_y_spin.blockSignals(True)
+            self.sticker_scale_y_spin.setValue(val)
+            self.sticker_scale_y_spin.blockSignals(False)
+        self.on_basic_settings_changed()
+
+    def on_preview_sticker_scaled(self, scale_x: float, scale_y: float | None = None) -> None:
+        if scale_y is None:
+            scale_y = scale_x
         current_idx = self.settings.setdefault("currentStickerIndex", 0)
         stickers = self.settings.setdefault("stickers", [])
         if 0 <= current_idx < len(stickers):
-            stickers[current_idx]["scale"] = float(scale)
+            stickers[current_idx]["scale_x"] = float(scale_x)
+            stickers[current_idx]["scale_y"] = float(scale_y)
+            stickers[current_idx]["scale"] = float(scale_x)
             self.settings["stickerOptions"] = copy.deepcopy(stickers[current_idx])
             
         if hasattr(self, "sticker_scale_spin"):
             self.sticker_scale_spin.blockSignals(True)
-            self.sticker_scale_spin.setValue(float(scale))
+            self.sticker_scale_spin.setValue(float(scale_x))
             self.sticker_scale_spin.blockSignals(False)
+        if hasattr(self, "sticker_scale_x_spin"):
+            self.sticker_scale_x_spin.blockSignals(True)
+            self.sticker_scale_x_spin.setValue(float(scale_x))
+            self.sticker_scale_x_spin.blockSignals(False)
+        if hasattr(self, "sticker_scale_y_spin"):
+            self.sticker_scale_y_spin.blockSignals(True)
+            self.sticker_scale_y_spin.setValue(float(scale_y))
+            self.sticker_scale_y_spin.blockSignals(False)
         self.refresh_preview()
 
     def apply_caption_position(self, position_preset: str) -> None:
@@ -2611,6 +2635,8 @@ class WindowWorkflowMixin:
         sticker_data = get_sticker_by_id(sticker_id) if sticker_id != "none" else {}
         
         sticker_scale = float(self.sticker_scale_spin.value() if hasattr(self, "sticker_scale_spin") else 1.0)
+        sticker_scale_x = float(self.sticker_scale_x_spin.value() if hasattr(self, "sticker_scale_x_spin") else sticker_scale)
+        sticker_scale_y = float(self.sticker_scale_y_spin.value() if hasattr(self, "sticker_scale_y_spin") else sticker_scale)
         sticker_transform_x = float(self.sticker_x_spin.value() if hasattr(self, "sticker_x_spin") else 0.0)
         sticker_transform_y = float(self.sticker_y_spin.value() if hasattr(self, "sticker_y_spin") else -0.3)
         if getattr(self, "sticker_start_time", None) is not None:
@@ -2632,6 +2658,8 @@ class WindowWorkflowMixin:
             "image_url": str(sticker_data.get("image_url", "") or ""),
             "sticker_type": int(sticker_data.get("sticker_type", 1)),
             "scale": sticker_scale,
+            "scale_x": sticker_scale_x,
+            "scale_y": sticker_scale_y,
             "transform_x": max(-1.0, min(sticker_transform_x, 1.0)),
             "transform_y": max(-1.0, min(sticker_transform_y, 1.0)),
             "startTime": sticker_start,
@@ -3109,9 +3137,23 @@ class WindowWorkflowMixin:
         )
         self.sticker_combo.blockSignals(False)
         
+        scale_val = float(active_sticker.get("scale", 1.0))
+        scale_x_val = float(active_sticker.get("scale_x") or active_sticker.get("scale") or 1.0)
+        scale_y_val = float(active_sticker.get("scale_y") or active_sticker.get("scale") or 1.0)
+        
         self.sticker_scale_spin.blockSignals(True)
-        self.sticker_scale_spin.setValue(float(active_sticker.get("scale", 1.0)))
+        self.sticker_scale_spin.setValue(scale_val)
         self.sticker_scale_spin.blockSignals(False)
+        
+        if hasattr(self, "sticker_scale_x_spin"):
+            self.sticker_scale_x_spin.blockSignals(True)
+            self.sticker_scale_x_spin.setValue(scale_x_val)
+            self.sticker_scale_x_spin.blockSignals(False)
+            
+        if hasattr(self, "sticker_scale_y_spin"):
+            self.sticker_scale_y_spin.blockSignals(True)
+            self.sticker_scale_y_spin.setValue(scale_y_val)
+            self.sticker_scale_y_spin.blockSignals(False)
         
         self.sticker_x_spin.blockSignals(True)
         self.sticker_x_spin.setValue(float(active_sticker.get("transform_x", 0.0)))

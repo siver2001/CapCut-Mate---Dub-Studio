@@ -381,8 +381,36 @@ class WindowLayoutMixin:
         self.sticker_scale_spin.setSingleStep(0.1)
         self.sticker_scale_spin.setValue(1.0)
         self.sticker_scale_spin.setSuffix(" x")
-        self.sticker_scale_spin.setToolTip("Kích thước sticker. 1.0 = nguyên kích thước gốc.")
-        self.sticker_scale_spin.valueChanged.connect(self.on_basic_settings_changed)
+        self.sticker_scale_spin.setToolTip("Tỉ lệ chung: thay đổi sẽ áp dụng cho cả rộng và dài.")
+        self.sticker_scale_spin.valueChanged.connect(self.on_sticker_global_scale_changed)
+
+        self.sticker_scale_x_spin = SafeDoubleSpinBox()
+        self.sticker_scale_x_spin.setRange(0.1, 5.0)
+        self.sticker_scale_x_spin.setDecimals(1)
+        self.sticker_scale_x_spin.setSingleStep(0.1)
+        self.sticker_scale_x_spin.setValue(1.0)
+        self.sticker_scale_x_spin.setSuffix("w")
+        self.sticker_scale_x_spin.setToolTip("Tỉ lệ chiều rộng của sticker.")
+        self.sticker_scale_x_spin.valueChanged.connect(self.on_basic_settings_changed)
+
+        self.sticker_scale_y_spin = SafeDoubleSpinBox()
+        self.sticker_scale_y_spin.setRange(0.1, 5.0)
+        self.sticker_scale_y_spin.setDecimals(1)
+        self.sticker_scale_y_spin.setSingleStep(0.1)
+        self.sticker_scale_y_spin.setValue(1.0)
+        self.sticker_scale_y_spin.setSuffix("h")
+        self.sticker_scale_y_spin.setToolTip("Tỉ lệ chiều dài/cao của sticker.")
+        self.sticker_scale_y_spin.valueChanged.connect(self.on_basic_settings_changed)
+
+        self.sticker_scale_container = QWidget()
+        scale_layout = QHBoxLayout(self.sticker_scale_container)
+        scale_layout.setContentsMargins(0, 0, 0, 0)
+        scale_layout.setSpacing(4)
+        scale_layout.addWidget(self.sticker_scale_spin, 2)
+        scale_layout.addWidget(QLabel("W:"), 0)
+        scale_layout.addWidget(self.sticker_scale_x_spin, 2)
+        scale_layout.addWidget(QLabel("H:"), 0)
+        scale_layout.addWidget(self.sticker_scale_y_spin, 2)
         self.box_style_combo = self._make_combo(
             BOX_STYLE_OPTIONS, self.on_box_style_changed
         )
@@ -571,7 +599,7 @@ class WindowLayoutMixin:
                 "Sticker",
                 self.sticker_combo,
                 "Cỡ sticker",
-                self.sticker_scale_spin,
+                self.sticker_scale_container,
             ),
             (
                 "Preset box",

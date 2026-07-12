@@ -30,7 +30,7 @@ class PreviewCanvas(QWidget):
     cleanup_region_changed = pyqtSignal(dict)
     watermark_scale_changed = pyqtSignal(float)
     sticker_dragged = pyqtSignal(float, float)
-    sticker_scaled = pyqtSignal(float)
+    sticker_scaled = pyqtSignal(float, float)
 
     def __init__(self) -> None:
         super().__init__()
@@ -560,7 +560,7 @@ class PreviewCanvas(QWidget):
             if base_w > 0:
                 new_scale = new_w / base_w
                 new_scale = max(0.1, min(5.0, new_scale))
-                self.sticker_scaled.emit(new_scale)
+                self.sticker_scaled.emit(new_scale, new_scale)
             event.accept()
             return
             

@@ -168,6 +168,8 @@ class _SubtitleOverlay(QGraphicsItem):
         
         self._sticker_rect = QRectF()
         self._sticker_handle_rect = QRectF()
+        self._sticker_handle_width_rect = QRectF()
+        self._sticker_handle_height_rect = QRectF()
         
         current_idx = self._subtitle_data.get("currentStickerIndex", 0)
         
@@ -186,15 +188,19 @@ class _SubtitleOverlay(QGraphicsItem):
                 
             pixmap = self._sticker_pixmaps.get(stk_id)
             frame_rect = self._get_video_frame_rect()
-            scale = float(stk.get("scale", 1.0))
+            scale_x = float(stk.get("scale_x") or stk.get("scale") or 1.0)
+            scale_y = float(stk.get("scale_y") or stk.get("scale") or 1.0)
             transform_x = max(-1.0, min(float(stk.get("transform_x", 0.0)), 1.0))
             transform_y = max(-1.0, min(float(stk.get("transform_y", -0.3)), 1.0))
             
             if pixmap and not pixmap.isNull():
                 base_w = frame_rect.width() // 4
-                sw = max(20, int(base_w * scale))
-                sw = min(sw, int(frame_rect.width() * 0.5))
-                sticker_pm = pixmap.scaledToWidth(sw, Qt.TransformationMode.SmoothTransformation)
+                base_h = int(base_w * (pixmap.height() / max(1.0, pixmap.width())))
+                sw = max(20, int(base_w * scale_x))
+                sw = min(sw, int(frame_rect.width() * 0.8))
+                sh = max(20, int(base_h * scale_y))
+                sh = min(sh, int(frame_rect.height() * 0.8))
+                sticker_pm = pixmap.scaled(sw, sh, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 sx = frame_rect.left() + (frame_rect.width() - sticker_pm.width()) * ((transform_x + 1.0) * 0.5)
                 sy = frame_rect.top() + (frame_rect.height() - sticker_pm.height()) * ((transform_y + 1.0) * 0.5)
                 sx = max(frame_rect.left(), min(sx, max(frame_rect.right() - sticker_pm.width(), frame_rect.left())))
@@ -236,7 +242,7 @@ class _SubtitleOverlay(QGraphicsItem):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(self._sticker_rect)
                 
-                # Draw resize handle (10x10 yellow box at bottom right)
+                # Draw 3 resize handles (Yellow corner, Cyan width, Magenta height)
                 handle_size = 10.0
                 self._sticker_handle_rect = QRectF(
                     self._sticker_rect.right() - handle_size / 2,
@@ -244,7 +250,22 @@ class _SubtitleOverlay(QGraphicsItem):
                     handle_size,
                     handle_size
                 )
-                painter.fillRect(self._sticker_handle_rect, QColor("#facc15"))
+                self._sticker_handle_width_rect = QRectF(
+                    self._sticker_rect.right() - handle_size / 2,
+                    self._sticker_rect.center().y() - handle_size / 2,
+                    handle_size,
+                    handle_size
+                )
+                self._sticker_handle_height_rect = QRectF(
+                    self._sticker_rect.center().x() - handle_size / 2,
+                    self._sticker_rect.bottom() - handle_size / 2,
+                    handle_size,
+                    handle_size
+                )
+                
+                painter.fillRect(self._sticker_handle_rect, QColor("#facc15"))       # Yellow
+                painter.fillRect(self._sticker_handle_width_rect, QColor("#06b6d4"))  # Cyan
+                painter.fillRect(self._sticker_handle_height_rect, QColor("#ec4899")) # Magenta
                 painter.restore()
             else:
                 # Border for non-selected sticker
@@ -480,7 +501,7 @@ class VideoPreviewWidget(QWidget):
     play_toggled = pyqtSignal(bool)  # True = playing, False = paused
     watermark_scale_changed = pyqtSignal(float)
     sticker_dragged = pyqtSignal(float, float)
-    sticker_scaled = pyqtSignal(float)
+    sticker_scaled = pyqtSignal(float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -492,6 +513,8 @@ class VideoPreviewWidget(QWidget):
         # --- Drag/Resize State ---
         self._dragging_sticker = False
         self._resizing_sticker = False
+        self._resizing_sticker_width = False
+        self._resizing_sticker_height = False
         self._resizing_watermark = False
         self._drag_offset_x = 0.0
         self._drag_offset_y = 0.0
@@ -938,6 +961,16 @@ class VideoPreviewWidget(QWidget):
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
                             return True
                             
+                        if hasattr(self._overlay, "_sticker_handle_width_rect") and self._overlay._sticker_handle_width_rect.contains(scene_pos):
+                            self._resizing_sticker_width = True
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeHorCursor)
+                            return True
+                            
+                        if hasattr(self._overlay, "_sticker_handle_height_rect") and self._overlay._sticker_handle_height_rect.contains(scene_pos):
+                            self._resizing_sticker_height = True
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeVerCursor)
+                            return True
+                            
                         if hasattr(self._overlay, "_sticker_rect") and self._overlay._sticker_rect.contains(scene_pos):
                             self._dragging_sticker = True
                             self._drag_offset_x = float(scene_pos.x() - self._overlay._sticker_rect.center().x())
@@ -962,7 +995,43 @@ class VideoPreviewWidget(QWidget):
                             if base_w > 0:
                                 new_scale = new_w / base_w
                                 new_scale = max(0.1, min(5.0, new_scale))
-                                self.sticker_scaled.emit(new_scale)
+                                self.sticker_scaled.emit(new_scale, new_scale)
+                        return True
+                        
+                    elif self._resizing_sticker_width:
+                        frame_rect = self._overlay._get_video_frame_rect()
+                        if frame_rect.width() > 0:
+                            new_w = float(scene_pos.x() - self._overlay._sticker_rect.left())
+                            base_w = frame_rect.width() / 4.0
+                            if base_w > 0:
+                                new_scale_x = new_w / base_w
+                                new_scale_x = max(0.1, min(5.0, new_scale_x))
+                                current_idx = self._overlay._subtitle_data.get("currentStickerIndex", 0)
+                                curr_scale_y = 1.0
+                                if 0 <= current_idx < len(self._stickers):
+                                    curr_scale_y = float(self._stickers[current_idx].get("scale_y") or self._stickers[current_idx].get("scale") or 1.0)
+                                self.sticker_scaled.emit(new_scale_x, curr_scale_y)
+                        return True
+                        
+                    elif self._resizing_sticker_height:
+                        frame_rect = self._overlay._get_video_frame_rect()
+                        if frame_rect.height() > 0:
+                            new_h = float(scene_pos.y() - self._overlay._sticker_rect.top())
+                            current_idx = self._overlay._subtitle_data.get("currentStickerIndex", 0)
+                            native_ratio = 1.0
+                            if 0 <= current_idx < len(self._stickers):
+                                stk_id = str(self._stickers[current_idx].get("stickerId") or self._stickers[current_idx].get("sticker_id") or "")
+                                pixmap = self._sticker_pixmaps.get(stk_id)
+                                if pixmap and not pixmap.isNull():
+                                    native_ratio = pixmap.height() / max(1.0, pixmap.width())
+                            base_h = (frame_rect.width() / 4.0) * native_ratio
+                            if base_h > 0:
+                                new_scale_y = new_h / base_h
+                                new_scale_y = max(0.1, min(5.0, new_scale_y))
+                                curr_scale_x = 1.0
+                                if 0 <= current_idx < len(self._stickers):
+                                    curr_scale_x = float(self._stickers[current_idx].get("scale_x") or self._stickers[current_idx].get("scale") or 1.0)
+                                self.sticker_scaled.emit(curr_scale_x, new_scale_y)
                         return True
                         
                     elif self._dragging_sticker:
@@ -1004,6 +1073,10 @@ class VideoPreviewWidget(QWidget):
                         # Update hover cursor shape
                         if hasattr(self._overlay, "_sticker_handle_rect") and self._overlay._sticker_handle_rect.contains(scene_pos):
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+                        elif hasattr(self._overlay, "_sticker_handle_width_rect") and self._overlay._sticker_handle_width_rect.contains(scene_pos):
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeHorCursor)
+                        elif hasattr(self._overlay, "_sticker_handle_height_rect") and self._overlay._sticker_handle_height_rect.contains(scene_pos):
+                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeVerCursor)
                         elif hasattr(self._overlay, "_sticker_rect") and self._overlay._sticker_rect.contains(scene_pos):
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
                         elif hasattr(self._overlay, "_watermark_handle_rect") and self._overlay._watermark_handle_rect.contains(scene_pos):
@@ -1013,8 +1086,10 @@ class VideoPreviewWidget(QWidget):
                             
                 elif event_type == QEvent.Type.MouseButtonRelease:
                     if event.button() == Qt.MouseButton.LeftButton:
-                        if self._resizing_sticker or self._dragging_sticker or self._resizing_watermark:
+                        if self._resizing_sticker or self._resizing_sticker_width or self._resizing_sticker_height or self._dragging_sticker or self._resizing_watermark:
                             self._resizing_sticker = False
+                            self._resizing_sticker_width = False
+                            self._resizing_sticker_height = False
                             self._dragging_sticker = False
                             self._resizing_watermark = False
                             self._video_view.viewport().unsetCursor()
