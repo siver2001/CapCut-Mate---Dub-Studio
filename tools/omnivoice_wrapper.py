@@ -144,29 +144,41 @@ class OmnivoiceProvider:
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
+            use_voice_design = False
             if ref_audio is not None and Path(ref_audio).exists():
                 # Load audio using soundfile to bypass torchcodec (avoids libtorchcodec loading errors on Windows / packaged builds)
                 import torch
                 import soundfile as sf
+                import numpy as np
                 try:
                     data, samplerate = sf.read(str(ref_audio))
                     if data.ndim > 1:
                         data = data.mean(axis=1)
-                    waveform_tensor = torch.from_numpy(data).float().unsqueeze(0)
-                    ref_audio_param = (waveform_tensor, samplerate)
                     
-                    # Truncate ref_text if it is too long for the audio duration to prevent OmniVoice from generating prefix text
-                    if ref_text:
-                        duration_sec = len(data) / samplerate
-                        words = str(ref_text).split()
-                        max_words = max(5, int(duration_sec * 3.5))
-                        if len(words) > max_words:
-                            old_ref_text = ref_text
-                            ref_text = " ".join(words[:max_words])
-                            print(f"[info] Truncating ref_text from {len(words)} to {max_words} words (duration: {duration_sec:.2f}s) to match audio length. Old: {repr(old_ref_text)} -> New: {repr(ref_text)}", file=sys.stderr, flush=True)
+                    duration_sec = len(data) / samplerate if samplerate > 0 else 0
+                    rms = np.sqrt(np.mean(data**2)) if len(data) > 0 else 0
+                    
+                    if duration_sec < 1.2 or rms < 0.003:
+                        print(f"[warn] OmniVoice reference audio is too short ({duration_sec:.2f}s) or silent (RMS: {rms:.5f}). Falling back to voice design to avoid stuttering/failure.", file=sys.stderr, flush=True)
+                        use_voice_design = True
+                    else:
+                        waveform_tensor = torch.from_numpy(data).float().unsqueeze(0)
+                        ref_audio_param = (waveform_tensor, samplerate)
+                        
+                        # Truncate ref_text if it is too long for the audio duration to prevent OmniVoice from generating prefix text
+                        if ref_text:
+                            words = str(ref_text).split()
+                            max_words = max(5, int(duration_sec * 3.5))
+                            if len(words) > max_words:
+                                old_ref_text = ref_text
+                                ref_text = " ".join(words[:max_words])
+                                print(f"[info] Truncating ref_text from {len(words)} to {max_words} words (duration: {duration_sec:.2f}s) to match audio length. Old: {repr(old_ref_text)} -> New: {repr(ref_text)}", file=sys.stderr, flush=True)
                 except Exception:
                     ref_audio_param = str(ref_audio)
+            else:
+                use_voice_design = True
 
+            if not use_voice_design:
                 # Synthesize audio using OmniVoice voice cloning
                 print(f"[debug-omnivoice] Generating text='{clean_text}', ref_audio_param_type={type(ref_audio_param)}, ref_text='{ref_text}'", file=sys.stderr, flush=True)
                 try:
@@ -183,7 +195,7 @@ class OmnivoiceProvider:
                     raise
             else:
                 resolved_instruct = str(voice_name or "").strip()
-                if not resolved_instruct:
+                if not resolved_instruct or resolved_instruct == "clone" or resolved_instruct.startswith("omnivoice:"):
                     resolved_instruct = "female, young adult, moderate pitch"
                 
                 # Synthesize audio using OmniVoice voice design

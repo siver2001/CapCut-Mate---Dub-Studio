@@ -970,8 +970,18 @@ def synthesize_tts(
                             ref_text_val = ""
                     if not ref_text_val:
                         try:
-                            safe_print(f"[tts] Auto-transcribing live clone prompt audio: {ref_audio_path.name}", flush=True)
-                            ref_text_val = transcribe_reference_audio_file(ref_audio_path)
+                            source_lang = "vi"
+                            if job_id:
+                                try:
+                                    analysis_file = DUB_STUDIO_DIR / job_id / "analysis" / "analysis.json"
+                                    if analysis_file.exists():
+                                        analysis_data = read_json(analysis_file)
+                                        source_lang = analysis_data.get("sourceLanguage") or "vi"
+                                except Exception as exc:
+                                    safe_print(f"[tts] Warning: Could not read sourceLanguage for live clone transcription: {exc}", flush=True)
+                            
+                            safe_print(f"[tts] Auto-transcribing live clone prompt audio: {ref_audio_path.name} with source language: {source_lang}", flush=True)
+                            ref_text_val = transcribe_reference_audio_file(ref_audio_path, language=source_lang)
                             if ref_text_val:
                                 txt_path.write_text(ref_text_val, encoding="utf-8")
                         except Exception as e:

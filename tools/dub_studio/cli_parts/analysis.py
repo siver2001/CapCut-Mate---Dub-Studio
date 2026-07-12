@@ -733,7 +733,7 @@ def resolve_valtec_reference_audio(voice: str) -> Path | None:
     return reference_path if reference_path.exists() else None
 
 
-def transcribe_reference_audio_file(audio_path: Path) -> str:
+def transcribe_reference_audio_file(audio_path: Path, language: str = "vi") -> str:
     if not audio_path.exists():
         return ""
     temp_dir = ROOT / "temp"
@@ -741,8 +741,12 @@ def transcribe_reference_audio_file(audio_path: Path) -> str:
     safe_stem = re.sub(r"[^a-zA-Z0-9_]", "_", audio_path.stem)
     temp_srt = temp_dir / f"transcribe_ref_{safe_stem}_{time.time_ns()}.srt"
     
+    lang_code = str(language or "vi").strip().lower()
+    if not lang_code:
+        lang_code = "vi"
+        
     try:
-        transcribe_to_srt(audio_path, temp_srt, language="vi", max_len=999)
+        transcribe_to_srt(audio_path, temp_srt, language=lang_code, max_len=999)
         if temp_srt.exists():
             content = temp_srt.read_text(encoding="utf-8-sig")
             segments = parse_srt(content)
@@ -750,7 +754,7 @@ def transcribe_reference_audio_file(audio_path: Path) -> str:
             text = re.sub(r"\s+", " ", text)
             return text
     except Exception as e:
-        cli_log(f"Error in transcribe_reference_audio_file: {e}")
+        cli_log(f"Error in transcribe_reference_audio_file (lang={lang_code}): {e}")
     finally:
         if temp_srt.exists():
             try:
