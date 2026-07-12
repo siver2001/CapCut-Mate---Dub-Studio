@@ -2070,6 +2070,11 @@ def create_dub_audio(
         segment = item["segment"]
         clip_ms = int(item["clip_ms"])
         orig_start = max(int(segment.get("startMs", 0)), 0)
+        orig_end = max(int(segment.get("endMs", orig_start + 700)), orig_start + 200)
+        
+        # Save original timings for energy matching to avoid extracting from shifted positions
+        item["orig_start"] = orig_start
+        item["orig_end"] = orig_end
         
         # Prevent speech overlaps by forcing sequential start bounds (minimum 50ms interval)
         actual_start = max(orig_start, timeline_cursor)
@@ -2114,11 +2119,13 @@ def create_dub_audio(
             reference_clip = reference_dir / f"{segment['id']}_orig.wav"
             try:
                 if not reference_clip.exists() or reference_clip.stat().st_size <= 100:
+                    orig_start_val = item.get("orig_start", actual_start)
+                    orig_end_val = item.get("orig_end", actual_end)
                     extract_audio_clip(
                         source_video_path,
                         reference_clip,
-                        max(int(segment["startMs"]), 0),
-                        max(int(segment["endMs"]) - int(segment["startMs"]), 250),
+                        max(int(orig_start_val), 0),
+                        max(int(orig_end_val) - int(orig_start_val), 250),
                     )
                 energy_gain_db, reference_energy_db, dub_energy_db = compute_energy_match_gain_db(
                     reference_clip,

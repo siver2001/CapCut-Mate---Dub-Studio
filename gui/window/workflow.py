@@ -2777,6 +2777,7 @@ class WindowWorkflowMixin:
             "sourceLanguage": effective_source_language or "",
             "targetLanguage": self.settings["targetLanguage"],
             "speakerDetectionMode": self.settings["speakerDetectionMode"],
+            "defaultVoice": self.settings.get("defaultVoice") or self._selected_default_voice(),
             "voiceMapping": self._expanded_voice_mapping(),
             "introHook": copy.deepcopy(self.settings["introHook"]),
             "subtitlePreset": copy.deepcopy(self.settings["subtitlePreset"]),

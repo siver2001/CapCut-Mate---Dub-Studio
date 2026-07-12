@@ -2649,6 +2649,15 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
             **render_options.get("voiceMapping", {}),
         }.items()
     }
+    all_speaker_ids = {seg.get("speakerId") for seg in analysis.get("segments", []) if seg.get("speakerId")}
+    default_voice = resolve_voice_preset(
+        render_options.get("defaultVoice")
+        or analysis.get("renderDefaults", {}).get("defaultVoice")
+        or "edge:vi-VN-NamMinhNeural"
+    )
+    for spk_id in all_speaker_ids:
+        if spk_id and spk_id not in voice_mapping:
+            voice_mapping[spk_id] = default_voice
     uses_omnivoice_voice = any(
         is_omnivoice_voice_preset(resolve_voice_preset(voice))
         for voice in voice_mapping.values()
