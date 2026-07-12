@@ -2030,6 +2030,21 @@ class WindowLayoutMixin:
 
     def _switch_page(self, index: int) -> None:
         """Switch between Edit/Preview/Batch/Config pages and update nav button styles."""
+        # Stop all playing players before switching pages to release media/decoder locks and prevent crashes
+        vp = getattr(self, "_video_preview_widget", None)
+        if vp is not None:
+            try:
+                vp.stop()
+            except Exception:
+                pass
+                
+        pp = getattr(self, "precut_player", None)
+        if pp is not None:
+            try:
+                pp.stop()
+            except Exception:
+                pass
+
         self._page_stack.setCurrentIndex(index)
         self.setStyleSheet(self.styleSheet())
         for btn, active in [(self._nav_edit_btn, index == 0),
@@ -2051,4 +2066,11 @@ class WindowLayoutMixin:
                     if vp.load_video(source_path):
                         vp.play()
             self.refresh_preview()
+        elif index == 5:
+            # Auto-select first item when switching to Precut page if nothing is selected
+            if hasattr(self, "precut_video_table"):
+                if self.precut_video_table.rowCount() > 0 and self.precut_video_table.currentRow() < 0:
+                    self.precut_video_table.setCurrentRow(0)
+                else:
+                    self.on_precut_video_selected()
 
