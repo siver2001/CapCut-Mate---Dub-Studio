@@ -70,9 +70,10 @@ def precut_video(input_path: Path | str, excluded_ranges: list[dict[str, float]]
     meta = get_video_meta(input_path)
     total_duration = float(meta.get("durationMs", 0) or 0) / 1000.0
     if total_duration <= 0:
-        # Fallback using ffprobe/ffplay or assume 3 hours if metadata fails
         total_duration = 10800.0 
         
+    has_audio = bool(meta.get("hasAudio", False))
+    
     # Merge excluded ranges first
     merged_excluded = merge_intervals(excluded_ranges)
     
@@ -111,29 +112,44 @@ def precut_video(input_path: Path | str, excluded_ranges: list[dict[str, float]]
         logger.info(f"Không có khoảng loại bỏ thực tế nào, sao chép sang {output_path}")
         return output_path
         
-    # Process cutting & stitching via FFmpeg
+    # Process cutting & stitching via FFmpeg using a single input trim filter complex
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Command Construction: Trim and Concatenate via filter_complex
-    cmd = ["ffmpeg", "-y"]
-    
-    # We can pass multiple inputs of the same file
-    for seg in kept_segments:
-        cmd.extend(["-ss", f"{seg[0]:.3f}", "-to", f"{seg[1]:.3f}", "-i", str(input_path)])
-        
-    # Build filter complex
     filter_parts = []
+    for i, seg in enumerate(kept_segments):
+        filter_parts.append(f"[0:v]trim=start={seg[0]:.3f}:end={seg[1]:.3f},setpts=PTS-STARTPTS[v{i}];")
+        if has_audio:
+            filter_parts.append(f"[0:a]atrim=start={seg[0]:.3f}:end={seg[1]:.3f},asetpts=PTS-STARTPTS[a{i}];")
+            
+    concat_inputs = ""
     for i in range(len(kept_segments)):
-        filter_parts.append(f"[{i}:v][{i}:a]")
-    filter_parts.append(f"concat=n={len(kept_segments)}:v=1:a=1[outv][outa]")
-    
-    cmd.extend([
+        if has_audio:
+            concat_inputs += f"[v{i}][a{i}]"
+        else:
+            concat_inputs += f"[v{i}]"
+            
+    a_param = "1" if has_audio else "0"
+    if has_audio:
+        filter_parts.append(f"{concat_inputs}concat=n={len(kept_segments)}:v=1:a=1[outv][outa]")
+    else:
+        filter_parts.append(f"{concat_inputs}concat=n={len(kept_segments)}:v=1:a=0[outv]")
+        
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(input_path),
         "-filter_complex", "".join(filter_parts),
-        "-map", "[outv]", "-map", "[outa]",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-c:a", "aac",
-        str(output_path)
+        "-map", "[outv]"
+    ]
+    if has_audio:
+        cmd.extend(["-map", "[outa]"])
+        
+    cmd.extend([
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
     ])
+    if has_audio:
+        cmd.extend(["-c:a", "aac"])
+        
+    cmd.append(str(output_path))
     
     logger.info(f"Running precut FFmpeg command for {input_path} -> {output_path}")
     run(cmd)

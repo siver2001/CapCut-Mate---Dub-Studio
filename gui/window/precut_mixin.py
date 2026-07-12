@@ -124,6 +124,7 @@ class WindowPrecutMixin:
         item.excluded_ranges.append({"start": start_sec, "end": end_sec})
         self.refresh_precut_ranges_table()
         self._update_batch_log(f"Đã thêm khoảng loại bỏ: {self._format_seconds_to_hms(start_sec)} -> {self._format_seconds_to_hms(end_sec)} cho video {Path(item.input_path).name}")
+        self._auto_save_precut_configs()
 
     def on_precut_edit_range(self) -> None:
         """Edit the selected excluded range."""
@@ -160,6 +161,7 @@ class WindowPrecutMixin:
         item.excluded_ranges[range_row] = {"start": start_input, "end": end_input}
         self.refresh_precut_ranges_table()
         self._update_batch_log(f"Đã sửa khoảng loại bỏ thành: {self._format_seconds_to_hms(start_input)} -> {self._format_seconds_to_hms(end_input)}")
+        self._auto_save_precut_configs()
 
     def on_precut_delete_range(self) -> None:
         """Delete the selected excluded range."""
@@ -176,6 +178,7 @@ class WindowPrecutMixin:
         removed = item.excluded_ranges.pop(range_row)
         self.refresh_precut_ranges_table()
         self._update_batch_log(f"Đã xóa khoảng loại bỏ: {self._format_seconds_to_hms(removed['start'])} -> {self._format_seconds_to_hms(removed['end'])}")
+        self._auto_save_precut_configs()
 
     def on_precut_clear_ranges(self) -> None:
         """Clear all excluded ranges for the selected video."""
@@ -197,6 +200,7 @@ class WindowPrecutMixin:
             item.excluded_ranges.clear()
             self.refresh_precut_ranges_table()
             self._update_batch_log("Đã xóa toàn bộ khoảng loại bỏ.")
+            self._auto_save_precut_configs()
 
     def on_precut_preview_cut(self) -> None:
         """Cut the video and play it in the preview player to preview changes."""
@@ -222,6 +226,24 @@ class WindowPrecutMixin:
                 self._update_batch_log("Đã nạp video cắt thử xem trước thành công.")
         except Exception as exc:
             QMessageBox.critical(self, "Lỗi cắt video", f"Cắt thử thất bại: {exc}")
+
+    def _auto_save_precut_configs(self) -> None:
+        """Automatically save configuration metadata for excluded ranges."""
+        config_path = Path("temp/precut_configurations.json")
+        data = []
+        for item in self._batch_queue:
+            data.append({
+                "videoPath": item.input_path,
+                "excludedRanges": item.excluded_ranges
+            })
+        try:
+            import json
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info("Automatically saved precut configurations.")
+        except Exception as exc:
+            logger.error(f"Failed to auto-save precut configurations: {exc}")
 
     def on_precut_save_config(self) -> None:
         """Save configuration metadata for excluded ranges."""
