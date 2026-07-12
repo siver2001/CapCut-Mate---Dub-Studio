@@ -78,6 +78,28 @@ class WindowWorkflowMixin:
         refresh_all: bool = False,
     ) -> None:
         source_path = Path(video_path)
+        source_path_str = str(source_path.resolve())
+        
+        # Integrate with Batch Queue and Precut Mixin
+        if hasattr(self, "_batch_queue"):
+            found = False
+            for item in self._batch_queue:
+                try:
+                    if Path(item.input_path).resolve() == source_path.resolve():
+                        found = True
+                        break
+                except Exception:
+                    pass
+            if not found:
+                from gui.window.batch import _BatchItem
+                new_item = _BatchItem(source_path_str)
+                self._batch_queue.append(new_item)
+                if hasattr(self, "load_precut_configurations"):
+                    self.load_precut_configurations()
+                if hasattr(self, "_refresh_batch_ui"):
+                    self._refresh_batch_ui()
+                if hasattr(self, "sync_precut_video_table"):
+                    self.sync_precut_video_table()
         
         # Load video into player immediately (Qt6 handles loading asynchronously in C++)
         video_preview = getattr(self, "_video_preview_widget", None)
