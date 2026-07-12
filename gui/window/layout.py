@@ -1908,7 +1908,7 @@ class WindowLayoutMixin:
         precut_left_layout.addWidget(self.precut_video_table, 1)
 
         precut_left_btns = QHBoxLayout()
-        self.precut_add_video_btn = self._make_button("Thêm video", "ghost")
+        self.precut_add_video_btn = self._make_button("Thêm video", "primary")
         self.precut_add_video_btn.clicked.connect(self.batch_add_videos)
         self.precut_remove_video_btn = self._make_button("Xóa video", "danger")
         self.precut_remove_video_btn.clicked.connect(self.batch_remove_selected)
@@ -1935,14 +1935,14 @@ class WindowLayoutMixin:
         precut_time_capture_layout = QHBoxLayout()
         precut_time_capture_layout.setSpacing(10)
 
-        self.precut_set_start_btn = self._make_button("Đặt thời gian bắt đầu", "ghost")
+        self.precut_set_start_btn = self._make_button("Đặt thời gian bắt đầu", "primary")
         self.precut_set_start_btn.clicked.connect(self.on_precut_set_start)
         self.precut_start_time = QTimeEdit()
         self.precut_start_time.setDisplayFormat("HH:mm:ss")
         self.precut_start_time.setMinimumHeight(32)
         self.precut_start_time.setStyleSheet("background: #0d1527; color: #f8fafc; border: 1px solid #1e293b; padding: 4px;")
 
-        self.precut_set_end_btn = self._make_button("Đặt thời gian kết thúc", "ghost")
+        self.precut_set_end_btn = self._make_button("Đặt thời gian kết thúc", "primary")
         self.precut_set_end_btn.clicked.connect(self.on_precut_set_end)
         self.precut_end_time = QTimeEdit()
         self.precut_end_time.setDisplayFormat("HH:mm:ss")
@@ -1981,11 +1981,11 @@ class WindowLayoutMixin:
         precut_action_grid = QGridLayout()
         precut_action_grid.setSpacing(6)
 
-        self.precut_add_range_btn = self._make_button("Thêm khoảng", "ghost")
+        self.precut_add_range_btn = self._make_button("Thêm khoảng", "success")
         self.precut_add_range_btn.clicked.connect(self.on_precut_add_range)
-        self.precut_edit_range_btn = self._make_button("Sửa khoảng", "ghost")
+        self.precut_edit_range_btn = self._make_button("Sửa khoảng", "primary")
         self.precut_edit_range_btn.clicked.connect(self.on_precut_edit_range)
-        self.precut_delete_range_btn = self._make_button("Xóa khoảng", "ghost")
+        self.precut_delete_range_btn = self._make_button("Xóa khoảng", "danger")
         self.precut_delete_range_btn.clicked.connect(self.on_precut_delete_range)
         self.precut_clear_ranges_btn = self._make_button("Xóa toàn bộ", "danger")
         self.precut_clear_ranges_btn.clicked.connect(self.on_precut_clear_ranges)
@@ -1998,19 +1998,23 @@ class WindowLayoutMixin:
 
         precut_right_layout.addSpacing(10)
 
-        self.precut_preview_cut_btn = self._make_button("Xem trước video sau khi cắt", "ghost")
+        self.precut_preview_cut_btn = self._make_button("Xem trước video sau khi cắt", "success")
         self.precut_preview_cut_btn.setMinimumHeight(36)
         self.precut_preview_cut_btn.clicked.connect(self.on_precut_preview_cut)
         precut_right_layout.addWidget(self.precut_preview_cut_btn)
 
-        self.precut_save_btn = self._make_button("Lưu cấu hình", "ghost")
+        self.precut_save_btn = self._make_button("Lưu cấu hình", "primary")
         self.precut_save_btn.setMinimumHeight(36)
         self.precut_save_btn.clicked.connect(self.on_precut_save_config)
         precut_right_layout.addWidget(self.precut_save_btn)
 
-        self.precut_run_batch_btn = self._make_button("Bắt đầu xử lý batch", "ghost")
+        self.precut_run_batch_btn = self._make_button("Bắt đầu xử lý batch", "primary")
         self.precut_run_batch_btn.setMinimumHeight(40)
-        self.precut_run_batch_btn.setStyleSheet("background: #0284c7; color: #ffffff; font-weight: bold; border-radius: 6px;")
+        self.precut_run_batch_btn.setStyleSheet(
+            "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0284c7, stop:1 #0369a1); color: #ffffff; font-weight: bold; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); } "
+            "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #38bdf8, stop:1 #0284c7); border: 1px solid rgba(255,255,255,0.4); } "
+            "QPushButton:pressed { background: #0369a1; padding-top: 6px; padding-bottom: 4px; }"
+        )
         self.precut_run_batch_btn.clicked.connect(self.batch_start)
         precut_right_layout.addWidget(self.precut_run_batch_btn)
 

@@ -145,7 +145,8 @@ def validate_generated_audio_file(path: Path, *, context: str) -> None:
         raise RuntimeError(f"{context}: audio file is empty/corrupted (size <= 100B) at {path}")
 
 
-def get_video_meta(path: Path) -> dict[str, Any]:
+def get_video_meta(path: Path | str) -> dict[str, Any]:
+    path = Path(path)
     probe = ffprobe_json(path)
     video_stream = next((stream for stream in probe.get("streams", []) if stream.get("codec_type") == "video"), {})
     audio_stream = next((stream for stream in probe.get("streams", []) if stream.get("codec_type") == "audio"), {})
