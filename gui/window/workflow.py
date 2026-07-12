@@ -976,13 +976,20 @@ class WindowWorkflowMixin:
                     
                     # Normalize paths for robust matching on Windows
                     ranges_by_path = {}
+                    ranges_by_filename = {}
                     for item in data:
                         if "videoPath" in item:
                             norm_key = str(Path(item["videoPath"]).resolve()).replace("\\", "/").lower()
                             ranges_by_path[norm_key] = item["excludedRanges"]
+                            fname = Path(item["videoPath"]).name.lower()
+                            ranges_by_filename[fname] = item["excludedRanges"]
                             
                     norm_input = str(Path(input_path).resolve()).replace("\\", "/").lower()
                     excluded_ranges = ranges_by_path.get(norm_input)
+                    if not excluded_ranges:
+                        fname = Path(input_path).name.lower()
+                        excluded_ranges = ranges_by_filename.get(fname)
+                        
                     if excluded_ranges:
                         precut_dir = Path("temp/precut")
                         precut_dir.mkdir(parents=True, exist_ok=True)
@@ -992,7 +999,7 @@ class WindowWorkflowMixin:
                         precut_video(input_path, excluded_ranges, precut_path)
                         if precut_path.exists():
                             effective_input_path = precut_path
-                            logger.info(f"Single video pre-cut successful: {precut_path.name}")
+                            logger.info(f"Single video pre-cut successful (fallback enabled): {precut_path.name}")
                 except Exception as precut_err:
                     logger.warning(f"Error pre-cutting single video: {precut_err}")
 
@@ -1022,13 +1029,19 @@ class WindowWorkflowMixin:
                     data = json.load(f)
                 
                 ranges_by_path = {}
+                ranges_by_filename = {}
                 for item in data:
                     if "videoPath" in item:
                         norm_key = str(Path(item["videoPath"]).resolve()).replace("\\", "/").lower()
                         ranges_by_path[norm_key] = item["excludedRanges"]
+                        fname = Path(item["videoPath"]).name.lower()
+                        ranges_by_filename[fname] = item["excludedRanges"]
                         
                 norm_input = str(Path(input_path).resolve()).replace("\\", "/").lower()
                 excluded_ranges = ranges_by_path.get(norm_input)
+                if not excluded_ranges:
+                    fname = Path(input_path).name.lower()
+                    excluded_ranges = ranges_by_filename.get(fname)
                 
                 if excluded_ranges:
                     analysis_input_path = self.analysis.get("inputPath", "")

@@ -210,10 +210,11 @@ def discover_ollama_binary() -> Path | None:
     if resolved:
         candidates.append(Path(resolved))
     if sys.platform == "win32":
+        program_files = os.getenv("ProgramFiles", "C:\\Program Files")
         candidates.extend(
             [
                 Path(os.getenv("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
-                Path("C:/Program Files/Ollama/ollama.exe"),
+                Path(program_files) / "Ollama" / "ollama.exe",
             ]
         )
     for candidate in candidates:

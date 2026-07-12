@@ -153,11 +153,12 @@ def hex_to_ass_color(hex_color: str, alpha: float | None = None) -> str:
 def get_text_pixel_size(text: str, font_name: str, font_size: int) -> tuple[int, int]:
     try:
         from PIL import ImageFont
+        windir = os.environ.get("WINDIR", "C:\\Windows")
         font_paths = [
             f"{font_name}.ttf",
-            f"C:/Windows/Fonts/{font_name}.ttf",
-            f"C:/Windows/Fonts/{font_name}bd.ttf",
-            f"C:/Windows/Fonts/Arial.ttf",
+            os.path.join(windir, "Fonts", f"{font_name}.ttf"),
+            os.path.join(windir, "Fonts", f"{font_name}bd.ttf"),
+            os.path.join(windir, "Fonts", "Arial.ttf"),
         ]
         font = None
         for path in font_paths:

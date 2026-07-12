@@ -245,15 +245,24 @@ class WindowPrecutMixin:
             
             # Normalize paths for robust matching on Windows
             ranges_by_path = {}
+            ranges_by_filename = {}
             for item in data:
                 if "videoPath" in item:
                     norm_key = str(Path(item["videoPath"]).resolve()).replace("\\", "/").lower()
                     ranges_by_path[norm_key] = item["excludedRanges"]
+                    fname = Path(item["videoPath"]).name.lower()
+                    ranges_by_filename[fname] = item["excludedRanges"]
             
             for item in self._batch_queue:
                 norm_input = str(Path(item.input_path).resolve()).replace("\\", "/").lower()
                 if norm_input in ranges_by_path:
                     item.excluded_ranges = ranges_by_path[norm_input]
+                else:
+                    # Fallback to filename matching if path changes (e.g. moved directory or changed PC)
+                    fname = Path(item.input_path).name.lower()
+                    if fname in ranges_by_filename:
+                        item.excluded_ranges = ranges_by_filename[fname]
+                        logger.info(f"Loaded precut configuration using filename fallback for: {item.input_path}")
             
             self.refresh_precut_ranges_table()
         except Exception as exc:

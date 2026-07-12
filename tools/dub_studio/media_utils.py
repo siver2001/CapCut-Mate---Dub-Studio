@@ -47,10 +47,12 @@ def find_ffmpeg_ffprobe() -> tuple[str, str]:
             return str(f1), str(f2)
 
     # 4. Fallback search typical folders
+    system_drive = os.environ.get("SystemDrive", "C:")
+    program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
     common_paths = [
-        Path("C:/ffmpeg/bin"),
-        Path("C:/Program Files/ffmpeg/bin"),
-        Path("C:/Program Files/ImageMagick/bin"),
+        Path(f"{system_drive}/ffmpeg/bin"),
+        Path(f"{program_files}/ffmpeg/bin"),
+        Path(f"{program_files}/ImageMagick/bin"),
     ]
     for p in common_paths:
         f1 = p / "ffmpeg.exe"

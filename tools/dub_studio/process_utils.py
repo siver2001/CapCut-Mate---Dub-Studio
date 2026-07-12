@@ -121,7 +121,9 @@ def extract_audio_clip(input_path: Path, output_path: Path, start_ms: int, durat
                 ffmpeg_exe = str(cand / "ffmpeg.exe")
                 break
     if not ffmpeg_exe:
-        for p in [Path("C:/ffmpeg/bin/ffmpeg.exe"), Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe")]:
+        system_drive = os.environ.get("SystemDrive", "C:")
+        program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+        for p in [Path(f"{system_drive}/ffmpeg/bin/ffmpeg.exe"), Path(f"{program_files}/ffmpeg/bin/ffmpeg.exe")]:
             if p.exists():
                 ffmpeg_exe = str(p)
                 break
