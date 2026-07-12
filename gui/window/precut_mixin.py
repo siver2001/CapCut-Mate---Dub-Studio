@@ -243,11 +243,17 @@ class WindowPrecutMixin:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            ranges_by_path = {item["videoPath"]: item["excludedRanges"] for item in data if "videoPath" in item}
+            # Normalize paths for robust matching on Windows
+            ranges_by_path = {}
+            for item in data:
+                if "videoPath" in item:
+                    norm_key = str(Path(item["videoPath"]).resolve()).replace("\\", "/").lower()
+                    ranges_by_path[norm_key] = item["excludedRanges"]
             
             for item in self._batch_queue:
-                if item.input_path in ranges_by_path:
-                    item.excluded_ranges = ranges_by_path[item.input_path]
+                norm_input = str(Path(item.input_path).resolve()).replace("\\", "/").lower()
+                if norm_input in ranges_by_path:
+                    item.excluded_ranges = ranges_by_path[norm_input]
             
             self.refresh_precut_ranges_table()
         except Exception as exc:

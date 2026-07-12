@@ -973,8 +973,16 @@ class WindowWorkflowMixin:
                 try:
                     with open(config_path, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                    ranges_by_path = {item["videoPath"]: item["excludedRanges"] for item in data if "videoPath" in item}
-                    excluded_ranges = ranges_by_path.get(str(input_path))
+                    
+                    # Normalize paths for robust matching on Windows
+                    ranges_by_path = {}
+                    for item in data:
+                        if "videoPath" in item:
+                            norm_key = str(Path(item["videoPath"]).resolve()).replace("\\", "/").lower()
+                            ranges_by_path[norm_key] = item["excludedRanges"]
+                            
+                    norm_input = str(Path(input_path).resolve()).replace("\\", "/").lower()
+                    excluded_ranges = ranges_by_path.get(norm_input)
                     if excluded_ranges:
                         precut_dir = Path("temp/precut")
                         precut_dir.mkdir(parents=True, exist_ok=True)
@@ -1003,6 +1011,42 @@ class WindowWorkflowMixin:
                 self, "Thiếu dữ liệu phân tích", "Cần phân tích video trước khi render."
             )
             return
+            
+        # Check if the user configured pre-cut ranges, but the current analysis is on the original uncut video
+        try:
+            input_path = self._validate_analysis_input()
+            config_path = Path("temp/precut_configurations.json")
+            if config_path.exists():
+                import json
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                ranges_by_path = {}
+                for item in data:
+                    if "videoPath" in item:
+                        norm_key = str(Path(item["videoPath"]).resolve()).replace("\\", "/").lower()
+                        ranges_by_path[norm_key] = item["excludedRanges"]
+                        
+                norm_input = str(Path(input_path).resolve()).replace("\\", "/").lower()
+                excluded_ranges = ranges_by_path.get(norm_input)
+                
+                if excluded_ranges:
+                    analysis_input_path = self.analysis.get("inputPath", "")
+                    if "precut" not in str(analysis_input_path).lower():
+                        confirm = QMessageBox.question(
+                            self,
+                            "Cảnh báo lệch dòng thời gian",
+                            "Bạn đã thiết lập khoảng cắt/bỏ đoạn cho video này, nhưng video chưa được phân tích lại dưới dạng đã cắt.\n\n"
+                            "Nếu tiếp tục render, phụ đề và âm thanh lồng tiếng sẽ bị lệch dòng thời gian.\n\n"
+                            "Bạn có muốn dừng lại để bấm nút 'Phân tích' lại không?",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.Yes
+                        )
+                        if confirm == QMessageBox.StandardButton.Yes:
+                            return
+        except Exception as e:
+            logger.warning(f"Error checking precut alignment on render: {e}")
+
         try:
             self.read_settings_from_widgets()
             self._push_analysis_overrides()
