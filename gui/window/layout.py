@@ -2095,8 +2095,7 @@ class WindowLayoutMixin:
             if vp is not None:
                 source_path = self.input_path_edit.text().strip()
                 if source_path:
-                    if vp.load_video(source_path):
-                        vp.play()
+                    vp.load_video(source_path, auto_play=True)
             self.refresh_preview()
         elif index == 5:
             # Auto-select first item when switching to Precut page if nothing is selected

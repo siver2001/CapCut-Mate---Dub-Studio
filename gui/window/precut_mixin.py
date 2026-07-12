@@ -222,8 +222,7 @@ class WindowPrecutMixin:
         try:
             precut_video(item.input_path, item.excluded_ranges, temp_preview)
             if temp_preview.exists():
-                self.precut_player.load_video(str(temp_preview))
-                self.precut_player.play()
+                self.precut_player.load_video(str(temp_preview), auto_play=True)
                 self._update_batch_log("Đã nạp video cắt thử xem trước thành công.")
         except Exception as exc:
             QMessageBox.critical(self, "Lỗi cắt video", f"Cắt thử thất bại: {exc}")

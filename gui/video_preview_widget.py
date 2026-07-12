@@ -719,18 +719,21 @@ class VideoPreviewWidget(QWidget):
         self._player.playbackStateChanged.connect(self._on_playback_state_changed)
         self._fit_video_scene()
 
-    def load_video(self, path: str | Path) -> bool:
+    def load_video(self, path: str | Path, auto_play: bool = False) -> bool:
         """Load a video file for preview. Returns True if successful."""
         video_path = Path(path).resolve()
         if not video_path.exists():
             return False
         self._player.stop()
         self._player.setSource(QUrl())  # Reset source to release previous file locks and reset media graph
-        self._pause_after_load = True
+        self._pause_after_load = not auto_play
         self._player.setSource(QUrl.fromLocalFile(str(video_path)))
         self._player.setPosition(0)
-        self._player.pause()
-        QTimer.singleShot(0, self._ensure_loaded_video_stays_paused)
+        if auto_play:
+            self._player.play()
+        else:
+            self._player.pause()
+            QTimer.singleShot(0, self._ensure_loaded_video_stays_paused)
         self._current_text = ""
         self._apply_audio_state()
         self._apply_playback_rate()
@@ -740,6 +743,7 @@ class VideoPreviewWidget(QWidget):
         return True
 
     def play(self) -> None:
+        self._pause_after_load = False
         self._player.play()
 
     def pause(self) -> None:
