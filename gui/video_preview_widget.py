@@ -193,7 +193,29 @@ class _SubtitleOverlay(QGraphicsItem):
             transform_x = max(-1.0, min(float(stk.get("transform_x", 0.0)), 1.0))
             transform_y = max(-1.0, min(float(stk.get("transform_y", -0.3)), 1.0))
             
-            if pixmap and not pixmap.isNull():
+            if stk_id == "blur_sticker":
+                base_w = frame_rect.width() // 4
+                base_h = frame_rect.height() // 8
+                sw = max(20, int(base_w * scale_x))
+                sw = min(sw, int(frame_rect.width() * 0.8))
+                sh = max(20, int(base_h * scale_y))
+                sh = min(sh, int(frame_rect.height() * 0.8))
+                sx = frame_rect.left() + (frame_rect.width() - sw) * ((transform_x + 1.0) * 0.5)
+                sy = frame_rect.top() + (frame_rect.height() - sh) * ((transform_y + 1.0) * 0.5)
+                sx = max(frame_rect.left(), min(sx, max(frame_rect.right() - sw, frame_rect.left())))
+                sy = max(frame_rect.top(), min(sy, max(frame_rect.bottom() - sh, frame_rect.top())))
+                stk_rect = QRectF(sx, sy, sw, sh)
+                
+                painter.save()
+                painter.setBrush(QColor(6, 182, 212, 120))  # Semi-transparent Cyan
+                painter.setPen(QPen(QColor(6, 182, 212, 220), 1.5, Qt.PenStyle.DashLine))
+                painter.drawRect(stk_rect)
+                
+                painter.setPen(QColor("#ffffff"))
+                painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                painter.drawText(stk_rect, int(Qt.AlignmentFlag.AlignCenter), "CHE / MỜ PHỤ ĐỀ")
+                painter.restore()
+            elif pixmap and not pixmap.isNull():
                 base_w = frame_rect.width() // 4
                 base_h = int(base_w * (pixmap.height() / max(1.0, pixmap.width())))
                 sw = max(20, int(base_w * scale_x))

@@ -1912,6 +1912,43 @@ def create_capcut_draft(
             duration_us = video_duration_us - start_us
         duration_us = max(100_000, duration_us)
         
+        if stk_id == "blur_sticker":
+            from pyJianYingDraft.metadata import VideoSceneEffectType, MaskType
+            
+            sticker_blur_track = f"sticker_blur_track_{idx}"
+            script.add_track(TrackType.video, sticker_blur_track, relative_index=45 + idx)
+            
+            blur_segment = VideoSegment(
+                material=video_material,
+                target_timerange=Timerange(start_us, start_us + duration_us),
+                source_timerange=Timerange(start_us, start_us + min(duration_us, video_material.duration)),
+                volume=0.0
+            )
+            
+            blur_strength = float(subtitle_preset.get("cleanupBlurStrength") or 80) / 100.0
+            blur_segment.add_effect(VideoSceneEffectType.Blur, params=[blur_strength])
+            
+            video_w = int(video_meta["width"])
+            video_h = int(video_meta["height"])
+            
+            sw = (video_w / 4.0) * sticker_scale_x
+            sh = (video_h / 8.0) * sticker_scale_y
+            
+            center_x = sticker_transform_x * (video_w - sw) / 2.0
+            center_y = -sticker_transform_y * (video_h - sh) / 2.0
+            
+            blur_segment.add_mask(
+                mask_type=MaskType.Rectangle,
+                center_x=float(center_x),
+                center_y=float(center_y),
+                size=sh / float(video_h),
+                rect_width=sw / float(video_w),
+                feather=10.0
+            )
+            
+            script.add_segment(blur_segment, sticker_blur_track)
+            continue
+            
         sticker_track_name = f"sticker_track_{idx}"
         script.add_track(TrackType.sticker, sticker_track_name, relative_index=30 + idx)
         
