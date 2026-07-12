@@ -42,7 +42,7 @@ def get_config_file_path(filename: str) -> Path:
     return root_path
 
 PIPELINE_PATH = ROOT / "tools" / "dub_studio_pipeline.py"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 
 
 
