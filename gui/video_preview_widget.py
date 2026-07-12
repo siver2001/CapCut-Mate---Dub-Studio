@@ -643,9 +643,11 @@ class VideoPreviewWidget(QWidget):
         # --- State ---
         self._subtitle_timeline: list[dict[str, Any]] = []
         self._subtitle_preset: dict[str, Any] = {}
+        self._subtitle_region: dict[str, Any] = {}
         self._sticker_opts: dict[str, Any] = {}
         self._sticker_pixmap: QPixmap | None = None
         self._sticker_cache_key = ""
+        self._watermark_opts: dict[str, Any] = {}
         self._current_text = ""
         self._preview_text = ""
         self._duration_ms = 0

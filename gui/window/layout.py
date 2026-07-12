@@ -2070,7 +2070,7 @@ class WindowLayoutMixin:
             # Auto-select first item when switching to Precut page if nothing is selected
             if hasattr(self, "precut_video_table"):
                 if self.precut_video_table.rowCount() > 0 and self.precut_video_table.currentRow() < 0:
-                    self.precut_video_table.setCurrentRow(0)
+                    self.precut_video_table.selectRow(0)
                 else:
                     self.on_precut_video_selected()
 
