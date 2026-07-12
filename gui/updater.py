@@ -230,99 +230,16 @@ del "%~f0"
         except Exception as e:
             self.finished_signal.emit(False, f"Có lỗi xảy ra trong quá trình cập nhật: {str(e)}")
 
-class VersionCheckThread(QThread):
-    finished_signal = pyqtSignal(bool, str)  # success, version_or_error
-
-    def run(self):
-        try:
-            ver_url = "https://raw.githubusercontent.com/siver2001/CapCut-Mate---Dub-Studio/main/config/version.json"
-            req = urllib.request.Request(ver_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=8) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                remote_ver = data.get("version")
-                if remote_ver:
-                    self.finished_signal.emit(True, remote_ver)
-                else:
-                    self.finished_signal.emit(False, "Không thể tìm thấy thông tin phiên bản trên máy chủ.")
-        except Exception as e:
-            self.finished_signal.emit(False, str(e))
-
-
 def trigger_update(parent_widget, is_frozen: bool, root_path: Path):
-    """Checks for update first, then asks for user confirmation before downloading."""
-    # Show checking progress dialog
-    progress = QProgressDialog("Đang kiểm tra phiên bản mới từ GitHub...", None, 0, 0, parent_widget)
-    progress.setWindowTitle("Kiểm tra cập nhật")
-    progress.setWindowModality(Qt.WindowModality.WindowModal)
-    progress.setMinimumDuration(0)
-    progress.setValue(0)
-    progress.setMinimumWidth(380)
-    progress.setCancelButton(None)  # No cancel button for version check phase
-    
-    # Premium Dark Theme style
-    progress.setStyleSheet("""
-        QProgressDialog {
-            background-color: #0b0f19;
-            border: 1px solid rgba(56, 189, 248, 0.25);
-            border-radius: 8px;
-        }
-        QLabel {
-            color: #f1f5f9;
-            font-size: 13px;
-            font-family: "Segoe UI", Arial, sans-serif;
-            min-height: 36px;
-        }
-    """)
-    progress.show()
-    QApplication.processEvents()
-
-    check_thread = VersionCheckThread(parent_widget)
-
-    def on_check_finished(success, result):
-        progress.close()
-        if not success:
-            QMessageBox.warning(
-                parent_widget,
-                "Lỗi kết nối",
-                f"Không thể kết nối máy chủ để kiểm tra bản mới:\n{result}\n\nVui lòng kiểm tra lại kết nối mạng của bạn."
-            )
-            return
-
-        remote_ver = result
-
-        # Version comparison helper
-        def is_newer(local: str, remote: str) -> bool:
-            try:
-                l_parts = [int(x) for x in local.split(".")]
-                r_parts = [int(x) for x in remote.split(".")]
-                max_len = max(len(l_parts), len(r_parts))
-                l_parts += [0] * (max_len - len(l_parts))
-                r_parts += [0] * (max_len - len(r_parts))
-                return r_parts > l_parts
-            except Exception:
-                return False
-
-        if not is_newer(APP_VERSION, remote_ver):
-            QMessageBox.information(
-                parent_widget,
-                "Kiểm tra cập nhật",
-                f"Bạn đang sử dụng phiên bản mới nhất ({APP_VERSION}).\nKhông cần cập nhật."
-            )
-            return
-
-        # Prompt user to update
-        confirm = QMessageBox.question(
-            parent_widget,
-            "Phát hiện bản cập nhật mới!",
-            f"Đã có phiên bản mới: {remote_ver}\nPhiên bản hiện tại: {APP_VERSION}\n\nBạn có muốn tải và cài đặt bản cập nhật mới này ngay không?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if confirm == QMessageBox.StandardButton.Yes:
-            run_download_update(parent_widget, is_frozen, root_path)
-
-    check_thread.finished_signal.connect(on_check_finished)
-    check_thread.start()
-    parent_widget._check_thread = check_thread
+    """Prompts the user for confirmation and directly downloads/installs the latest code from GitHub main branch."""
+    confirm = QMessageBox.question(
+        parent_widget,
+        "Xác nhận cập nhật",
+        "Bạn có muốn tải xuống và cập nhật mã nguồn mới nhất từ GitHub không?\nQuá trình này sẽ đồng bộ ứng dụng của bạn với bản mới nhất trên GitHub mà không ảnh hưởng đến cấu hình/dữ liệu cá nhân.",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+    )
+    if confirm == QMessageBox.StandardButton.Yes:
+        run_download_update(parent_widget, is_frozen, root_path)
 
 
 def run_download_update(parent_widget, is_frozen: bool, root_path: Path):
