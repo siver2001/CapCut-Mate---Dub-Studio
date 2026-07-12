@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui.utils import ensure_qt_readable_sticker_preview, find_font_option, repair_mojibake_text
+from gui.config import ROOT
 from tools.dub_studio.font_cache import preload_font
 
 _loaded_fonts: set[str] = set()
@@ -207,11 +208,21 @@ class _SubtitleOverlay(QGraphicsItem):
                 stk_rect = QRectF(sx, sy, sw, sh)
                 
                 painter.save()
-                painter.setBrush(QColor(6, 182, 212, 120))  # Semi-transparent Cyan
-                painter.setPen(QPen(QColor(6, 182, 212, 220), 1.5, Qt.PenStyle.DashLine))
-                painter.drawRect(stk_rect)
+                texture_path = ROOT / "config" / "blur_texture.png"
+                pix = QPixmap(str(texture_path)) if texture_path.exists() else QPixmap()
                 
-                painter.setPen(QColor("#ffffff"))
+                if not pix.isNull():
+                    painter.drawPixmap(stk_rect.toRect(), pix)
+                else:
+                    from PyQt6.QtGui import QLinearGradient
+                    grad = QLinearGradient(stk_rect.topLeft(), stk_rect.bottomRight())
+                    grad.setColorAt(0.0, QColor(255, 255, 255, 170))
+                    grad.setColorAt(1.0, QColor(240, 240, 240, 150))
+                    painter.setBrush(grad)
+                    painter.setPen(QPen(QColor(255, 255, 255, 180), 1.5, Qt.PenStyle.DashLine))
+                    painter.drawRect(stk_rect)
+                    
+                painter.setPen(QColor(60, 60, 60, 220) if pix.isNull() else QColor("#ffffff"))
                 painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
                 painter.drawText(stk_rect, int(Qt.AlignmentFlag.AlignCenter), "CHE / MỜ PHỤ ĐỀ")
                 painter.restore()
