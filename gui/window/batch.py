@@ -703,6 +703,15 @@ class WindowBatchMixin:
     def batch_preview_selected(self) -> None:
         if not hasattr(self, "batch_table"):
             return
+        if not hasattr(self, "_batch_preview_timer"):
+            self._batch_preview_timer = QTimer(self)
+            self._batch_preview_timer.setSingleShot(True)
+            self._batch_preview_timer.timeout.connect(self._batch_preview_selected_debounced)
+        self._batch_preview_timer.start(250)  # 250ms debounce delay
+
+    def _batch_preview_selected_debounced(self) -> None:
+        if not hasattr(self, "batch_table"):
+            return
         row = self.batch_table.currentRow()
         
         # Back up global stickers if not done yet

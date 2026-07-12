@@ -78,12 +78,8 @@ class WindowWorkflowMixin:
         refresh_all: bool = False,
     ) -> None:
         source_path = Path(video_path)
-        try:
-            preview_analysis = self._build_quick_preview_analysis(source_path)
-        except Exception:
-            preview_analysis = None
-        self.preview_media_analysis = preview_analysis
-
+        
+        # Load video into player immediately (Qt6 handles loading asynchronously in C++)
         video_preview = getattr(self, "_video_preview_widget", None)
         if video_preview is not None:
             video_preview.load_video(source_path)
@@ -96,10 +92,41 @@ class WindowWorkflowMixin:
             _tabs = getattr(self, "main_tabs", None)
             if _tabs is not None:
                 _tabs.setCurrentWidget(self.preview_page)
-        if refresh_all:
-            self.refresh_all()
-        else:
-            self.refresh_preview()
+
+        # Offload synchronous get_video_meta and extract_thumbnail to background thread to prevent lag
+        def worker():
+            try:
+                preview_analysis = self._build_quick_preview_analysis(source_path)
+            except Exception:
+                preview_analysis = None
+            
+            def update_gui():
+                # Verify that the user has not switched to another video during extraction
+                current_widget_path = None
+                if hasattr(self, "batch_table"):
+                    row = self.batch_table.currentRow()
+                    if 0 <= row < len(self._batch_queue):
+                        current_widget_path = Path(self._batch_queue[row].input_path).resolve()
+                
+                if current_widget_path is None and hasattr(self, "precut_video_table"):
+                    row = self.precut_video_table.currentRow()
+                    if 0 <= row < len(self._batch_queue):
+                        current_widget_path = Path(self._batch_queue[row].input_path).resolve()
+                
+                if current_widget_path is None:
+                    current_widget_path = source_path.resolve()
+                    
+                if current_widget_path == source_path.resolve():
+                    self.preview_media_analysis = preview_analysis
+                    if refresh_all:
+                        self.refresh_all()
+                    else:
+                        self.refresh_preview()
+            
+            QTimer.singleShot(0, update_gui)
+            
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
 
     @staticmethod
     def _format_render_preview_time(ms: int) -> str:

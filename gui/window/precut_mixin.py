@@ -35,6 +35,13 @@ class WindowPrecutMixin:
 
     def on_precut_video_selected(self) -> None:
         """Callback when a video is selected in the left list."""
+        if not hasattr(self, "_precut_preview_timer"):
+            self._precut_preview_timer = QTimer(self)
+            self._precut_preview_timer.setSingleShot(True)
+            self._precut_preview_timer.timeout.connect(self._on_precut_video_selected_debounced)
+        self._precut_preview_timer.start(250)  # 250ms debounce delay
+
+    def _on_precut_video_selected_debounced(self) -> None:
         row = self.precut_video_table.currentRow()
         if row < 0 or row >= len(self._batch_queue):
             self.precut_ranges_table.setRowCount(0)

@@ -667,6 +667,7 @@ class VideoPreviewWidget(QWidget):
         if not video_path.exists():
             return False
         self._player.stop()
+        self._player.setSource(QUrl())  # Reset source to release previous file locks and reset media graph
         self._pause_after_load = True
         self._player.setSource(QUrl.fromLocalFile(str(video_path)))
         self._player.setPosition(0)
