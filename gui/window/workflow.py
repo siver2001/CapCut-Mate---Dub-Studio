@@ -2747,6 +2747,7 @@ class WindowWorkflowMixin:
         output_directory = self.output_dir_edit.text().strip()
         if not output_directory and hasattr(self, "output_folder_quick_edit"):
             output_directory = self.output_folder_quick_edit.text().strip()
+        self.sync_output_directory_inputs(output_directory)
         self.settings["outputDirectory"] = output_directory
         self.settings["draftRoot"] = self.draft_dir_edit.text().strip()
         self.settings["subtitleRegion"] = {
@@ -3302,6 +3303,7 @@ class WindowWorkflowMixin:
 
         self.output_dir_edit.setText(self.settings["outputDirectory"])
         self.output_folder_quick_edit.setText(self.settings["outputDirectory"])
+        self.sync_output_directory_inputs(self.settings["outputDirectory"])
         self.draft_dir_edit.setText(self.settings["draftRoot"])
         self.region_x_spin.setValue(int(self.settings["subtitleRegion"]["x"]))
         self.region_y_spin.setValue(int(self.settings["subtitleRegion"]["y"]))
