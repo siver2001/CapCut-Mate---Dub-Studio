@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 
-from gui.config import DEFAULT_OUTPUT_DIR
+from gui.config import DEFAULT_OUTPUT_DIR, ROOT
 from gui.utils import repair_mojibake_text
 
 
@@ -94,6 +94,8 @@ class WindowBatchMixin:
                 continue
             self._batch_queue.append(_BatchItem(p))
             last_added_index = len(self._batch_queue) - 1
+        if hasattr(self, "load_precut_configurations"):
+            self.load_precut_configurations()
         self._refresh_batch_ui()
         if last_added_index >= 0 and hasattr(self, "batch_table"):
             self.batch_table.selectRow(last_added_index)
@@ -132,6 +134,8 @@ class WindowBatchMixin:
             self._update_batch_log(f"  • Bỏ qua vì đã có trong batch: {Path(video_path).name}")
             return False
         self._batch_queue.append(_BatchItem(video_path))
+        if hasattr(self, "load_precut_configurations"):
+            self.load_precut_configurations()
         self._refresh_batch_ui()
         return True
 
@@ -327,7 +331,7 @@ class WindowBatchMixin:
                 item.detail_status = "✂️ Đang cắt bỏ các đoạn thừa..."
                 self._refresh_batch_ui()
                 
-                precut_dir = Path("temp/precut")
+                precut_dir = ROOT / "temp" / "precut"
                 precut_dir.mkdir(parents=True, exist_ok=True)
                 precut_path = precut_dir / f"{input_path.stem}_precut_{uuid.uuid4().hex[:8]}.mp4"
                 

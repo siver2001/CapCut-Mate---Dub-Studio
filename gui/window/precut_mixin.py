@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QTableWidgetItem, QMessageBox, QHeaderView
 from tools.dub_studio.cli_parts.precut import merge_intervals, validate_interval, precut_video
 from tools.dub_studio.media_utils import get_video_meta
 from gui.utils import repair_mojibake_text
+from gui.config import ROOT
 
 logger = logging.getLogger("dub_studio.precut_mixin")
 
@@ -213,7 +214,7 @@ class WindowPrecutMixin:
             QMessageBox.information(self, "Thông tin", "Video này chưa thiết lập khoảng loại bỏ nào.")
             return
             
-        temp_preview = Path("temp/precut_preview_temp.mp4")
+        temp_preview = ROOT / "temp" / "precut_preview_temp.mp4"
         temp_preview.parent.mkdir(parents=True, exist_ok=True)
         
         self._update_batch_log(f"Đang chuẩn bị cắt thử xem trước cho {Path(item.input_path).name}...")
@@ -229,7 +230,7 @@ class WindowPrecutMixin:
 
     def _auto_save_precut_configs(self) -> None:
         """Automatically save configuration metadata for excluded ranges."""
-        config_path = Path("temp/precut_configurations.json")
+        config_path = ROOT / "temp" / "precut_configurations.json"
         data = []
         for item in self._batch_queue:
             data.append({
@@ -247,7 +248,7 @@ class WindowPrecutMixin:
 
     def on_precut_save_config(self) -> None:
         """Save configuration metadata for excluded ranges."""
-        config_path = Path("temp/precut_configurations.json")
+        config_path = ROOT / "temp" / "precut_configurations.json"
         data = []
         for item in self._batch_queue:
             data.append({
@@ -264,7 +265,7 @@ class WindowPrecutMixin:
 
     def load_precut_configurations(self) -> None:
         """Load configuration metadata if any exists."""
-        config_path = Path("temp/precut_configurations.json")
+        config_path = ROOT / "temp" / "precut_configurations.json"
         if not config_path.exists():
             return
         try:

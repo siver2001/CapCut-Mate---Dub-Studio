@@ -994,7 +994,7 @@ class WindowWorkflowMixin:
             
             # Pre-cut video in single mode if excluded ranges exist in saved configuration
             effective_input_path = input_path
-            config_path = Path("temp/precut_configurations.json")
+            config_path = ROOT / "temp" / "precut_configurations.json"
             if config_path.exists():
                 import json
                 try:
@@ -1018,7 +1018,7 @@ class WindowWorkflowMixin:
                         excluded_ranges = ranges_by_filename.get(fname)
                         
                     if excluded_ranges:
-                        precut_dir = Path("temp/precut")
+                        precut_dir = ROOT / "temp" / "precut"
                         precut_dir.mkdir(parents=True, exist_ok=True)
                         precut_path = precut_dir / f"{Path(input_path).stem}_precut_{uuid.uuid4().hex[:8]}.mp4"
                         
@@ -1049,7 +1049,7 @@ class WindowWorkflowMixin:
         # Check if the user configured pre-cut ranges, but the current analysis is on the original uncut video
         try:
             input_path = self._validate_analysis_input()
-            config_path = Path("temp/precut_configurations.json")
+            config_path = ROOT / "temp" / "precut_configurations.json"
             if config_path.exists():
                 import json
                 with open(config_path, "r", encoding="utf-8") as f:
