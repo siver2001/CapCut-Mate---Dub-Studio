@@ -1568,9 +1568,10 @@ def apply_sticker_overlay(
     else:
         sw, sh = width // 4, height // 4
 
-    # Scale sticker
-    sw_scaled = int(sw * scale)
-    sh_scaled = int(sh * scale)
+    scale_x = float(sticker_options.get("scale_x") or scale)
+    scale_y = float(sticker_options.get("scale_y") or scale)
+    sw_scaled = int(sw * scale_x)
+    sh_scaled = int(sh * scale_y)
     sw_scaled = max(1, sw_scaled)
     sh_scaled = max(1, sh_scaled)
 
@@ -1911,7 +1912,7 @@ def create_capcut_draft(
         if video_duration_us <= 0:
             video_duration_us = 3_000_000
             
-        if end_sec > 0.0:
+        if end_sec > float(stk.get("startTime", 0.0)):
             duration_us = int(end_sec * 1_000_000) - start_us
         else:
             duration_us = video_duration_us - start_us

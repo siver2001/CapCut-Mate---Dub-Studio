@@ -184,7 +184,7 @@ class _SubtitleOverlay(QGraphicsItem):
             end_time = float(stk.get("endTime", 0.0))
             if pos_sec < start_time:
                 continue
-            if end_time > 0.0 and pos_sec > end_time:
+            if end_time > start_time and pos_sec > end_time:
                 continue
                 
             pixmap = self._sticker_pixmaps.get(stk_id)
