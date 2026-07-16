@@ -302,25 +302,53 @@ _ALL_SFX_KEYWORDS = _SFX_KEYWORDS_ZH | _SFX_KEYWORDS_EN | _SFX_KEYWORDS_JA | _SF
 def _is_non_dialogue_sfx(text: str) -> bool:
     """Return True if *text* is a non-dialogue sound-effect annotation.
 
-    Matches patterns like (笑), [音乐], （拍手）, 【效果音】, (laughing), etc.
+    Matches bracketed patterns like (笑), [音乐], (laughing), etc.,
+    or standalone animal barks and non-speech sounds (e.g. "woof", "汪汪", "laughter").
     These should NOT be translated – they are not spoken dialogue.
     """
-    clean = normalize_text(text)
+    clean = normalize_text(text).strip().lower()
     if not clean:
         return False
+        
+    # 1. Match bracketed patterns like [laughter], (music), etc.
     match = _NON_DIALOGUE_PATTERN.match(clean)
-    if not match:
-        return False
-    inner = match.group(1).strip().lower()
-    if not inner:
-        return True  # empty brackets like () or []
-    # Check against known SFX keywords
-    if inner in _ALL_SFX_KEYWORDS:
-        return True
-    # Partial match for compound descriptions like "观众笑" or "background music"
-    for keyword in _ALL_SFX_KEYWORDS:
-        if keyword in inner:
+    if match:
+        inner = match.group(1).strip()
+        if not inner:
             return True
+        if inner in _ALL_SFX_KEYWORDS:
+            return True
+        for keyword in _ALL_SFX_KEYWORDS:
+            if keyword in inner:
+                return True
+                
+    # 2. Match standalone animal sounds / SFX words (without brackets)
+    # This prevents barking or non-speech annotations from being translated and dubbed
+    clean_words = [w.strip(".,!?\"'()[]{}") for w in clean.split()]
+    clean_words = [w for w in clean_words if w]
+    if not clean_words:
+        return True
+        
+    # Words to filter out if the entire segment consists only of them
+    sfx_standalone_words = {
+        # English animal sounds
+        "woof", "bark", "barks", "barking", "growl", "growls", "growling", 
+        "meow", "meows", "meowing", "hiss", "purr", "purring", "howl", "howling", 
+        "whimper", "whimpering", "chirp", "chirping", "squeak", "squeaking", "snort",
+        # English human non-speech
+        "laughter", "laugh", "laughing", "sigh", "sighs", "sighing", "gasp", "gasps", 
+        "yawn", "cough", "coughing", "gasping", "groan", "groans", "groaning", "screaming", 
+        "snoring", "giggle", "giggles", "giggling", "snicker", "snickers", "snickering",
+        # Chinese animal sounds
+        "汪汪", "喵喵", "嗷嗷", "哼哼", "嘶嘶", "咩咩", "喔喔", "嘎嘎", "呱呱", "汪", "喵", "嗷",
+        # Chinese non-speech
+        "笑声", "哭声", "叹气", "鼓掌", "掌声", "喘气", "哈欠", "咳嗽", "呻吟"
+    }
+    
+    # If all words in the segment are in the SFX set, it is a non-dialogue segment
+    if all(word in sfx_standalone_words for word in clean_words):
+        return True
+        
     return False
 
 
@@ -578,11 +606,10 @@ def _build_localization_prompt(
         "- NO NONSENSE & GIBBERISH: Completely eliminate gibberish sentences and Whisper hallucinations. Rewrite them smoothly to match the pet vlog topic.\n"
         "- CONTEXTUAL COHERENCE: Ensure that the story flows logically from one segment to the next. Use the provided context to resolve ambiguities.\n"
         "- GLOBAL THEME ALIGNMENT: Ensure the vocabulary and style match the overall topic of the video (e.g., technical for tech reviews, playful for vlogs).\n"
-        "- PUPPY PERSONA RULES (If Pet Vlog):\n"
-        "  - Host/Narrator self-reference: 'mình' or 'Wantuan'/'Nuomin'.\n"
-        "  - Addressing audience ('姨们'/'Yimen'): Use 'Các cô chú' or 'Cả nhà'. NEVER 'Các dì'.\n"
-        "  - Owner reference: 'Mẹ' or 'Ba'.\n"
-        "  - Specific names: 'Wantuan' (Vằn Thầu), 'Nuomin' (Nhu Mễ). Keep these names consistent.\n"
+        "- NATURAL PRONOUNS & ADDRESSING: Choose natural, context-appropriate Vietnamese pronouns to avoid a robotic feel. Never translate English 'you' or Chinese '你'/'你们' literally as 'bạn'/'các bạn' if it sounds stiff. Instead:\n"
+        "  - If the video is a pet vlog / cute animal video: the narrator self-reference is 'mình' or the pet's name, and audience is 'Các cô chú' or 'Cả nhà'. Use cute, warm, and friendly particles (nè, nha, nhé, cơ, á). Specific names: 'Wantuan' -> 'Vằn Thầu', 'Nuomin' -> 'Nhu Mễ' (keep consistent). Owner reference: 'Mẹ' or 'Ba'.\n"
+        "  - If the video is a tech review, gaming, tutorial, or general vlog: self-reference is 'mình', and audience is 'mọi người', 'cả nhà', or 'anh em' to sound friendly and modern.\n"
+        "  - If the video is an educational, documentational, or news narration: use standard, professional narration pronouns.\n"
         "\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
@@ -774,12 +801,13 @@ def _build_machine_review_prompt(
         f"Source language: {source_language or 'auto-detected language'}.\n"
         f"Style: {localization_mode.replace('_', ' ').title()}\n"
         "\n"
-        "WRITING EXCELLENCE & PET VLOG RULES:\n"
-        "1. BE CREATIVE: Rewrite sentences to be catchy and emotionally resonant. Use natural Vietnamese idioms and wordplay where appropriate.\n"
-        "2. PUPPY CHARM: The narrator is a cute puppy. Use cute particles (nè, nha, nhé, cơ, á). Self-reference = 'mình'.\n"
-        "3. PROPER NAMES: Strictly keep 'Wantuan' and 'Nuomin'. Avoid literal transliterations.\n"
-        "4. AUDIENCE: Translate audience labels as 'Các cô chú' or 'Cả nhà'.\n"
-        "5. TONE: High energy, playful, and expressive. Every segment must sound like it was written by a professional content creator.\n"
+        "WRITING EXCELLENCE & LOCALIZATION RULES:\n"
+        "1. BE CREATIVE: Rewrite sentences to be catchy and emotionally resonant. Use natural Vietnamese idioms, colloquial expressions, and wordplay where appropriate.\n"
+        "2. NATURAL PRONOUNS & ADDRESSING: Choose natural, context-appropriate Vietnamese pronouns to avoid a robotic feel. Never translate 'you' or '你们' literally as 'bạn'/'các bạn' if it sounds stiff. Instead:\n"
+        "   - If the video is a pet vlog / cute animal video: the narrator self-reference is 'mình' or the pet's name, and audience is 'Các cô chú' or 'Cả nhà'. Use cute, warm, and friendly particles (nè, nha, nhé, cơ, á). Specific names: 'Wantuan' -> 'Vằn Thầu', 'Nuomin' -> 'Nhu Mễ' (keep consistent). Owner reference: 'Mẹ' or 'Ba'.\n"
+        "   - If the video is a tech review, gaming, tutorial, or general vlog: self-reference is 'mình', and audience is 'mọi người', 'cả nhà', or 'anh em' to sound natural and engaging.\n"
+        "   - If the video is an educational, documentational, or news narration: use standard, professional narration pronouns.\n"
+        "3. TONE: Playful, expressive, and high-energy. Every segment must sound like it was written by a professional content creator.\n"
         "6. PACING: Aim for 'targetSpokenChars'. If a segment is long (high duration), expand the text to avoid silence. If short, condense it.\n"
         "7. LANGUAGE-SPECIFIC POLISHING:\n"
         "   - English: Avoid literal word-by-word translations, use natural spoken Vietnamese structures.\n"
