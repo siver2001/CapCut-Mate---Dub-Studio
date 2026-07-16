@@ -9,7 +9,7 @@ from gui.utils import (
     resolve_preview_caption_placement,
 )
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QPointF
 from PyQt6.QtGui import QPainter, QColor, QImage, QPixmap, QPen, QFont
 
 from tools.dub_studio.font_cache import preload_font
@@ -31,6 +31,8 @@ class PreviewCanvas(QWidget):
     watermark_scale_changed = pyqtSignal(float)
     sticker_dragged = pyqtSignal(float, float)
     sticker_scaled = pyqtSignal(float, float)
+    sticker_selected = pyqtSignal(int)
+    sticker_deleted = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -47,6 +49,8 @@ class PreviewCanvas(QWidget):
         self._sticker_pixmaps = {}
         self._sticker_rect = QRectF()
         self._sticker_handle_rect = QRectF()
+        self._sticker_delete_rect = QRectF()
+        self._sticker_rects = {}
         self._dragging_sticker = False
         self._resizing_sticker = False
         self._drag_offset_x = 0.0
@@ -210,6 +214,8 @@ class PreviewCanvas(QWidget):
         # Reset current sticker rects
         self._sticker_rect = QRectF()
         self._sticker_handle_rect = QRectF()
+        self._sticker_delete_rect = QRectF()
+        self._sticker_rects = {}
         
         for i, stk in enumerate(stickers_list):
             stk_id = str(stk.get("stickerId") or stk.get("sticker_id") or "")
@@ -268,6 +274,8 @@ class PreviewCanvas(QWidget):
                 painter.drawText(stk_rect, int(Qt.AlignmentFlag.AlignCenter), label)
                 painter.restore()
                 
+            self._sticker_rects[i] = stk_rect
+            
             if is_current:
                 self._sticker_rect = stk_rect
                 # Draw dashed border
@@ -285,6 +293,31 @@ class PreviewCanvas(QWidget):
                     handle_size
                 )
                 painter.fillRect(self._sticker_handle_rect, QColor("#facc15"))
+                
+                # Draw delete handle (14x14 red box with white X at top left)
+                delete_size = 14.0
+                self._sticker_delete_rect = QRectF(
+                    self._sticker_rect.left() - delete_size / 2,
+                    self._sticker_rect.top() - delete_size / 2,
+                    delete_size,
+                    delete_size
+                )
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#ef4444"))
+                painter.drawEllipse(self._sticker_delete_rect)
+                
+                # Draw white X lines
+                painter.setPen(QPen(QColor("#ffffff"), 1.5, Qt.PenStyle.SolidLine))
+                x_pad = 3.5
+                painter.drawLine(
+                    QPointF(self._sticker_delete_rect.left() + x_pad, self._sticker_delete_rect.top() + x_pad),
+                    QPointF(self._sticker_delete_rect.right() - x_pad, self._sticker_delete_rect.bottom() - x_pad)
+                )
+                painter.drawLine(
+                    QPointF(self._sticker_delete_rect.right() - x_pad, self._sticker_delete_rect.top() + x_pad),
+                    QPointF(self._sticker_delete_rect.left() + x_pad, self._sticker_delete_rect.bottom() - x_pad)
+                )
+                
                 painter.restore()
 
         subtitle_preset = self.settings.get("subtitlePreset") or {}
@@ -516,6 +549,18 @@ class PreviewCanvas(QWidget):
     def mousePressEvent(self, event) -> None:
         if (
             event.button() == Qt.MouseButton.LeftButton
+            and hasattr(self, "_sticker_delete_rect")
+            and not self._sticker_delete_rect.isNull()
+            and self._sticker_delete_rect.contains(event.position())
+        ):
+            self.sticker_deleted.emit()
+            event.accept()
+            return
+
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and hasattr(self, "_sticker_handle_rect")
+            and not self._sticker_handle_rect.isNull()
             and self._sticker_handle_rect.contains(event.position())
         ):
             self._resizing_sticker = True
@@ -523,16 +568,29 @@ class PreviewCanvas(QWidget):
             event.accept()
             return
             
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and self._sticker_rect.contains(event.position())
-        ):
-            self._dragging_sticker = True
-            self._drag_offset_x = float(event.position().x() - self._sticker_rect.center().x())
-            self._drag_offset_y = float(event.position().y() - self._sticker_rect.center().y())
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
-            event.accept()
-            return
+        if event.button() == Qt.MouseButton.LeftButton and hasattr(self, "_sticker_rects") and self._sticker_rects:
+            clicked_idx = -1
+            # Check in reverse to select top-most first
+            for i in sorted(self._sticker_rects.keys(), reverse=True):
+                rect = self._sticker_rects[i]
+                if rect and rect.contains(event.position()):
+                    clicked_idx = i
+                    break
+            
+            if clicked_idx >= 0:
+                current_idx = self.settings.get("currentStickerIndex", 0)
+                if clicked_idx != current_idx:
+                    self.sticker_selected.emit(clicked_idx)
+                    # Update local state immediately to avoid dragging delay
+                    self.settings["currentStickerIndex"] = clicked_idx
+                    self._sticker_rect = self._sticker_rects[clicked_idx]
+                
+                self._dragging_sticker = True
+                self._drag_offset_x = float(event.position().x() - self._sticker_rects[clicked_idx].center().x())
+                self._drag_offset_y = float(event.position().y() - self._sticker_rects[clicked_idx].center().y())
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+                event.accept()
+                return
 
         if (
             event.button() == Qt.MouseButton.LeftButton

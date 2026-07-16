@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QRectF, QEvent, QUrl, QSizeF, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QEvent, QUrl, QSizeF, QTimer, pyqtSignal, QPointF
 from PyQt6.QtGui import QImage, QPainter, QPixmap, QPen, QFont, QColor
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -56,6 +56,8 @@ class _SubtitleOverlay(QGraphicsItem):
         self._watermark_opts: dict[str, Any] = {}
         self._sticker_rect = QRectF()
         self._sticker_handle_rect = QRectF()
+        self._sticker_delete_rect = QRectF()
+        self._sticker_rects = {}
         self._watermark_rect = QRectF()
         self._watermark_handle_rect = QRectF()
 
@@ -171,6 +173,8 @@ class _SubtitleOverlay(QGraphicsItem):
         self._sticker_handle_rect = QRectF()
         self._sticker_handle_width_rect = QRectF()
         self._sticker_handle_height_rect = QRectF()
+        self._sticker_delete_rect = QRectF()
+        self._sticker_rects = {}
         
         current_idx = self._subtitle_data.get("currentStickerIndex", 0)
         
@@ -266,6 +270,7 @@ class _SubtitleOverlay(QGraphicsItem):
                 painter.drawText(stk_rect, int(Qt.AlignmentFlag.AlignCenter), label)
                 painter.restore()
                 
+            self._sticker_rects[i] = stk_rect
             is_current = (i == current_idx)
             if is_current:
                 self._sticker_rect = stk_rect
@@ -299,6 +304,31 @@ class _SubtitleOverlay(QGraphicsItem):
                 painter.fillRect(self._sticker_handle_rect, QColor("#facc15"))       # Yellow
                 painter.fillRect(self._sticker_handle_width_rect, QColor("#06b6d4"))  # Cyan
                 painter.fillRect(self._sticker_handle_height_rect, QColor("#ec4899")) # Magenta
+                
+                # Draw delete handle (14x14 red box with white X at top left)
+                delete_size = 14.0
+                self._sticker_delete_rect = QRectF(
+                    self._sticker_rect.left() - delete_size / 2,
+                    self._sticker_rect.top() - delete_size / 2,
+                    delete_size,
+                    delete_size
+                )
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#ef4444"))
+                painter.drawEllipse(self._sticker_delete_rect)
+                
+                # Draw white X lines
+                painter.setPen(QPen(QColor("#ffffff"), 1.5, Qt.PenStyle.SolidLine))
+                x_pad = 3.5
+                painter.drawLine(
+                    QPointF(self._sticker_delete_rect.left() + x_pad, self._sticker_delete_rect.top() + x_pad),
+                    QPointF(self._sticker_delete_rect.right() - x_pad, self._sticker_delete_rect.bottom() - x_pad)
+                )
+                painter.drawLine(
+                    QPointF(self._sticker_delete_rect.right() - x_pad, self._sticker_delete_rect.top() + x_pad),
+                    QPointF(self._sticker_delete_rect.left() + x_pad, self._sticker_delete_rect.bottom() - x_pad)
+                )
+                
                 painter.restore()
             else:
                 # Border for non-selected sticker
@@ -535,6 +565,8 @@ class VideoPreviewWidget(QWidget):
     watermark_scale_changed = pyqtSignal(float)
     sticker_dragged = pyqtSignal(float, float)
     sticker_scaled = pyqtSignal(float, float)
+    sticker_selected = pyqtSignal(int)
+    sticker_deleted = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -993,27 +1025,50 @@ class VideoPreviewWidget(QWidget):
                         pos = event.position()
                         scene_pos = self._video_view.mapToScene(pos.toPoint())
                         
-                        if hasattr(self._overlay, "_sticker_handle_rect") and self._overlay._sticker_handle_rect.contains(scene_pos):
+                        if hasattr(self._overlay, "_sticker_delete_rect") and not self._overlay._sticker_delete_rect.isNull() and self._overlay._sticker_delete_rect.contains(scene_pos):
+                            self.sticker_deleted.emit()
+                            return True
+
+                        if hasattr(self._overlay, "_sticker_handle_rect") and not self._overlay._sticker_handle_rect.isNull() and self._overlay._sticker_handle_rect.contains(scene_pos):
                             self._resizing_sticker = True
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
                             return True
                             
-                        if hasattr(self._overlay, "_sticker_handle_width_rect") and self._overlay._sticker_handle_width_rect.contains(scene_pos):
+                        if hasattr(self._overlay, "_sticker_handle_width_rect") and not self._overlay._sticker_handle_width_rect.isNull() and self._overlay._sticker_handle_width_rect.contains(scene_pos):
                             self._resizing_sticker_width = True
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeHorCursor)
                             return True
                             
-                        if hasattr(self._overlay, "_sticker_handle_height_rect") and self._overlay._sticker_handle_height_rect.contains(scene_pos):
+                        if hasattr(self._overlay, "_sticker_handle_height_rect") and not self._overlay._sticker_handle_height_rect.isNull() and self._overlay._sticker_handle_height_rect.contains(scene_pos):
                             self._resizing_sticker_height = True
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeVerCursor)
                             return True
+
+                        if hasattr(self._overlay, "_sticker_rects") and self._overlay._sticker_rects:
+                            clicked_idx = -1
+                            # Check in reverse to select top-most first
+                            for i in sorted(self._overlay._sticker_rects.keys(), reverse=True):
+                                rect = self._overlay._sticker_rects[i]
+                                if rect and rect.contains(scene_pos):
+                                    clicked_idx = i
+                                    break
                             
-                        if hasattr(self._overlay, "_sticker_rect") and self._overlay._sticker_rect.contains(scene_pos):
-                            self._dragging_sticker = True
-                            self._drag_offset_x = float(scene_pos.x() - self._overlay._sticker_rect.center().x())
-                            self._drag_offset_y = float(scene_pos.y() - self._overlay._sticker_rect.center().y())
-                            self._video_view.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
-                            return True
+                            if clicked_idx >= 0:
+                                if clicked_idx != self._current_sticker_idx:
+                                    self.sticker_selected.emit(clicked_idx)
+                                    self._current_sticker_idx = clicked_idx
+                                    self._overlay.update_overlay(
+                                        {**self._overlay._subtitle_data, "currentStickerIndex": clicked_idx},
+                                        self._stickers,
+                                        self._sticker_pixmaps,
+                                        self._watermark_opts
+                                    )
+                                # Start dragging
+                                self._dragging_sticker = True
+                                self._drag_offset_x = float(scene_pos.x() - self._overlay._sticker_rects[clicked_idx].center().x())
+                                self._drag_offset_y = float(scene_pos.y() - self._overlay._sticker_rects[clicked_idx].center().y())
+                                self._video_view.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
+                                return True
                             
                         if hasattr(self._overlay, "_watermark_handle_rect") and self._overlay._watermark_handle_rect.contains(scene_pos):
                             self._resizing_watermark = True
@@ -1108,7 +1163,9 @@ class VideoPreviewWidget(QWidget):
                         
                     else:
                         # Update hover cursor shape
-                        if hasattr(self._overlay, "_sticker_handle_rect") and self._overlay._sticker_handle_rect.contains(scene_pos):
+                        if hasattr(self._overlay, "_sticker_delete_rect") and self._overlay._sticker_delete_rect.contains(scene_pos):
+                            self._video_view.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                        elif hasattr(self._overlay, "_sticker_handle_rect") and self._overlay._sticker_handle_rect.contains(scene_pos):
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
                         elif hasattr(self._overlay, "_sticker_handle_width_rect") and self._overlay._sticker_handle_width_rect.contains(scene_pos):
                             self._video_view.viewport().setCursor(Qt.CursorShape.SizeHorCursor)
