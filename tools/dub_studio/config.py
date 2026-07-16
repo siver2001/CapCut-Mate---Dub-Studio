@@ -99,6 +99,9 @@ LLAMA_CPP_MODEL_URL = env_value("DUB_LLAMA_CPP_MODEL_URL", default="")
 
 DUB_TRANSCRIBE_PROVIDER = env_value("DUB_TRANSCRIBE_PROVIDER", default="auto").lower()
 DUB_TRANSLATE_PROVIDER = env_value("DUB_TRANSLATE_PROVIDER", default="ollama").lower()
+if DUB_TRANSLATE_PROVIDER in {"gemini", "cloud"}:
+    os.environ["DUB_AI_MODE"] = "cloud"
+    DUB_TRANSLATE_PROVIDER = "ollama"
 MICROSOFT_TRANSLATOR_KEY = env_value(
     "DUB_MICROSOFT_TRANSLATOR_KEY",
     "MICROSOFT_TRANSLATOR_KEY",
