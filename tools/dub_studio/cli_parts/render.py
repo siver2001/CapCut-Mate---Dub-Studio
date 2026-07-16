@@ -190,6 +190,7 @@ def _split_translated_segments_by_sentence(translated_segments: list[dict[str, A
             new_item = copy.deepcopy(item)
             new_item["id"] = f"seg_{seg_index:04d}"
             new_item["index"] = seg_index
+            new_item["_original_id"] = item.get("id")
             new_segments.append(new_item)
             seg_index += 1
             continue
@@ -222,6 +223,7 @@ def _split_translated_segments_by_sentence(translated_segments: list[dict[str, A
             new_item["endMs"] = current_end
             new_item["translatedText"] = s
             new_item["subtitleChunks"] = split_display_text(s)
+            new_item["_original_id"] = item.get("id")
             
             new_segments.append(new_item)
             seg_index += 1
@@ -234,20 +236,41 @@ def _split_translated_segments_by_sentence(translated_segments: list[dict[str, A
             continue
         last = merged_segments[-1]
         gap = seg["startMs"] - last["endMs"]
-        combined_text = (last["sourceText"] + " " + seg["sourceText"]).strip()
+        
+        # Decide how to combine source text
+        is_same_origin = (
+            seg.get("_original_id") is not None 
+            and last.get("_original_id") is not None 
+            and seg["_original_id"] == last["_original_id"]
+        )
+        if is_same_origin:
+            combined_source = last["sourceText"]
+        else:
+            combined_source = (last["sourceText"] + " " + seg["sourceText"]).strip()
+            
+        combined_translated = (last.get("translatedText") or last.get("sourceText") or "").strip()
+        current_translated = (seg.get("translatedText") or seg.get("sourceText") or "").strip()
+        combined_translated = (combined_translated + " " + current_translated).strip()
+        
         # Merge if they have the same speaker, the gap is small (< 500ms), and the text is not too long.
-        if seg["speakerId"] == last["speakerId"] and (gap < 500 or (last["endMs"] - last["startMs"] < 1500)) and len(combined_text) < 80:
+        if (
+            seg["speakerId"] == last["speakerId"] 
+            and (gap < 500 or (last["endMs"] - last["startMs"] < 1500)) 
+            and len(combined_source) < 80
+        ):
             last["endMs"] = seg["endMs"]
-            last["sourceText"] = combined_text
-            last["subtitleChunks"] = split_display_text(combined_text)
+            last["sourceText"] = combined_source
+            last["translatedText"] = combined_translated
+            last["subtitleChunks"] = split_display_text(combined_translated)
         else:
             merged_segments.append(seg)
             
-    # Reindex the merged segments
+    # Reindex the merged segments and clean up temporary keys
     for i, seg in enumerate(merged_segments):
         seg["id"] = f"seg_{(i+1):04d}"
         seg["index"] = i + 1
-
+        seg.pop("_original_id", None)
+        
     return merged_segments
 
 
