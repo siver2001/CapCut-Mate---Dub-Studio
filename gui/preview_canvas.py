@@ -334,7 +334,8 @@ class PreviewCanvas(QWidget):
                 if preload_font(font_family):
                     _loaded_fonts.add(font_family)
             base_font = QFont(font_family)
-            base_font.setPixelSize(max(int(subtitle_preset.get("fontSize", 20)), 8))
+            initial_font_size = max(int(subtitle_preset.get("fontSize", 20)), 8)
+            base_font.setPixelSize(initial_font_size)
             base_font.setBold(True)
             placement, offset = resolve_preview_caption_placement(
                 str(subtitle_preset.get("positionPreset") or "bottom"),
@@ -347,7 +348,22 @@ class PreviewCanvas(QWidget):
                 repair_mojibake_text(self.preview_text or ""),
                 int(subtitle_preset.get("maxWordsPerChunk", 5)),
             )
+            
+            # Check and apply auto-shrink if the text is too wide for the target frame
             max_text_width = target.width() * 0.76
+            preview_lines = preview_text.splitlines() or [preview_text]
+            widest_line = max(preview_lines, key=len) if preview_lines else preview_text
+            raw_text_width = metrics.horizontalAdvance(widest_line.replace("\n", " "))
+            
+            if raw_text_width > max_text_width and max_text_width > 0:
+                scale_factor = max_text_width / raw_text_width
+                scale_factor = max(0.40, scale_factor)
+                scaled_font_size = int(initial_font_size * scale_factor)
+                base_font.setPixelSize(scaled_font_size)
+                painter.setFont(base_font)
+                metrics = painter.fontMetrics()
+                metrics_height = metrics.boundingRect("Ag").height()
+                
             text_width = min(metrics.horizontalAdvance(preview_text.replace("\n", " ")), max_text_width)
             box_enabled = bool(subtitle_preset.get("boxEnabled", False))
             box_layout_mode = str(subtitle_preset.get("boxLayoutMode", "line") or "line").strip().lower()

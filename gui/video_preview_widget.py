@@ -435,12 +435,27 @@ class _SubtitleOverlay(QGraphicsItem):
             if preload_font(font_family):
                 _loaded_fonts.add(font_family)
         base_font = QFont(font_family)
-        base_font.setPixelSize(max(int(subtitle_preset.get("fontSize", 20)), 8))
+        initial_font_size = max(int(subtitle_preset.get("fontSize", 20)), 8)
+        base_font.setPixelSize(initial_font_size)
         base_font.setBold(True)
         painter.setFont(base_font)
         metrics = painter.fontMetrics()
         max_words = int(subtitle_preset.get("maxWordsPerChunk", 5))
         preview_lines = self._build_preview_lines(current_text, max_words)
+        
+        # Check and apply auto-shrink if the text is too wide for the video frame
+        max_text_width = frame_rect.width() * 0.76
+        widest_line = max(preview_lines, key=len) if preview_lines else (current_text or "")
+        raw_text_width = metrics.horizontalAdvance(widest_line.replace("\n", " "))
+        
+        if raw_text_width > max_text_width and max_text_width > 0:
+            scale_factor = max_text_width / raw_text_width
+            scale_factor = max(0.40, scale_factor)
+            scaled_font_size = int(initial_font_size * scale_factor)
+            base_font.setPixelSize(scaled_font_size)
+            painter.setFont(base_font)
+            metrics = painter.fontMetrics()
+            
         content_height = metrics.boundingRect("Ag").height()
         line_gap = max(int(content_height * 0.3), 4)
         box_enabled = bool(subtitle_preset.get("boxEnabled", False))
@@ -450,7 +465,7 @@ class _SubtitleOverlay(QGraphicsItem):
         box_border_width = max(int(subtitle_preset.get("boxBorderWidth", 2)), 0)
         box_fill_opacity = max(min(float(subtitle_preset.get("boxFillOpacity", 0.8)), 1.0), 0.0)
         box_border_opacity = max(min(float(subtitle_preset.get("boxBorderOpacity", 1.0)), 1.0), 0.0)
-        max_text_width = frame_rect.width() * 0.76
+        
         text_width = min(
             metrics.horizontalAdvance((current_text or " ").replace("\n", " ")),
             max_text_width,

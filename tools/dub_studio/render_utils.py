@@ -285,6 +285,16 @@ def compose_ass(
         
         w, h = get_text_pixel_size(content, ass_font_name, font_size)
         
+        # Prevent text from bleeding off the screen edges by scaling down the font size
+        max_safe_width = int(res_x * 0.90)
+        line_font_size = font_size
+        if w > max_safe_width and max_safe_width > 0:
+            scale_factor = max_safe_width / w
+            scale_factor = max(0.40, scale_factor)
+            line_font_size = int(font_size * scale_factor)
+            w, h = get_text_pixel_size(content, ass_font_name, line_font_size)
+            content = f"{{\\fs{line_font_size}}}" + content
+        
         if position:
             cx = int(position['centerX'])
             cy = int(position['centerY']) - max(int(font_size * 0.12), 4)
