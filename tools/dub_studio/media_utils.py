@@ -135,7 +135,15 @@ def ffprobe_audio_duration_ms(path: Path, timeout: float | None = None) -> int:
         path=path,
         timeout=effective_timeout,
     )
-    return int(float(raw) * 1000)
+    try:
+        return int(float(raw.strip()) * 1000)
+    except Exception:
+        try:
+            probe = ffprobe_json(path)
+            dur = float(probe.get("format", {}).get("duration", 0.0))
+            return int(dur * 1000)
+        except Exception:
+            return 0
 
 
 def validate_generated_audio_file(path: Path, *, context: str) -> None:
