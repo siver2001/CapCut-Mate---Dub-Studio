@@ -1,6 +1,8 @@
 import sys
 import os
 
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 if getattr(sys, 'frozen', False):
     ROOT_DIR = os.path.dirname(os.path.abspath(sys.executable))
     if ROOT_DIR not in sys.path:

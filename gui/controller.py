@@ -311,8 +311,9 @@ class DubStudioJobController(QWidget):
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         env.insert("PYTHONUNBUFFERED", "1")
+        env.insert("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         for key, val in os.environ.items():
-            if key.startswith("DUB_") or key.startswith("HF_") or key.startswith("OLLAMA_"):
+            if key.startswith("DUB_") or key.startswith("HF_") or key.startswith("OLLAMA_") or key.startswith("PYTORCH_"):
                 env.insert(key, val)
         process.setProcessEnvironment(env)
         process.setProgram(str(PIPELINE_PYTHON))

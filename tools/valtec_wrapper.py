@@ -167,34 +167,41 @@ class ValtecProvider:
             selected_voice = voice_name or "valtec:nf"
             
             # 1. Native VITS presets (speak directly using internal weights)
-            if selected_voice in VALTEC_PRESET_SPEAKER_IDS:
-                speaker_id = VALTEC_PRESET_SPEAKER_IDS[selected_voice]
-                engine = self._load_tts()
-                engine.speak(
-                    text=text,
-                    speaker=speaker_id,
-                    output_path=str(output_path),
-                    speed=speed
-                )
-            # 2. Custom Zero-shot cloning (from the original video's character audio prompt)
-            else:
-                if prompt_audio and prompt_audio.exists():
-                    engine = self._load_zero_shot()
-                    engine.clone_voice(
-                        text=text,
-                        reference_audio=str(prompt_audio),
-                        output_path=str(output_path),
-                        length_scale=speed
-                    )
-                else:
-                    # Fallback to NF preset
-                    engine = self._load_tts()
-                    engine.speak(
-                        text=text,
-                        speaker="NF",
-                        output_path=str(output_path),
-                        speed=speed
-                    )
+            import gc
+            import torch
+
+            try:
+                with torch.inference_mode():
+                    if selected_voice in VALTEC_PRESET_SPEAKER_IDS:
+                        speaker_id = VALTEC_PRESET_SPEAKER_IDS[selected_voice]
+                        engine = self._load_tts()
+                        engine.speak(
+                            text=text,
+                            speaker=speaker_id,
+                            output_path=str(output_path),
+                            speed=speed
+                        )
+                    else:
+                        if prompt_audio and prompt_audio.exists():
+                            engine = self._load_zero_shot()
+                            engine.clone_voice(
+                                text=text,
+                                reference_audio=str(prompt_audio),
+                                output_path=str(output_path),
+                                length_scale=speed
+                            )
+                        else:
+                            engine = self._load_tts()
+                            engine.speak(
+                                text=text,
+                                speaker="NF",
+                                output_path=str(output_path),
+                                speed=speed
+                            )
+            finally:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             
             # Apply dynamic sentence silence gaps to ensure clean natural pauses at punctuation marks
             if output_path.exists() and output_path.stat().st_size > 0:
