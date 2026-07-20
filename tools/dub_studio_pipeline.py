@@ -22,12 +22,36 @@ except Exception:
     from dub_studio.cli import main
 
 
-if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:  # pragma: no cover
+def setup_quiet_excepthook() -> None:
+    def custom_excepthook(exc_type, exc_value, exc_traceback):
+        import traceback
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        err_msg = str(exc_value) or str(exc_type)
         try:
-            print(f"Pipeline failed: {exc}", file=sys.stderr)
+            import json
+            print(f"ERROR::{json.dumps({'message': err_msg})}", flush=True)
+            print(f"Pipeline failed: {err_msg}", file=sys.stderr, flush=True)
+            traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stderr)
+        except Exception:
+            pass
+        sys.exit(1)
+    sys.excepthook = custom_excepthook
+
+
+if __name__ == "__main__":
+    setup_quiet_excepthook()
+    try:
+        ret = main()
+        sys.exit(ret if isinstance(ret, int) else 0)
+    except Exception as exc:  # pragma: no cover
+        import json
+        err_msg = str(exc)
+        try:
+            print(f"ERROR::{json.dumps({'message': err_msg})}", flush=True)
+            print(f"Pipeline failed: {err_msg}", file=sys.stderr, flush=True)
         except (BrokenPipeError, OSError):
             pass
-        raise
+        sys.exit(1)
+

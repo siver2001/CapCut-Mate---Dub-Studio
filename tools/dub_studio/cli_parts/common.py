@@ -25,6 +25,7 @@ import requests
 from ..config import *  # noqa: F401,F403
 from ..io_utils import read_json, write_json
 from ..media_utils import (
+    check_has_usable_audio,
     extract_audio_for_whisperx,
     extract_gray_frame,
     extract_thumbnail,

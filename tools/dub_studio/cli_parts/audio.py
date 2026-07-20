@@ -2461,94 +2461,198 @@ def create_final_audio(
     background_music_volume: float = 0.0,
     video_speed: float = 1.0,
 ) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     normalized_mode = normalize_audio_mix_mode(audio_mix_mode, keep_original_audio=keep_original_audio)
-    video_duration_ms = ffprobe_duration_ms(video_path)
-    if video_speed != 1.0:
+    
+    try:
+        video_duration_ms = ffprobe_duration_ms(video_path)
+    except Exception:
+        video_duration_ms = 0
+    if video_speed != 1.0 and video_duration_ms > 0:
         video_duration_ms = video_duration_ms / video_speed
-    target_duration_ms = max(
-        video_duration_ms,
-        ffprobe_audio_duration_ms(dub_audio_path),
-    )
-    command = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "lavfi",
-        "-t",
-        f"{target_duration_ms / 1000:.3f}",
-        "-i",
-        "anullsrc=channel_layout=stereo:sample_rate=48000",
-    ]
-    filter_parts: list[str] = ["[0:a]anull[base]"]
-    mix_inputs: list[str] = ["[base]"]
-    input_index = 1
-    input_index, background_music_label = append_looped_background_music_input(
-        command,
-        filter_parts,
-        background_music_path=background_music_path,
-        background_music_volume=background_music_volume,
-        target_duration_ms=target_duration_ms,
-        input_index=input_index,
-        label="bgm",
-    )
-    if background_music_label:
-        mix_inputs.append(background_music_label)
-    if normalized_mode == "preserve_background" and background_audio_path and background_audio_path.exists():
-        command.extend(["-i", str(background_audio_path)])
-        if video_speed != 1.0:
-            filter_parts.append(
-                f"[{input_index}:a]{build_atempo_filter(video_speed)},volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
-            )
-        else:
-            filter_parts.append(
-                f"[{input_index}:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
-            )
-        mix_inputs.append("[bed]")
-        input_index += 1
-    elif (normalized_mode == "preserve_original_low" or (normalized_mode == "preserve_background" and keep_original_audio)) and keep_original_audio:
-        has_video_audio = False
-        try:
-            has_video_audio = bool(get_video_meta(video_path).get("hasAudio"))
-        except Exception:
-            has_video_audio = False
-        if has_video_audio:
-            command.extend(["-i", str(video_path)])
+    
+    try:
+        dub_duration_ms = ffprobe_audio_duration_ms(dub_audio_path)
+    except Exception:
+        dub_duration_ms = 0
+        
+    target_duration_ms = max(int(video_duration_ms), int(dub_duration_ms), 1000)
+
+    # Helper function for Primary Mix Attempt
+    def _attempt_full_mix() -> None:
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-t", f"{target_duration_ms / 1000:.3f}",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        ]
+        filters: list[str] = ["[0:a]anull[base]"]
+        mix_in: list[str] = ["[base]"]
+        idx = 1
+
+        idx, bgm_label = append_looped_background_music_input(
+            cmd,
+            filters,
+            background_music_path=background_music_path,
+            background_music_volume=background_music_volume,
+            target_duration_ms=target_duration_ms,
+            input_index=idx,
+            label="bgm",
+        )
+        if bgm_label:
+            mix_in.append(bgm_label)
+
+        if (
+            normalized_mode == "preserve_background"
+            and background_audio_path
+            and background_audio_path.exists()
+            and check_has_usable_audio(background_audio_path)
+        ):
+            cmd.extend(["-i", str(background_audio_path)])
             if video_speed != 1.0:
-                filter_parts.append(
-                    f"[{input_index}:a]{build_atempo_filter(video_speed)},volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
+                filters.append(
+                    f"[{idx}:a]{build_atempo_filter(video_speed)},volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
                 )
             else:
-                filter_parts.append(
-                    f"[{input_index}:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
+                filters.append(
+                    f"[{idx}:a]volume={max(min(DUB_BACKGROUND_AUDIO_GAIN, 1.5), 0.0):.3f}[bed]"
                 )
-            mix_inputs.append("[orig]")
-            input_index += 1
-    command.extend(["-i", str(dub_audio_path)])
-    mix_inputs.append(f"[{input_index}:a]")
-    if len(mix_inputs) == 1:
-        filter_parts.append(f"{mix_inputs[0]}anull[mix]")
-    else:
-        filter_parts.append(
-            "".join(mix_inputs)
-            + f"amix=inputs={len(mix_inputs)}:normalize=0:duration=longest:dropout_transition=0[mix]"
+            mix_in.append("[bed]")
+            idx += 1
+        elif (
+            (normalized_mode == "preserve_original_low" or (normalized_mode == "preserve_background" and keep_original_audio))
+            and keep_original_audio
+            and check_has_usable_audio(video_path)
+        ):
+            cmd.extend(["-i", str(video_path)])
+            if video_speed != 1.0:
+                filters.append(
+                    f"[{idx}:a]{build_atempo_filter(video_speed)},volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
+                )
+            else:
+                filters.append(
+                    f"[{idx}:a]volume={max(min(DUB_ORIGINAL_AUDIO_FALLBACK_GAIN, 0.5), 0.0):.3f}[orig]"
+                )
+            mix_in.append("[orig]")
+            idx += 1
+
+        cmd.extend(["-i", str(dub_audio_path)])
+        mix_in.append(f"[{idx}:a]")
+
+        if len(mix_in) == 1:
+            filters.append(f"{mix_in[0]}anull[mix]")
+        else:
+            filters.append(
+                "".join(mix_in)
+                + f"amix=inputs={len(mix_in)}:normalize=0:duration=longest:dropout_transition=0[mix]"
+            )
+        filters.append(
+            f"[mix]atrim=0:{target_duration_ms / 1000:.3f},{stable_audio_filter_chain()}[aout]"
         )
-    filter_parts.append(
-        f"[mix]atrim=0:{target_duration_ms / 1000:.3f},{stable_audio_filter_chain()}[aout]"
-    )
-    run(
-        [
-            *command,
-            "-filter_complex",
-            ";".join(filter_parts),
-            "-map",
-            "[aout]",
-            "-ac",
-            str(STABLE_AUDIO_CHANNELS),
-            "-ar",
-            str(STABLE_AUDIO_SAMPLE_RATE),
-            "-c:a",
-            "pcm_s16le",
-            str(output_path),
-        ],
-        timeout=240.0 if background_music_label else 180.0,
-    )
+        run(
+            [
+                *cmd,
+                "-filter_complex",
+                ";".join(filters),
+                "-map",
+                "[aout]",
+                "-ac",
+                str(STABLE_AUDIO_CHANNELS),
+                "-ar",
+                str(STABLE_AUDIO_SAMPLE_RATE),
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+            timeout=240.0 if bgm_label else 180.0,
+        )
+
+    # Tier 1 Attempt: Full Mix with usable audio checks
+    try:
+        _attempt_full_mix()
+        if output_path.exists() and output_path.stat().st_size > 100:
+            return
+    except Exception as exc1:
+        logger.warning(f"[create_final_audio] Full mix attempt failed: {exc1}. Trying BGM + Dub fallback...")
+
+    # Tier 2 Attempt: Mix Dub + Background Music only (bypassing original/separated background)
+    try:
+        cmd2 = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-t", f"{target_duration_ms / 1000:.3f}",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        ]
+        filters2: list[str] = ["[0:a]anull[base]"]
+        mix_in2: list[str] = ["[base]"]
+        idx2 = 1
+
+        idx2, bgm_label2 = append_looped_background_music_input(
+            cmd2,
+            filters2,
+            background_music_path=background_music_path,
+            background_music_volume=background_music_volume,
+            target_duration_ms=target_duration_ms,
+            input_index=idx2,
+            label="bgm",
+        )
+        if bgm_label2:
+            mix_in2.append(bgm_label2)
+
+        cmd2.extend(["-i", str(dub_audio_path)])
+        mix_in2.append(f"[{idx2}:a]")
+
+        if len(mix_in2) == 1:
+            filters2.append(f"{mix_in2[0]}anull[mix]")
+        else:
+            filters2.append(
+                "".join(mix_in2)
+                + f"amix=inputs={len(mix_in2)}:normalize=0:duration=longest:dropout_transition=0[mix]"
+            )
+        filters2.append(
+            f"[mix]atrim=0:{target_duration_ms / 1000:.3f},{stable_audio_filter_chain()}[aout]"
+        )
+        run(
+            [
+                *cmd2,
+                "-filter_complex",
+                ";".join(filters2),
+                "-map",
+                "[aout]",
+                "-ac",
+                str(STABLE_AUDIO_CHANNELS),
+                "-ar",
+                str(STABLE_AUDIO_SAMPLE_RATE),
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+            timeout=120.0,
+        )
+        if output_path.exists() and output_path.stat().st_size > 100:
+            return
+    except Exception as exc2:
+        logger.warning(f"[create_final_audio] Tier 2 mix attempt failed: {exc2}. Trying direct dub audio convert...")
+
+    # Tier 3 Attempt: Re-encode dub_audio_path alone to output_path
+    try:
+        run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(dub_audio_path),
+                "-ac", str(STABLE_AUDIO_CHANNELS),
+                "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
+                "-c:a", "pcm_s16le",
+                str(output_path),
+            ],
+            timeout=60.0,
+        )
+        if output_path.exists() and output_path.stat().st_size > 100:
+            return
+    except Exception as exc3:
+        logger.warning(f"[create_final_audio] Tier 3 conversion failed: {exc3}. Using direct file copy fallback...")
+
+    # Tier 4 Attempt: Direct file copy fallback
+    import shutil
+    shutil.copy2(dub_audio_path, output_path)
+

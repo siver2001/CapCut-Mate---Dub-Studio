@@ -173,6 +173,25 @@ def get_video_meta(path: Path | str) -> dict[str, Any]:
     }
 
 
+def check_has_usable_audio(path: Path | str) -> bool:
+    try:
+        p = Path(path)
+        if not p.exists() or p.stat().st_size < 100:
+            return False
+        probe = ffprobe_json(p)
+        audio_streams = [s for s in probe.get("streams", []) if s.get("codec_type") == "audio"]
+        if not audio_streams:
+            return False
+        for s in audio_streams:
+            dur = float(s.get("duration") or probe.get("format", {}).get("duration") or 0.0)
+            if dur > 0:
+                return True
+        return len(audio_streams) > 0
+    except Exception:
+        return False
+
+
+
 def extract_thumbnail(video_path: Path, thumbnail_path: Path) -> None:
     run(
         [

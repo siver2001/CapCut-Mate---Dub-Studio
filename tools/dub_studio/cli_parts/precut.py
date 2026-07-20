@@ -101,7 +101,11 @@ def precut_video(input_path: Path | str, excluded_ranges: list[dict[str, float]]
     kept_segments = [seg for seg in kept_segments if (seg[1] - seg[0]) >= 0.1]
     
     if not kept_segments:
-        raise ValueError("Tất cả thời lượng video đã bị loại bỏ. Không thể xử lý video trống.")
+        logger.warning(f"Tất cả thời lượng video '{input_path.name}' bị loại bỏ theo khoảng đã chọn. Giữ nguyên video gốc để tiếp tục.")
+        import shutil
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(input_path, output_path)
+        return output_path
         
     # If no segments were actually cut (i.e. we keep the whole duration)
     # just copy the file or return the original

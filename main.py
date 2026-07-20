@@ -192,7 +192,8 @@ def main():
             root = ROOT_DIR
             if root not in sys.path:
                 sys.path.insert(0, root)
-            from tools.dub_studio_pipeline import main as run_pipeline
+            from tools.dub_studio_pipeline import main as run_pipeline, setup_quiet_excepthook
+            setup_quiet_excepthook()
             sys.exit(run_pipeline())
         elif mode == "yt_dlp":
             # Act as yt-dlp entry point

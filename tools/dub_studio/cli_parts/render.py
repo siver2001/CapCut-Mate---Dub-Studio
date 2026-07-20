@@ -801,6 +801,22 @@ def burn_subtitles(
     )
     try:
         run(command, cwd=ROOT)
+    except Exception as exc:
+        if codec != "libx264":
+            logger.warning(f"[burn_subtitles] GPU encoder ({codec}) failed: {exc}. Retrying with CPU encoder (libx264)...")
+            try:
+                c_idx = command.index("-c:v")
+                command[c_idx + 1] = "libx264"
+                for ca in codec_args:
+                    if ca in command:
+                        command.remove(ca)
+                command.insert(c_idx + 2, "ultrafast")
+                command.insert(c_idx + 2, "-preset")
+                run(command, cwd=ROOT)
+            except Exception:
+                raise exc
+        else:
+            raise exc
     finally:
         if temp_script_path and temp_script_path.exists():
             temp_script_path.unlink(missing_ok=True)
@@ -1514,7 +1530,24 @@ def mux_video_with_audio(
         "-t", f"{target_duration_seconds:.3f}",
         str(output_path),
     ])
-    run(command, cwd=ROOT)
+    try:
+        run(command, cwd=ROOT)
+    except Exception as exc:
+        if codec != "libx264":
+            logger.warning(f"[mux_video_with_audio] GPU encoder ({codec}) failed: {exc}. Retrying with CPU encoder (libx264)...")
+            try:
+                c_idx = command.index("-c:v")
+                command[c_idx + 1] = "libx264"
+                for ca in codec_args:
+                    if ca in command:
+                        command.remove(ca)
+                command.insert(c_idx + 2, "ultrafast")
+                command.insert(c_idx + 2, "-preset")
+                run(command, cwd=ROOT)
+            except Exception:
+                raise exc
+        else:
+            raise exc
 
 
 def apply_sticker_overlay(
