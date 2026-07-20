@@ -48,13 +48,15 @@ class WindowPrecutMixin:
             self.precut_ranges_table.setRowCount(0)
             return
 
-        item = self._batch_queue[row]
-        # Load video into player
-        if item.input_path and os.path.exists(item.input_path):
-            self.precut_player.load_video(item.input_path)
-            self.precut_player.play()
-            
-        self.refresh_precut_ranges_table()
+        if hasattr(self, "select_batch_video"):
+            self.select_batch_video(row, source_sender="precut_video_table")
+        else:
+            item = self._batch_queue[row]
+            if item.input_path and os.path.exists(item.input_path):
+                self.precut_player.load_video(item.input_path, auto_play=False)
+            self.refresh_precut_ranges_table()
+
+
 
     def refresh_precut_ranges_table(self) -> None:
         """Reload the excluded ranges table for the currently selected video."""

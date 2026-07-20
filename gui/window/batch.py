@@ -18,7 +18,7 @@ from gui.utils import repair_mojibake_text
 
 
 class _BatchItem:
-    """Lightweight data holder for a single video in the batch queue."""
+    """Data holder for a single video in the batch queue with custom per-video overrides."""
 
     __slots__ = (
         "input_path",
@@ -30,6 +30,7 @@ class _BatchItem:
         "output_path",
         "excluded_ranges",
         "stickers",
+        "custom_settings",
     )
 
     def __init__(self, input_path: str) -> None:
@@ -42,6 +43,17 @@ class _BatchItem:
         self.output_path: str = ""
         self.excluded_ranges: list[dict[str, float]] = []
         self.stickers: list[dict[str, Any]] | None = None
+        self.custom_settings: dict[str, Any] = {}
+
+    def get_effective_settings(self, global_settings: dict[str, Any]) -> dict[str, Any]:
+        """Merge global settings with item's custom_settings overrides."""
+        merged = copy.deepcopy(global_settings)
+        if self.custom_settings:
+            merged.update(copy.deepcopy(self.custom_settings))
+        if self.stickers is not None:
+            merged["stickers"] = copy.deepcopy(self.stickers)
+        return merged
+
 
 
 class WindowBatchMixin:
@@ -539,8 +551,19 @@ class WindowBatchMixin:
         return self._batch_running and self._find_batch_item_by_job_id(job_id) is not None
 
     def _batch_build_overrides(self, analysis: dict[str, Any]) -> dict[str, Any]:
-        """Build analysis overrides from the shared settings."""
-        overrides = self.current_analysis_overrides()
+        """Build analysis overrides for the currently running batch item."""
+        item = self._current_batch_item()
+        if item and item.custom_settings:
+            effective_settings = item.get_effective_settings(self.settings)
+            old_settings = self.settings
+            try:
+                self.settings = effective_settings
+                overrides = self.current_analysis_overrides()
+            finally:
+                self.settings = old_settings
+        else:
+            overrides = self.current_analysis_overrides()
+
         if self.settings.get("sourceLanguage") == "auto":
             overrides["sourceLanguage"] = ""
         if analysis and "subtitleRegion" in analysis:
@@ -548,9 +571,16 @@ class WindowBatchMixin:
         return overrides
 
     def _batch_build_render_options(self, analysis: dict[str, Any], item: _BatchItem) -> dict[str, Any]:
-        """Build render options from the shared settings for a batch item."""
-        options = self.current_render_options()
-        
+        """Build render options from the effective settings for a batch item."""
+        effective_settings = item.get_effective_settings(self.settings)
+
+        old_settings = self.settings
+        try:
+            self.settings = effective_settings
+            options = self.current_render_options()
+        finally:
+            self.settings = old_settings
+
         # Override stickers from the batch item's custom stickers list!
         if getattr(item, "stickers", None) is not None:
             active_stickers = [
@@ -558,21 +588,22 @@ class WindowBatchMixin:
                 if s.get("stickerId") or s.get("image_url")
             ]
             options["stickers"] = active_stickers
-        
+
         effective_source_language = (
             analysis.get("sourceLanguage")
-            if self.settings.get("sourceLanguage") == "auto"
-            else self.settings.get("sourceLanguage")
+            if effective_settings.get("sourceLanguage") == "auto"
+            else effective_settings.get("sourceLanguage")
         )
         options["sourceLanguage"] = effective_source_language or ""
-        
+
         if analysis and "subtitleRegion" in analysis:
             options["subtitleRegion"] = copy.deepcopy(analysis["subtitleRegion"])
-            
+
         if self._batch_output_dir:
             options["outputDirectory"] = self._batch_output_dir
-            
+
         return options
+
 
     def _batch_finalize(self) -> None:
         """Called when the batch queue is fully processed (or cancelled)."""
@@ -704,6 +735,104 @@ class WindowBatchMixin:
         
         self.sync_precut_video_table()
 
+    def select_batch_video(self, row: int, *, source_sender: str = "") -> None:
+        """Centralized video selection synchronizer across Batch, Preview, and Pre-cut tabs."""
+        if not hasattr(self, "_batch_queue") or not self._batch_queue:
+            return
+        if row < 0 or row >= len(self._batch_queue):
+            return
+
+        # Increment Request ID to invalidate old async background threads
+        self._current_video_request_id = getattr(self, "_current_video_request_id", 0) + 1
+        current_req_id = self._current_video_request_id
+
+        # 1. Save current UI widget settings to previous item if any
+        prev_row = getattr(self, "_selected_batch_index", -1)
+        if 0 <= prev_row < len(self._batch_queue) and prev_row != row:
+            prev_item = self._batch_queue[prev_row]
+            if hasattr(self, "read_settings_from_widgets"):
+                self.read_settings_from_widgets()
+            prev_item.custom_settings = copy.deepcopy(self.settings)
+
+        self._selected_batch_index = row
+        item = self._batch_queue[row]
+
+        # 2. Synchronize Table selections without recursive signal loops
+        if hasattr(self, "batch_table") and self.batch_table is not None and source_sender != "batch_table":
+            self.batch_table.blockSignals(True)
+            self.batch_table.selectRow(row)
+            self.batch_table.blockSignals(False)
+
+        if hasattr(self, "precut_video_table") and self.precut_video_table is not None and source_sender != "precut_video_table":
+            self.precut_video_table.blockSignals(True)
+            self.precut_video_table.selectRow(row)
+            self.precut_video_table.blockSignals(False)
+
+        # 3. Backup global stickers if not done yet
+        if getattr(self, "_global_stickers", None) is None:
+            self._global_stickers = copy.deepcopy(self.settings.get("stickers", []))
+
+        if item.stickers is None:
+            item.stickers = copy.deepcopy(self._global_stickers)
+
+        # Load item's custom settings into self.settings
+        if item.custom_settings:
+            self.settings.update(copy.deepcopy(item.custom_settings))
+
+        self.settings["stickers"] = item.stickers
+        current_sticker_idx = self.settings.get("currentStickerIndex", 0)
+        if current_sticker_idx < 0 or current_sticker_idx >= len(item.stickers):
+            self.settings["currentStickerIndex"] = 0
+
+        # Synchronize UI widgets with updated settings (Watermark, Voice, Music, Subtitle preset, Stickers)
+        if hasattr(self, "sync_widgets_from_settings"):
+            self.sync_widgets_from_settings()
+
+        # 4. Update Pre-cut Tab ranges table and player
+        if hasattr(self, "refresh_precut_ranges_table"):
+            self.refresh_precut_ranges_table()
+
+        if hasattr(self, "precut_player") and self.precut_player is not None:
+            if item.input_path and Path(item.input_path).exists():
+                current_tab_idx = 0
+                if hasattr(self, "_page_stack") and self._page_stack is not None:
+                    current_tab_idx = self._page_stack.currentIndex()
+                if current_tab_idx == 5:  # Precut tab
+                    self.precut_player.load_video(item.input_path, auto_play=False)
+                else:
+                    self.precut_player.pause()
+
+
+        # 5. Load video into Preview Widget and update overlay
+        source_path = Path(item.input_path)
+        video_preview = getattr(self, "_video_preview_widget", None)
+        if video_preview is not None and source_path.exists():
+            video_preview.load_video(source_path)
+
+        if hasattr(self, "input_path_edit") and self.input_path_edit is not None:
+            self.input_path_edit.setText(str(source_path))
+
+        if hasattr(self, "refresh_preview"):
+            self.refresh_preview()
+
+        # Offload synchronous get_video_meta and extract_thumbnail to background thread
+        def worker():
+            try:
+                preview_analysis = self._build_quick_preview_analysis(source_path)
+            except Exception:
+                preview_analysis = None
+
+            def update_gui():
+                if getattr(self, "_current_video_request_id", 0) == current_req_id:
+                    self.preview_media_analysis = preview_analysis
+                    if hasattr(self, "refresh_preview"):
+                        self.refresh_preview()
+
+            QTimer.singleShot(0, update_gui)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
     def batch_preview_selected(self) -> None:
         if not hasattr(self, "batch_table"):
             return
@@ -717,40 +846,9 @@ class WindowBatchMixin:
         if not hasattr(self, "batch_table"):
             return
         row = self.batch_table.currentRow()
-        
-        # Back up global stickers if not done yet
-        if getattr(self, "_global_stickers", None) is None:
-            self._global_stickers = copy.deepcopy(self.settings.get("stickers", []))
-            
         if 0 <= row < len(self._batch_queue):
-            item = self._batch_queue[row]
-            if item.stickers is None:
-                # Initialize item stickers with a copy of current global stickers
-                item.stickers = copy.deepcopy(self._global_stickers)
-            
-            # Map settings["stickers"] to point to the item's custom stickers list
-            self.settings["stickers"] = item.stickers
-            
-            # Synchronize widgets and active sticker index
-            current_sticker_idx = self.settings.get("currentStickerIndex", 0)
-            if current_sticker_idx < 0 or current_sticker_idx >= len(item.stickers):
-                self.settings["currentStickerIndex"] = 0
-            
-            self.sync_widgets_from_settings()
-            self.show_source_video_preview(
-                item.input_path,
-                switch_to_preview_tab=False,
-            )
-            self.refresh_preview()
-        else:
-            # Revert to global stickers if selection is cleared
-            if getattr(self, "_global_stickers", None) is not None:
-                self.settings["stickers"] = self._global_stickers
-                current_sticker_idx = self.settings.get("currentStickerIndex", 0)
-                if current_sticker_idx < 0 or current_sticker_idx >= len(self._global_stickers):
-                    self.settings["currentStickerIndex"] = 0
-                self.sync_widgets_from_settings()
-                self.refresh_preview()
+            self.select_batch_video(row, source_sender="batch_table")
+
 
     def on_batch_table_double_clicked(self, item) -> None:
         if not item:

@@ -12,7 +12,7 @@ from typing import Any
 
 logger = logging.getLogger("dub_studio.workflow")
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
+from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
 try:
     from PyQt6.QtMultimedia import QMediaPlayer
@@ -81,30 +81,34 @@ class WindowWorkflowMixin:
         source_path_str = str(source_path.resolve())
         
         # Integrate with Batch Queue and Precut Mixin
+        target_index = -1
         if hasattr(self, "_batch_queue"):
-            found = False
-            for item in self._batch_queue:
+            for idx, item in enumerate(self._batch_queue):
                 try:
                     if Path(item.input_path).resolve() == source_path.resolve():
-                        found = True
+                        target_index = idx
                         break
                 except Exception:
                     pass
-            if not found:
+            if target_index < 0:
                 from gui.window.batch import _BatchItem
                 new_item = _BatchItem(source_path_str)
                 self._batch_queue.append(new_item)
+                target_index = len(self._batch_queue) - 1
                 if hasattr(self, "load_precut_configurations"):
                     self.load_precut_configurations()
                 if hasattr(self, "_refresh_batch_ui"):
                     self._refresh_batch_ui()
                 if hasattr(self, "sync_precut_video_table"):
                     self.sync_precut_video_table()
-        
-        # Load video into player immediately (Qt6 handles loading asynchronously in C++)
-        video_preview = getattr(self, "_video_preview_widget", None)
-        if video_preview is not None:
-            video_preview.load_video(source_path)
+
+        if target_index >= 0 and hasattr(self, "select_batch_video"):
+            self.select_batch_video(target_index)
+        else:
+            # Load video into player immediately
+            video_preview = getattr(self, "_video_preview_widget", None)
+            if video_preview is not None:
+                video_preview.load_video(source_path)
 
         if switch_to_preview_tab and hasattr(self, "_page_stack"):
             self._switch_page(1)
@@ -114,6 +118,7 @@ class WindowWorkflowMixin:
             _tabs = getattr(self, "main_tabs", None)
             if _tabs is not None:
                 _tabs.setCurrentWidget(self.preview_page)
+
 
         # Offload synchronous get_video_meta and extract_thumbnail to background thread to prevent lag
         def worker():
@@ -2776,6 +2781,13 @@ class WindowWorkflowMixin:
             self.settings["voiceMapping"] = {}
         self.settings["voiceMapping"] = self._expanded_voice_mapping()
         self.on_font_changed()
+
+        # Save to currently selected batch item if available
+        sel_idx = getattr(self, "_selected_batch_index", -1)
+        if hasattr(self, "_batch_queue") and 0 <= sel_idx < len(self._batch_queue):
+            item = self._batch_queue[sel_idx]
+            item.custom_settings = copy.deepcopy(self.settings)
+
 
     def current_analysis_overrides(self) -> dict[str, Any]:
         return {
