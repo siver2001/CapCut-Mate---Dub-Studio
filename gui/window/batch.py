@@ -31,6 +31,7 @@ class _BatchItem:
         "excluded_ranges",
         "stickers",
         "custom_settings",
+        "retry_count",
     )
 
     def __init__(self, input_path: str) -> None:
@@ -44,6 +45,7 @@ class _BatchItem:
         self.excluded_ranges: list[dict[str, float]] = []
         self.stickers: list[dict[str, Any]] | None = None
         self.custom_settings: dict[str, Any] = {}
+        self.retry_count: int = 0
 
     def get_effective_settings(self, global_settings: dict[str, Any]) -> dict[str, Any]:
         """Merge global settings with item's custom_settings overrides."""
@@ -465,8 +467,10 @@ class WindowBatchMixin:
         item.progress = 1.0
         self._refresh_batch_ui()
 
-        # Move to the next item with a cooldown gap
-        QTimer.singleShot(12000, self._batch_process_next)
+        import gc
+        gc.collect()
+        # Move to the next item with a cooldown gap to allow full Windows OS memory release
+        QTimer.singleShot(15000, self._batch_process_next)
 
     def _batch_on_job_failed(self, job_id: str, message: str) -> None:
         """Called when a batch item fails."""
@@ -477,15 +481,38 @@ class WindowBatchMixin:
         if item is None:
             return
 
+        import gc
+        gc.collect()
+
+        msg_clean = repair_mojibake_text(message)
+        msg_lower = msg_clean.lower()
+        is_mem_error = any(
+            k in msg_lower for k in ("memory", "paging file", "1455", "vram", "allocation", "out of memory", "crashed", "process crashed")
+        )
+
+        current_retries = getattr(item, "retry_count", 0)
+        if is_mem_error and current_retries < 2:
+            item.retry_count = current_retries + 1
+            item.status = "pending"
+            item.detail_status = f"⏳ Tạm nghỉ 15s giải phóng bộ nhớ & thử lại ({item.retry_count}/2)..."
+            item.progress = 0.0
+            item.job_id = None
+            self._update_batch_log(
+                f"  ⚠️ Video '{Path(item.input_path).name}' gặp sự cố bộ nhớ. Tạm nghỉ 15 giây giải phóng RAM/VRAM rồi tự động thử lại (Lần {item.retry_count}/2)..."
+            )
+            self._refresh_batch_ui()
+            QTimer.singleShot(15000, self._batch_process_next)
+            return
+
         item.status = "error"
         item.detail_status = "❌ Lỗi"
-        item.error = message
+        item.error = msg_clean
         item.progress = 0.0
-        self._update_batch_log(f"  ✗ Lỗi: {repair_mojibake_text(message)}")
+        self._update_batch_log(f"  ✗ Lỗi: {msg_clean}")
         self._refresh_batch_ui()
 
-        # Continue to next item
-        QTimer.singleShot(12000, self._batch_process_next)
+        # Continue to next item after 15s cooldown
+        QTimer.singleShot(15000, self._batch_process_next)
 
     def _batch_on_status_changed(self, job_id: str, payload: dict[str, Any]) -> None:
         """Update progress for the currently running batch item."""

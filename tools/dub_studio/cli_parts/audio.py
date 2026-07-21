@@ -1642,8 +1642,11 @@ def synthesize_timed_tts_clip(
         rate = next_rate
 
     if best is None:
-        if intro and terminal_synthesis_error is not None:
-            raise terminal_synthesis_error
+        if terminal_synthesis_error is not None:
+            safe_print(
+                f"[warn] Segment {index} TTS engine error: {terminal_synthesis_error}. Attempting Edge-TTS terminal fallback...",
+                flush=True,
+            )
         direct_fallback_text = ensure_edge_tts_terminal_punctuation(
             normalize_text(translated or tts_text)
         )
