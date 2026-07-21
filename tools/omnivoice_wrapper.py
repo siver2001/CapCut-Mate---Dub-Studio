@@ -181,26 +181,43 @@ class OmnivoiceProvider:
             import gc
             import torch
 
+            def _run_gen():
+                if not use_voice_design:
+                    print(f"[debug-omnivoice] Generating text='{clean_text}', ref_audio_param_type={type(ref_audio_param)}, ref_text='{ref_text}'", file=sys.stderr, flush=True)
+                    return self._model.generate(
+                        text=clean_text,
+                        ref_audio=ref_audio_param,
+                        ref_text=str(ref_text or "").strip() or None
+                    )
+                else:
+                    resolved_instruct = str(voice_name or "").strip()
+                    if not resolved_instruct or resolved_instruct == "clone" or resolved_instruct.startswith("omnivoice:"):
+                        resolved_instruct = "female, young adult, moderate pitch"
+                    print(f"[debug-omnivoice] Generating design text='{clean_text}', instruct='{resolved_instruct}'", file=sys.stderr, flush=True)
+                    return self._model.generate(
+                        text=clean_text,
+                        instruct=resolved_instruct
+                    )
+
             try:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
                 with torch.inference_mode():
-                    if not use_voice_design:
-                        print(f"[debug-omnivoice] Generating text='{clean_text}', ref_audio_param_type={type(ref_audio_param)}, ref_text='{ref_text}'", file=sys.stderr, flush=True)
-                        audio = self._model.generate(
-                            text=clean_text,
-                            ref_audio=ref_audio_param,
-                            ref_text=str(ref_text or "").strip() or None
-                        )
-                        print(f"[debug-omnivoice] Generated successfully, audio type={type(audio)}, len={len(audio) if audio is not None else 'None'}", file=sys.stderr, flush=True)
-                    else:
-                        resolved_instruct = str(voice_name or "").strip()
-                        if not resolved_instruct or resolved_instruct == "clone" or resolved_instruct.startswith("omnivoice:"):
-                            resolved_instruct = "female, young adult, moderate pitch"
-                        print(f"[debug-omnivoice] Generating design text='{clean_text}', instruct='{resolved_instruct}'", file=sys.stderr, flush=True)
-                        audio = self._model.generate(
-                            text=clean_text,
-                            instruct=resolved_instruct
-                        )
-                        print(f"[debug-omnivoice] Generated design successfully, audio type={type(audio)}, len={len(audio) if audio is not None else 'None'}", file=sys.stderr, flush=True)
+                    try:
+                        audio = _run_gen()
+                    except RuntimeError as mem_err:
+                        err_msg = str(mem_err).lower()
+                        if "out of memory" in err_msg or "cuda" in err_msg or "allocation" in err_msg or "paging" in err_msg:
+                            print(f"[warn] OmniVoice CUDA VRAM spike detected ({mem_err}). Clearing cache & retrying with exact same voice model...", file=sys.stderr, flush=True)
+                            gc.collect()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                            # Retry generation with clean cache
+                            audio = _run_gen()
+                        else:
+                            raise
             except Exception as e:
                 print(f"[debug-omnivoice] Error during generate: {e}", file=sys.stderr, flush=True)
                 gc.collect()
