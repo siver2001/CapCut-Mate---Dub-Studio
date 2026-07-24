@@ -199,40 +199,42 @@ class OmnivoiceProvider:
                         instruct=resolved_instruct
                     )
 
-            try:
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+            import time
+            audio = None
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
-                with torch.inference_mode():
-                    try:
+                    with torch.inference_mode():
                         audio = _run_gen()
-                    except RuntimeError as mem_err:
-                        err_msg = str(mem_err).lower()
-                        if "out of memory" in err_msg or "cuda" in err_msg or "allocation" in err_msg or "paging" in err_msg:
-                            print(f"[warn] OmniVoice CUDA VRAM spike detected ({mem_err}). Clearing cache & retrying with exact same voice model...", file=sys.stderr, flush=True)
-                            gc.collect()
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                            # Retry generation with clean cache
-                            audio = _run_gen()
-                        else:
-                            raise
-            except Exception as e:
-                print(f"[debug-omnivoice] Error during generate: {e}", file=sys.stderr, flush=True)
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                raise
-            finally:
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+
+                    if audio is not None and len(audio) > 0 and audio[0] is not None and len(audio[0]) > 0:
+                        break  # Synthesis succeeded!
+
+                    print(f"[warn] OmniVoice (lần {attempt}/{max_attempts}) tạo audio rỗng cho giọng '{voice_name}'. Đang dọn dẹp RAM/VRAM và chờ 1.5s để thử lại...", file=sys.stderr, flush=True)
+                    time.sleep(1.5)
+                except Exception as attempt_err:
+                    err_str = str(attempt_err)
+                    print(f"[warn] OmniVoice (lần {attempt}/{max_attempts}) gặp sự cố với giọng '{voice_name}': {err_str}. Đang dọn dẹp RAM/VRAM và thử lại sau 1.5s...", file=sys.stderr, flush=True)
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    if attempt < max_attempts:
+                        time.sleep(1.5)
+                    else:
+                        raise attempt_err
+                finally:
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
             
             # Save output audio using soundfile at 24000 Hz sample rate
             import soundfile as sf
             if audio is None or len(audio) == 0 or audio[0] is None or len(audio[0]) == 0:
-                raise RuntimeError("OmniVoice-TTS returned empty or null audio waveform.")
+                raise RuntimeError(f"OmniVoice-TTS không thể tạo sóng âm thanh cho giọng '{voice_name}' sau {max_attempts} lần thử lại.")
             sf.write(str(output_path), audio[0], 24000)
             
             return output_path.exists() and output_path.stat().st_size > 0

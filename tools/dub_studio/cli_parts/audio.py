@@ -1004,23 +1004,10 @@ def synthesize_tts(
             if success:
                 validate_generated_audio_file(output_path, context="OmniVoice-TTS synthesis")
                 return
-        except (OSError, MemoryError) as mem_e:
-            err_str = str(mem_e)
-            if "paging file" in err_str.lower() or "1455" in err_str or isinstance(mem_e, MemoryError):
-                raise RuntimeError(
-                    f"Không đủ bộ nhớ RAM để chạy OmniVoice-TTS cho {speaker_id}. "
-                    "Vui lòng đóng bớt các ứng dụng khác hoặc tăng Virtual Memory (Page File) trong Windows."
-                ) from mem_e
-            raise RuntimeError(
-                f"OmniVoice-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {mem_e}"
-            ) from mem_e
         except Exception as e:
             raise RuntimeError(
                 f"OmniVoice-TTS synthesis failed for {speaker_id} with voice {selected_voice}: {e}"
             ) from e
-        raise RuntimeError(
-            f"OmniVoice-TTS did not create audio for {speaker_id} with voice {selected_voice}."
-        )
 
     requested_edge_text = ensure_edge_tts_terminal_punctuation(_normalize_edge_tts_text(text, preserve_pauses=True))
     if requested_edge_text and edge_text != requested_edge_text:
@@ -1864,13 +1851,8 @@ def _run_tts_chain(
                 global_speed=global_speed,
             )
         except Exception as exc:
-            if not DUB_TTS_ALLOW_SILENT_FALLBACK:
-                raise RuntimeError(
-                    f"TTS failed for segment {item['index']} ({item['speaker_id']}), "
-                    f"silent fallback is disabled: {exc}"
-                ) from exc
             safe_print(
-                f"  [!] TTS thất bại cho segment {item['index']}: {exc} — tạo clip im thay thế",
+                f"  [!] TTS thất bại cho segment {item['index']} ({item['speaker_id']}): {exc} — tạo clip im thay thế để hoàn tất video",
                 flush=True,
             )
             target_ms = int(item["target_ms"])

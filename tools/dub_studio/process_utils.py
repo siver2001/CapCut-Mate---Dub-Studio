@@ -219,3 +219,22 @@ def ensure_python_packages(
     )
 
     importlib.invalidate_caches()
+
+
+def release_system_memory() -> None:
+    """Force Python garbage collection, clear CUDA VRAM cache, and trim OS working set memory on Windows."""
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
+    except Exception:
+        pass
+

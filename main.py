@@ -133,7 +133,7 @@ try:
     import torch
     # Eagerly import torch at the top level to avoid deadlocks in multi-process environments on Windows
     # This is a critical stability fix for Windows/Python 3.12+
-except ImportError:
+except Exception:
     torch = None
 
 

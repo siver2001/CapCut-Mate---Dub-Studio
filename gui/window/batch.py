@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import copy
 import shutil
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
+
+# Ensure project root is in sys.path if file is run directly
+_project_root = str(Path(__file__).resolve().parent.parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
@@ -369,7 +375,7 @@ class WindowBatchMixin:
             self._update_batch_log(f"  ✗ Lỗi phân tích: {exc}")
             self._refresh_batch_ui()
             # Continue to next item after a cooldown delay
-            QTimer.singleShot(12000, self._batch_process_next)
+            QTimer.singleShot(15000, self._batch_process_next)
 
     def _batch_on_analysis_ready(self, job_id: str, analysis: dict[str, Any]) -> None:
         """Called when a batch item's analysis completes → start rendering."""
@@ -383,12 +389,13 @@ class WindowBatchMixin:
         item.status = "rendering"
         item.detail_status = "🎬 Chờ nguội GPU..."
         item.progress = 0.5
-        self._refresh_batch_ui()
         self._update_batch_log(
-            f"  ✓ Phân tích xong. Tạm nghỉ 8 giây giải phóng VRAM & nguội GPU..."
+            f"  ✓ Phân tích xong. Tạm nghỉ 15 giây giải phóng VRAM & nguội GPU..."
         )
+        from tools.dub_studio.process_utils import release_system_memory
+        release_system_memory()
 
-        QTimer.singleShot(8000, lambda: self._batch_start_rendering(job_id, analysis))
+        QTimer.singleShot(15000, lambda: self._batch_start_rendering(job_id, analysis))
 
     def _batch_start_rendering(self, job_id: str, analysis: dict[str, Any]) -> None:
         if not self._batch_running:
@@ -419,7 +426,7 @@ class WindowBatchMixin:
             item.error = str(exc)
             self._update_batch_log(f"  ✗ Lỗi render: {exc}")
             self._refresh_batch_ui()
-            QTimer.singleShot(12000, self._batch_process_next)
+            QTimer.singleShot(15000, self._batch_process_next)
 
     def _batch_on_render_ready(self, job_id: str, payload: dict[str, Any]) -> None:
         """Called when a batch item's render completes → export & proceed."""
@@ -467,8 +474,8 @@ class WindowBatchMixin:
         item.progress = 1.0
         self._refresh_batch_ui()
 
-        import gc
-        gc.collect()
+        from tools.dub_studio.process_utils import release_system_memory
+        release_system_memory()
         # Move to the next item with a cooldown gap to allow full Windows OS memory release
         QTimer.singleShot(15000, self._batch_process_next)
 
@@ -481,8 +488,8 @@ class WindowBatchMixin:
         if item is None:
             return
 
-        import gc
-        gc.collect()
+        from tools.dub_studio.process_utils import release_system_memory
+        release_system_memory()
 
         msg_clean = repair_mojibake_text(message)
         msg_lower = msg_clean.lower()
@@ -899,3 +906,8 @@ class WindowBatchMixin:
         self.batch_log_box.setPlainText("\n".join(existing_lines[-40:]))
         scroll_bar = self.batch_log_box.verticalScrollBar()
         scroll_bar.setValue(scroll_bar.maximum())
+
+
+if __name__ == "__main__":
+    from main import main
+    sys.exit(main())
