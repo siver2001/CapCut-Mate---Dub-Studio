@@ -175,7 +175,10 @@ def analyze_with_whisperx(
         device,
         compute_type=compute_type,
         language=language,
-        asr_options={"condition_on_previous_text": False},
+        # Preserve discourse context for narration and long-form speech. Sentence
+        # boundaries are rebuilt from aligned timestamps later, so disabling this
+        # caused names, subjects and terminology to reset at every ASR chunk.
+        asr_options={"condition_on_previous_text": True},
         download_root=str(HUGGINGFACE_HUB_CACHE),
         local_files_only=local_only,
         threads=WHISPERX_THREADS,
@@ -244,7 +247,9 @@ def analyze_with_whisperx(
     raw_subtitles = subtitles_from_analysis_segments(normalized_segments)
     raw_srt_path.write_text(compose_srt(raw_subtitles), encoding="utf-8")
 
-    merged_subtitles = merge_short_subtitles(raw_subtitles)
+    # Do not merge before speaker attribution. A short pause is not proof that
+    # two captions belong to the same person, especially in rapid dialogue.
+    merged_subtitles = raw_subtitles
     merged_srt_path.write_text(compose_srt(merged_subtitles), encoding="utf-8")
     speaker_count, speaker_confidence = estimate_speaker_count(merged_subtitles)
     assignments, speaker_stats, main_speaker_id = assign_speakers(merged_subtitles, speaker_count)
@@ -366,7 +371,9 @@ def analyze_with_local_whisper(
     if not raw_subtitles:
         raise RuntimeError("Local ffmpeg-whisper did not return any subtitle segments.")
 
-    merged_subtitles = merge_short_subtitles(raw_subtitles)
+    # Keep raw turns until a speaker has been assigned; merging by pause alone
+    # can irreversibly combine two people into one dubbed line.
+    merged_subtitles = raw_subtitles
     merged_srt_path.write_text(compose_srt(merged_subtitles), encoding="utf-8")
     transcript_text = " ".join(item.content for item in raw_subtitles[:24])
     detected_language, _, _ = detect_source_language(transcript_text)
@@ -465,7 +472,10 @@ def is_same_speaker_continuation(previous: SubtitleLine, current: SubtitleLine) 
     previous_len = len(normalize_text(previous.content))
     current_len = len(normalize_text(current.content))
     if gap >= 1700:
-        return True
+        # A long silence is not evidence of speaker continuity. Treat it as
+        # neutral so it neither creates a false turn nor biases the whole video
+        # toward a single narrator.
+        return False
     if gap <= 220 and not ends_like_dialogue(previous.content):
         return True
     if gap <= 360 and previous_len >= 30 and current_len >= 24:

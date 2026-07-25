@@ -307,14 +307,10 @@ def should_prefer_minh_cau(text: str, source_text: str = "") -> bool:
 
 
 def prefer_minh_cau_pair(text: str, source_text: str = "") -> str:
-    clean = normalize_first_person_pronouns(text)
-    if not should_prefer_minh_cau(clean, source_text):
-        return clean
-    clean = re.sub(r"\b[Bb]ạn\b", "Cậu", clean)
-    clean = re.sub(r"\bbạn\b", "cậu", clean)
-    clean = re.sub(r"\b[Bb]an\b", "Cậu", clean)
-    clean = re.sub(r"\bban\b", "cậu", clean)
-    return normalize_text(clean)
+    # Pronouns are semantic choices made from the full transcript context.
+    # A deterministic postprocessor must not overwrite the register selected by
+    # the contextual translator (for example, formal "tôi" into casual "mình").
+    return normalize_text(text)
 
 
 def soften_literal_leading_pronoun(text: str, source_text: str = "") -> str:
@@ -871,6 +867,8 @@ def apply_subtitle_timeline_to_segments(
             continue
         translated = normalize_text(matched.get("text") or "")
         segment["translatedText"] = translated
+        segment["spokenAdaptation"] = translated
+        segment["finalText"] = translated
         segment.pop("spoken" + "Text", None)
         voice = normalize_text(
             matched.get("voice")

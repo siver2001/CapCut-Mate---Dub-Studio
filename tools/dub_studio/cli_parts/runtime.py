@@ -532,6 +532,15 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
     return result
 
 
+_CLOUD_AI_UNAVAILABLE_REASON = ""
+
+
+def reset_cloud_ai_circuit_breaker() -> None:
+    """Start a fresh cloud-availability scope for a new translation job."""
+    global _CLOUD_AI_UNAVAILABLE_REASON
+    _CLOUD_AI_UNAVAILABLE_REASON = ""
+
+
 def run_ollama_prompt(
     prompt: str,
     *,
@@ -540,14 +549,20 @@ def run_ollama_prompt(
     timeout: int | None = None,
     json_schema: dict[str, Any] | None = None,
 ) -> str:
+    global _CLOUD_AI_UNAVAILABLE_REASON
     if os.getenv("DUB_AI_MODE") == "cloud":
+        if _CLOUD_AI_UNAVAILABLE_REASON:
+            raise RuntimeError(_CLOUD_AI_UNAVAILABLE_REASON)
         api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
         model_name = os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash").strip()
         if not model_name.startswith("models/"):
             model_name = f"models/{model_name}"
         safe_print(f"[info] Đang gửi yêu cầu tới Gemini Cloud API ({model_name})...", flush=True)
-        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
-        headers = {"Content-Type": "application/json"}
+        if not api_key:
+            raise RuntimeError("Thiếu DUB_CLOUD_API_KEY cho Gemini Cloud.")
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
+        # Keep credentials out of URLs, proxy logs and exception messages.
+        headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -555,11 +570,20 @@ def run_ollama_prompt(
                 "maxOutputTokens": max_tokens or 2048
             }
         }
+        if "gemini-2.5" in model_name:
+            # Translation needs deterministic JSON, not hidden reasoning that can
+            # consume the output budget and leave an empty MAX_TOKENS response.
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
         if json_schema or (isinstance(prompt, str) and "json" in prompt.lower()):
             payload["generationConfig"]["responseMimeType"] = "application/json"
+        if json_schema:
+            # Gemini supports constrained JSON output. Supplying the schema is
+            # essential for stable sourceId mapping across contextual batches.
+            payload["generationConfig"]["responseJsonSchema"] = json_schema
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout or 60)
             if resp.status_code == 429:
+                _CLOUD_AI_UNAVAILABLE_REASON = "Hết quota Gemini trong job hiện tại"
                 raise RuntimeError("Hết quota")
             if resp.status_code != 200:
                 try:
@@ -569,14 +593,37 @@ def run_ollama_prompt(
                 raise RuntimeError(f"Gemini API Error: {err_msg}")
             data = resp.json()
             try:
-                txt = data["candidates"][0]["content"]["parts"][0]["text"]
-                return txt.strip()
+                candidate = data["candidates"][0]
+                parts = (candidate.get("content") or {}).get("parts") or []
+                text_parts = [
+                    str(part.get("text") or "")
+                    for part in parts
+                    if (
+                        isinstance(part, dict)
+                        and part.get("text")
+                        and not part.get("thought")
+                    )
+                ]
+                if not text_parts:
+                    text_parts = [
+                        str(part.get("text") or "")
+                        for part in parts
+                        if isinstance(part, dict) and part.get("text")
+                    ]
+                txt = "".join(text_parts).strip()
+                if not txt:
+                    finish_reason = candidate.get("finishReason") or "unknown"
+                    raise RuntimeError(
+                        f"Gemini returned no text (finishReason={finish_reason})."
+                    )
+                return txt
             except (KeyError, IndexError):
                 raise RuntimeError("Phản hồi từ Gemini API không đúng cấu trúc.")
         except Exception as exc:
-            if "quota" in str(exc).lower():
+            safe_error = str(exc).replace(api_key, "***") if api_key else str(exc)
+            if "quota" in safe_error.lower():
                 raise RuntimeError("Hết quota")
-            raise RuntimeError(f"Cloud AI Error: {exc}")
+            raise RuntimeError(f"Cloud AI Error: {safe_error}")
 
     ensure_ollama_runtime(
         required=True,
@@ -682,7 +729,8 @@ def translation_batch_progress(end_index: int, total: int) -> float:
     return 0.32 + (min(end_index, safe_total) / safe_total) * 0.12
 
 
-TRANSLATION_PROMPT_VERSION = 6
+TRANSLATION_PROMPT_VERSION = 10
+TRANSLATION_CACHE_SCHEMA_VERSION = 2
 
 
 def translation_progress_message(*, provider_label: str, start: int, end_index: int, total: int, note: str = "") -> str:
@@ -706,7 +754,11 @@ def load_translation_cache(cache_path: Path, cache_key: str) -> dict[str, dict[s
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    if cached.get("key") != cache_key:
+    if (
+        cached.get("schemaVersion") != TRANSLATION_CACHE_SCHEMA_VERSION
+        or cached.get("promptVersion") != TRANSLATION_PROMPT_VERSION
+        or cached.get("key") != cache_key
+    ):
         return {}
     translations = cached.get("translations", {})
     return translations if isinstance(translations, dict) else {}
@@ -714,7 +766,22 @@ def load_translation_cache(cache_path: Path, cache_key: str) -> dict[str, dict[s
 
 def persist_translation_cache(cache_path: Path, cache_key: str, translations: dict[str, dict[str, str]]) -> None:
     cache_path.write_text(
-        json.dumps({"key": cache_key, "translations": translations}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "schemaVersion": TRANSLATION_CACHE_SCHEMA_VERSION,
+                "promptVersion": TRANSLATION_PROMPT_VERSION,
+                "provider": DUB_TRANSLATE_PROVIDER,
+                "model": (
+                    os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash")
+                    if os.getenv("DUB_AI_MODE") == "cloud"
+                    else OLLAMA_MODEL
+                ),
+                "key": cache_key,
+                "translations": translations,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -734,10 +801,14 @@ def apply_localized_result(
         item.get("sourceText") or source_text,
     )
     item["translatedText"] = translated_text
+    item["faithfulTranslation"] = translated_text
+    item["finalText"] = translated_text
     item["delivery"] = localized.get("delivery") or "neutral"
     item.pop("spoken" + "Text", None)
     return {
         "translatedText": item["translatedText"],
+        "faithfulTranslation": item["faithfulTranslation"],
+        "finalText": item["finalText"],
         "delivery": item["delivery"],
     }
 

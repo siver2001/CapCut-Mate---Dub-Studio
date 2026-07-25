@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from .common import *
+from ..quality import assert_translation_renderable, audit_translation_segments
 from .runtime import (
     TRANSLATION_PROMPT_VERSION,
     apply_localized_result,
@@ -14,6 +15,7 @@ from .runtime import (
     persist_translation_cache,
     run_llama_cpp_prompt,
     run_ollama_prompt,
+    reset_cloud_ai_circuit_breaker,
     should_use_llama_cpp,
     should_use_ollama,
     translation_batch_progress,
@@ -433,6 +435,18 @@ def _has_usable_prefilled_translation(
     return True
 
 
+def _prefilled_translation_is_authoritative(item: dict[str, Any]) -> bool:
+    try:
+        prompt_version = int(item.get("translationPromptVersion") or 0)
+    except (TypeError, ValueError):
+        prompt_version = 0
+    return bool(
+        item.get("translationLocked")
+        or item.get("translationEditedByUser")
+        or prompt_version == TRANSLATION_PROMPT_VERSION
+    )
+
+
 
 def _trim_translation_context(text: str, max_chars: int) -> str:
     clean = normalize_text(text)
@@ -463,7 +477,7 @@ def _estimate_translation_char_limit(
     timing_cap = int(duration_seconds * (13.8 if spoken else 11.5)) + (12 if spoken else 8)
     source_cap = int(source_len * (1.2 if spoken else 1.05)) + (6 if spoken else 4)
     floor = 22 if spoken else 16
-    ceiling = 110 if spoken else 84
+    ceiling = 260 if spoken else 180
     return max(floor, min(max(timing_cap, source_cap), ceiling))
 
 
@@ -489,6 +503,7 @@ def _compact_translation_item(
     next_context = normalize_text(item.get("nextContext") or item.get("nextText") or "")
 
     compact_item: dict[str, Any] = {
+        "sourceId": str(item.get("id") or f"segment_{index}"),
         "index": index,
         "sourceText": source_text,
         "durationMs": duration_ms,
@@ -530,7 +545,10 @@ def _estimate_localize_max_tokens(items_payload: list[dict[str, Any]]) -> int:
     estimated = math.ceil(total_chars / 3.4) + len(items_payload) * 10
     lower_bound = OLLAMA_TOKENS_MIN if len(items_payload) == 1 else max(160, min(OLLAMA_TOKENS_MIN, len(items_payload) * 128))
     upper_bound = max(lower_bound, len(items_payload) * OLLAMA_TOKENS_PER_ITEM + 160)
-    return max(lower_bound, min(estimated, upper_bound))
+    result = max(lower_bound, min(estimated, upper_bound))
+    if os.getenv("DUB_AI_MODE") == "cloud":
+        result = max(result, min(8192, len(items_payload) * 512 + 512))
+    return result
 
 
 def _ollama_translation_array_schema(item_count: int) -> dict[str, Any]:
@@ -542,8 +560,9 @@ def _ollama_translation_array_schema(item_count: int) -> dict[str, Any]:
         "items": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["translatedText", "delivery"],
+            "required": ["sourceId", "translatedText", "delivery"],
             "properties": {
+                "sourceId": {"type": "string"},
                 "translatedText": {"type": "string"},
                 "delivery": {
                     "type": "string",
@@ -560,7 +579,30 @@ def _build_localization_prompt(
     source_language: str,
     target_language: str,
     localization_mode: str = "creative",
+    global_context: dict[str, Any] | None = None,
 ) -> str:
+    context_payload = global_context or {}
+    return (
+        "You are a senior Vietnamese audiovisual translator. Translate faithfully before polishing style.\n"
+        f"Source language: {source_language or 'auto'}. Target language: {target_language}.\n"
+        f"Requested style: {localization_mode}. Apply style only when it does not change meaning.\n\n"
+        "NON-NEGOTIABLE RULES:\n"
+        "1. Preserve every fact, subject, action, relationship, number, unit and uncertainty.\n"
+        "2. Never invent explanations, filler, jokes, emotions or facts to fill timing. Natural silence is allowed.\n"
+        "3. Keep names and recurring terminology consistent with GLOBAL_CONTEXT.\n"
+        "4. Use previous/next context only to resolve meaning; translate sourceText only.\n"
+        "5. Produce natural spoken Vietnamese, but fidelity has priority over catchiness.\n"
+        "6. Return exactly one result per sourceId. Never merge, omit, reorder or duplicate IDs.\n"
+        "7. If ASR appears uncertain, translate conservatively; do not guess a new fact.\n"
+        "8. Length limits are soft safety limits. Never add content merely to reach a target length.\n\n"
+        "OUTPUT: JSON array of objects with exactly sourceId, translatedText, delivery.\n"
+        "delivery must be calm, neutral, curious, excited, urgent, or suspense.\n\n"
+        "GLOBAL_CONTEXT:\n"
+        f"{json.dumps(context_payload, ensure_ascii=False)}\n\n"
+        "SEGMENTS:\n"
+        f"{json.dumps(items_payload, ensure_ascii=False)}"
+    )
+
     mode_instructions = ""
     if localization_mode == "creative":
         mode_instructions = (
@@ -619,6 +661,16 @@ def _build_localization_prompt(
 def _build_global_analysis_prompt(full_transcript: str) -> str:
     """Build a prompt to analyze the global theme and style of the video."""
     return (
+        "Analyze this complete source transcript before translation. Do not translate it yet.\n"
+        "Identify genre, theme, chronology, speakers/roles, relationships, recurring entities, names, "
+        "technical terms, ambiguous ASR phrases, tone, and a suitable Vietnamese pronoun policy.\n"
+        "Do not assume a pet vlog, narrator persona, gender, or informal style unless supported by the transcript.\n"
+        "Return only JSON with keys: theme, genre, audience, tone, pronouns, characters, glossary, "
+        "properNames, uncertainTerms. glossary may be an array of concise source-to-Vietnamese mappings.\n\n"
+        f"TRANSCRIPT:\n{full_transcript[:24000]}"
+    )
+
+    return (
         "You are a master video content strategist and expert localization editor.\n"
         "Analyze the following full transcript from a video to build a deep understanding of its context.\n"
         "\n"
@@ -662,9 +714,25 @@ def analyze_global_context_via_ollama(
         prompt = _build_global_analysis_prompt(full_text)
         response = run_ollama_prompt(
             prompt,
-            max_tokens=800,
+            max_tokens=1200,
             temperature=0.1,
             timeout=60,
+            json_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["theme", "genre", "audience", "tone", "pronouns", "characters", "glossary", "properNames", "uncertainTerms"],
+                "properties": {
+                    "theme": {"type": "string"},
+                    "genre": {"type": "string"},
+                    "audience": {"type": "string"},
+                    "tone": {"type": "string"},
+                    "pronouns": {"type": "string"},
+                    "characters": {"type": "array", "items": {"type": "string"}},
+                    "glossary": {"type": "array", "items": {"type": "string"}},
+                    "properNames": {"type": "array", "items": {"type": "string"}},
+                    "uncertainTerms": {"type": "array", "items": {"type": "string"}},
+                },
+            },
         )
         
         # Resilient JSON extraction
@@ -696,6 +764,8 @@ def analyze_global_context_via_ollama(
             return analysis
     except Exception as exc:
         safe_print(f"[warn] Không thể phân tích ngữ cảnh toàn cục: {exc}", flush=True)
+        if os.getenv("DUB_AI_MODE") == "cloud":
+            return {}
         # Fallback: try one more time with a simpler prompt if JSON failed
         try:
              simple_response = run_ollama_prompt("Summarize the theme and character pronouns of this transcript as JSON: " + full_text[:2000], max_tokens=200)
@@ -723,6 +793,7 @@ def _compact_machine_review_item(
     machine_translated = normalize_text(item.get("translatedText") or "")
     duration_ms = max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 400)
     compact_item: dict[str, Any] = {
+        "sourceId": str(item.get("id") or f"segment_{index}"),
         "index": index,
         "sourceText": source_text,
         "machineTranslatedText": machine_translated,
@@ -771,7 +842,10 @@ def _estimate_machine_review_max_tokens(items_payload: list[dict[str, Any]]) -> 
     estimated = math.ceil(total_chars / 3.8) + len(items_payload) * 12
     lower_bound = OLLAMA_TOKENS_MIN if len(items_payload) == 1 else max(160, min(OLLAMA_TOKENS_MIN, len(items_payload) * 128))
     upper_bound = max(lower_bound, len(items_payload) * OLLAMA_TOKENS_PER_ITEM + 160)
-    return max(lower_bound, min(estimated, upper_bound))
+    result = max(lower_bound, min(estimated, upper_bound))
+    if os.getenv("DUB_AI_MODE") == "cloud":
+        result = max(result, min(8192, len(items_payload) * 512 + 512))
+    return result
 
 
 def _build_machine_review_prompt(
@@ -780,6 +854,20 @@ def _build_machine_review_prompt(
     source_language: str,
     localization_mode: str = "creative",
 ) -> str:
+    return (
+        "You are a senior Vietnamese dubbing script editor. The draft has already been translated.\n"
+        f"Source language: {source_language or 'auto'}. Style: {localization_mode}.\n"
+        "Polish spoken cadence without changing, adding, removing, generalizing or guessing any meaning.\n"
+        "Keep names, facts, quantities, chronology, pronouns and terminology consistent across the batch.\n"
+        "Do not add filler to occupy duration. A pause is preferable to invented wording.\n"
+        "When text exceeds maxSpokenChars, condense wording and syntax without dropping any semantic unit.\n"
+        "Use previous/next context to connect wording, but edit only machineTranslatedText.\n"
+        "Return a JSON array with exactly one object per sourceId, in the same order.\n"
+        "Each object must contain sourceId, translatedText and delivery.\n"
+        "delivery is one of calm, neutral, curious, excited, urgent, suspense.\n\n"
+        f"{json.dumps(items_payload, ensure_ascii=False)}"
+    )
+
     mode_instructions = ""
     if localization_mode == "creative":
         mode_instructions = (
@@ -852,7 +940,7 @@ def review_machine_batch_via_ollama(
             f"- Theme: {global_context.get('theme', 'N/A')}\n"
             f"- Tone: {global_context.get('tone', 'N/A')}\n"
             f"- Preferred Pronouns: {global_context.get('pronouns', 'N/A')}\n"
-            f"- Key Terms: {', '.join(global_context.get('glossary', []))}\n"
+            f"- Key Terms: {', '.join(str(value) for value in (global_context.get('glossary') or []))}\n"
         )
 
     base_prompt = _build_machine_review_prompt(items_payload, source_language=source_language)
@@ -895,8 +983,15 @@ def _normalize_machine_review_items(
         raise RuntimeError(
             f"Ollama review trả về không khớp số lượng (nhận {len(reviewed) if isinstance(reviewed, list) else 0}, cần {len(batch)})."
         )
+    reviewed_by_id = {
+        normalize_text(item.get("sourceId") or ""): item
+        for item in reviewed
+        if isinstance(item, dict) and normalize_text(item.get("sourceId") or "")
+    }
     normalized_items: list[dict[str, str]] = []
-    for item, source in zip(reviewed, batch):
+    for position, source in enumerate(batch):
+        source_id = normalize_text(source.get("id") or f"segment_{position}")
+        item = reviewed_by_id.get(source_id) or (reviewed[position] if position < len(reviewed) else {})
         if not isinstance(item, dict):
             raise RuntimeError("Ollama review item must be a JSON object.")
         translated_text = normalize_text(
@@ -911,8 +1006,10 @@ def _normalize_machine_review_items(
         )
         normalized_items.append(
             {
+                "sourceId": source_id,
                 "translatedText": translated_text,
                 "delivery": delivery,
+                "translationProvider": "ai",
             }
         )
     return normalized_items
@@ -946,8 +1043,8 @@ def apply_machine_review_result(
     
     # Final result is chosen from machine draft vs AI refinement
     final_text = pick_best_localized_text(
-        machine_translated_text,
         reviewed_text,
+        machine_translated_text,
         source_text,
     )
     
@@ -957,12 +1054,18 @@ def apply_machine_review_result(
     )
     
     item["translatedText"] = final_text
+    item["faithfulTranslation"] = normalize_text(machine_translated_text)
+    item["spokenAdaptation"] = final_text
+    item["finalText"] = final_text
     item["delivery"] = delivery
     item["machineTranslatedText"] = machine_translated_text
     item.pop("spoken" + "Text", None)
     
     return {
         "translatedText": final_text,
+        "faithfulTranslation": item["faithfulTranslation"],
+        "spokenAdaptation": item["spokenAdaptation"],
+        "finalText": item["finalText"],
         "delivery": delivery,
         "machineTranslatedText": machine_translated_text,
     }
@@ -997,9 +1100,8 @@ def _translation_item_should_stand_alone(item: dict[str, Any]) -> bool:
         )
     )
     return (
-        len(source_text) >= 84
-        or len(combined_context) >= 220
-        or _translation_entry_complexity(item) >= 170
+        len(source_text) >= 180
+        or _translation_entry_complexity(item) >= 420
     )
 
 
@@ -1010,6 +1112,7 @@ def localize_batch_via_ollama(
     *,
     timeout: int | None = None,
     localization_mode: str = "creative",
+    global_context: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """Translate a batch of segments using Ollama API."""
     items_payload = _build_localization_items_payload(batch)
@@ -1018,6 +1121,7 @@ def localize_batch_via_ollama(
         source_language=source_language,
         target_language=target_language,
         localization_mode=localization_mode,
+        global_context=global_context,
     )
     localized = parse_json_response_payload(
         run_ollama_prompt(
@@ -1042,8 +1146,15 @@ def localize_batch_via_ollama(
             f"Ollama trả về kết quả không khớp số lượng (nhận {len(localized) if isinstance(localized, list) else 0}, cần {len(batch)})."
         )
 
+    localized_by_id = {
+        normalize_text(item.get("sourceId") or ""): item
+        for item in localized
+        if isinstance(item, dict) and normalize_text(item.get("sourceId") or "")
+    }
     normalized_items: list[dict[str, str]] = []
-    for item, source in zip(localized, batch):
+    for position, source in enumerate(batch):
+        source_id = normalize_text(source.get("id") or f"segment_{position}")
+        item = localized_by_id.get(source_id) or (localized[position] if position < len(localized) else {})
         if not isinstance(item, dict):
             raise RuntimeError("Ollama localization item must be a JSON object.")
         raw_translated = normalize_text(item.get("translatedText") or "")
@@ -1068,8 +1179,10 @@ def localize_batch_via_ollama(
             delivery = "neutral"
         normalized_items.append(
             {
+                "sourceId": source_id,
                 "translatedText": translated_text,
                 "delivery": delivery,
+                "translationProvider": "ai",
             }
         )
 
@@ -1572,8 +1685,10 @@ def fallback_translate_items(
         translated = prefer_minh_cau_pair(translated_seed, source_text)
         localized_items.append(
             {
+                "sourceId": normalize_text(source_item.get("id") or ""),
                 "translatedText": translated,
                 "delivery": "neutral",
+                "translationProvider": "fallback",
             }
         )
     return localized_items
@@ -1589,11 +1704,33 @@ def localize_batch_via_ollama_resilient(
     phase: str,
     progress_hint: float,
     localization_mode: str = "creative",
+    global_context: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     texts = [normalize_text(item.get("sourceText") or "") for item in batch]
     try:
-        return localize_batch_via_ollama(batch, source_hint, target_language, localization_mode=localization_mode)
+        return localize_batch_via_ollama(
+            batch,
+            source_hint,
+            target_language,
+            localization_mode=localization_mode,
+            global_context=global_context,
+        )
     except Exception as exc:
+        if os.getenv("DUB_AI_MODE") == "cloud":
+            emit_progress(
+                phase=phase,
+                step="translate",
+                progress=progress_hint,
+                message=f"Cloud AI lỗi ở cụm {label}; dừng retry chia nhỏ và chuyển fallback một lần",
+                extra={"warning": normalize_text(str(exc))[:180]},
+            )
+            return fallback_translate_items(
+                batch,
+                texts=texts,
+                source_hint=source_hint,
+                use_llama_cpp=llama_cpp_available,
+                localization_mode=localization_mode,
+            )
         if len(batch) == 1:
             extended_timeout = min(
                 OLLAMA_MAX_TIMEOUT,
@@ -1613,6 +1750,7 @@ def localize_batch_via_ollama_resilient(
                         target_language,
                         timeout=extended_timeout,
                         localization_mode=localization_mode,
+                        global_context=global_context,
                     )
                 except Exception as retry_exc:
                     exc = retry_exc
@@ -1632,6 +1770,8 @@ def localize_batch_via_ollama_resilient(
                 label=f"{label}.1",
                 phase=phase,
                 progress_hint=progress_hint,
+                localization_mode=localization_mode,
+                global_context=global_context,
             )
             right = localize_batch_via_ollama_resilient(
                 batch[midpoint:],
@@ -1641,6 +1781,8 @@ def localize_batch_via_ollama_resilient(
                 label=f"{label}.2",
                 phase=phase,
                 progress_hint=progress_hint,
+                localization_mode=localization_mode,
+                global_context=global_context,
             )
             return left + right
         emit_progress(
@@ -1672,6 +1814,25 @@ def review_machine_batch_via_ollama_resilient(
     try:
         return review_machine_batch_via_ollama(batch, source_language, global_context=global_context)
     except Exception as exc:
+        if os.getenv("DUB_AI_MODE") == "cloud":
+            emit_progress(
+                phase=phase,
+                step="translate",
+                progress=progress_hint,
+                message=f"Cloud AI review lỗi ở cụm {label}; giữ bản dịch trung thành thay vì retry từng câu",
+                extra={"warning": normalize_text(str(exc))[:180]},
+            )
+            return [
+                {
+                    "sourceId": normalize_text(item.get("id") or ""),
+                    "translatedText": normalize_text(item.get("translatedText") or ""),
+                    "delivery": infer_delivery_from_source(
+                        item.get("sourceText") or "",
+                        item.get("translatedText") or "",
+                    ),
+                }
+                for item in batch
+            ]
         if len(batch) == 1:
             extended_timeout = min(OLLAMA_MAX_TIMEOUT, OLLAMA_TIMEOUT + 90)
             if extended_timeout > OLLAMA_TIMEOUT:
@@ -1745,6 +1906,8 @@ def iter_ollama_translation_batches(
     indexed_segments: list[tuple[int, dict[str, Any]]],
 ):
     configured_batch_size = max(TRANSLATE_BATCH_SIZE, 1)
+    if os.getenv("DUB_AI_MODE") == "cloud":
+        configured_batch_size = max(configured_batch_size, 12)
     warmup_batch_size = max(min(TRANSLATE_FIRST_BATCH_SIZE, configured_batch_size), 1)
     steady_batch_size = max(configured_batch_size, 3)
     cursor = 0
@@ -1752,9 +1915,9 @@ def iter_ollama_translation_batches(
 
     while cursor < len(indexed_segments):
         target_size = warmup_batch_size if is_first else steady_batch_size
-        source_char_budget = max(150, target_size * 82)
-        context_char_budget = max(260, target_size * 170)
-        complexity_budget = 110 if target_size == 1 else 110 + target_size * 68
+        source_char_budget = max(240, target_size * 100)
+        context_char_budget = max(520, target_size * 260)
+        complexity_budget = 180 if target_size == 1 else 220 + target_size * 105
         batch_entries: list[tuple[int, dict[str, Any]]] = []
         source_chars = 0
         context_chars = 0
@@ -1816,6 +1979,8 @@ def translate_segments(
     phase: str = "render",
     localization_mode: str = "creative",
 ) -> list[dict[str, Any]]:
+    if os.getenv("DUB_AI_MODE") == "cloud":
+        reset_cloud_ai_circuit_breaker()
     cache_key = hashlib.sha1(
         json.dumps(
             {
@@ -1837,6 +2002,7 @@ def translate_segments(
     for item in segments:
         source_text = normalize_text(item.get("sourceText") or "")
         if source_text and _is_non_dialogue_sfx(source_text):
+            item["isNonDialogue"] = True
             item["translatedText"] = ""
             item["delivery"] = "neutral"
             item.pop("spoken" + "Text", None)
@@ -1859,12 +2025,21 @@ def translate_segments(
                 item.pop("spoken" + "Text", None)
                 if localized.get("machineTranslatedText"):
                     item["machineTranslatedText"] = localized.get("machineTranslatedText")
+                if localized.get("translationProvider"):
+                    item["translationProvider"] = localized.get("translationProvider")
                 if item["translatedText"]:
                     cached_count += 1
                 continue
             if translations.pop(item["id"], None) is not None:
                 invalidated_cached_entries += 1
         prefilled_translated = normalize_text(item.get("translatedText") or "")
+        if prefilled_translated and not _prefilled_translation_is_authoritative(item):
+            item["translatedText"] = ""
+            item.pop("machineTranslatedText", None)
+            item.pop("faithfulTranslation", None)
+            item.pop("spokenAdaptation", None)
+            item.pop("finalText", None)
+            prefilled_translated = ""
         if _has_usable_prefilled_translation(
             source_text,
             prefilled_translated,
@@ -1915,6 +2090,8 @@ def translate_segments(
         item.pop("spoken" + "Text", None)
         if localized.get("machineTranslatedText"):
             item["machineTranslatedText"] = localized.get("machineTranslatedText")
+        if localized.get("translationProvider"):
+            item["translationProvider"] = localized.get("translationProvider")
         if item["translatedText"]:
             cached_count += 1
     seeded_translations = 0
@@ -1926,6 +2103,10 @@ def translate_segments(
             continue
         translated_text = normalize_text(item.get("translatedText") or "")
         if not translated_text or item["id"] in translations:
+            continue
+        if not _prefilled_translation_is_authoritative(item):
+            item["translatedText"] = ""
+            item.pop("machineTranslatedText", None)
             continue
         if not _has_usable_prefilled_translation(
             source_text,
@@ -1951,6 +2132,8 @@ def translate_segments(
     normalized_target_language = normalize_text(target_language).lower() or "vi"
     try:
         provider = str(os.getenv("DUB_TRANSLATE_PROVIDER") or DUB_TRANSLATE_PROVIDER).lower().strip()
+        if provider in {"gemini", "cloud"}:
+            provider = "ollama"
         if provider == "microsoft":
             use_ollama = False
             use_llama_cpp = False
@@ -1988,6 +2171,7 @@ def translate_segments(
         # Skip non-dialogue sound effects — they are not spoken dialogue
         if _is_non_dialogue_sfx(source_text):
             sfx_count += 1
+            item["isNonDialogue"] = True
             item["translatedText"] = ""  # keep empty so TTS skips it
             item["delivery"] = "neutral"
             item.pop("spoken" + "Text", None)
@@ -2003,6 +2187,15 @@ def translate_segments(
     if not pending_segments:
         if seeded_translations or invalidated_cached_entries or prefilled_override_count:
             persist_translation_cache(cache_path, cache_key, translations)
+        for item in segments:
+            final_text = normalize_text(item.get("translatedText") or "")
+            item.setdefault("faithfulTranslation", normalize_text(item.get("machineTranslatedText") or final_text))
+            item.setdefault("spokenAdaptation", final_text)
+            item["finalText"] = final_text
+            item["translationPromptVersion"] = TRANSLATION_PROMPT_VERSION
+        assert_translation_renderable(
+            audit_translation_segments(segments, source_language=source_language)
+        )
         return segments
 
     pending_updates = 0
@@ -2053,16 +2246,38 @@ def translate_segments(
 
     review_backend = "ollama" if use_ollama else ("llama_cpp" if use_llama_cpp else "")
 
+    # Build the story/terminology contract before the first generative translation
+    # request. Previously this happened only after every segment had been
+    # translated in isolation, which was too late to resolve names and pronouns.
+    global_context: dict[str, Any] = {}
+    if review_backend == "ollama":
+        global_context = analyze_global_context_via_ollama(segments, phase=phase)
+        context_path = cache_path.with_name("translation_context.json")
+        context_path.write_text(
+            json.dumps(
+                {
+                    "promptVersion": TRANSLATION_PROMPT_VERSION,
+                    "sourceLanguage": source_language,
+                    "targetLanguage": target_language,
+                    "transcriptHash": cache_key,
+                    "context": global_context,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
     for position, item in pending_segments:
-        # Pre-process: Clean filler words from source text to improve MT quality
-        raw_source = item.get("sourceText") or ""
-        cleaned_source = _clean_filler_words(raw_source)
-        item["sourceText"] = cleaned_source
-        
-        text = normalize_text(cleaned_source)
+        # Preserve the canonical source verbatim. Fillers can carry character and
+        # turn-taking information and must not be destructively removed here.
+        text = normalize_text(item.get("sourceText") or "")
         provider = str(os.getenv("DUB_TRANSLATE_PROVIDER") or DUB_TRANSLATE_PROVIDER).lower().strip()
+        if provider in {"gemini", "cloud"}:
+            provider = "ollama"
         if provider in {"ollama", "auto"}:
-            translated = ""
+            # Generative providers are handled below as contextual windows.
+            continue
         elif provider == "mt5":
             emit_progress(
                 phase=phase,
@@ -2116,7 +2331,9 @@ def translate_segments(
                     use_llama_cpp=review_backend == "llama_cpp",
                 )
             translations[item["id"]] = apply_localized_result(item, localized_items[0], text)
-            translations[item["id"]]["machineTranslatedText"] = text if _looks_like_source_language(text, source_text) else text
+            faithful_text = normalize_text(item.get("translatedText") or "")
+            translations[item["id"]]["machineTranslatedText"] = faithful_text
+            item["machineTranslatedText"] = faithful_text
             pending_updates += 1
             flush_translation_cache()
             continue
@@ -2125,22 +2342,54 @@ def translate_segments(
         if not item.get("machineTranslatedText"):
             item["machineTranslatedText"] = translated
 
+    if review_backend == "ollama":
+        missing_for_ai = [
+            (position, item)
+            for position, item in pending_segments
+            if not normalize_text(item.get("translatedText") or "")
+        ]
+        for start_position, batch, end_position in iter_ollama_translation_batches(missing_for_ai):
+            localized_items = localize_batch_via_ollama_resilient(
+                batch,
+                source_hint=source_hint,
+                target_language=target_language,
+                llama_cpp_available=llama_cpp_available,
+                label=f"{start_position}-{end_position}",
+                phase=phase,
+                progress_hint=machine_progress(end_position),
+                localization_mode=localization_mode,
+                global_context=global_context,
+            )
+            for item, localized in zip(batch, localized_items):
+                result = apply_localized_result(
+                    item,
+                    localized,
+                    normalize_text(item.get("sourceText") or ""),
+                )
+                faithful_text = normalize_text(item.get("translatedText") or "")
+                item["translationProvider"] = normalize_text(localized.get("translationProvider") or "ai")
+                item["machineTranslatedText"] = faithful_text
+                result["machineTranslatedText"] = faithful_text
+                result["translationProvider"] = item["translationProvider"]
+                translations[item["id"]] = result
+                pending_updates += 1
+            flush_translation_cache()
+
     flush_machine_cache(force=True)
     
     review_candidates: list[tuple[int, dict[str, Any]]] = []
     
-    # NEW: Global Context Analysis - understand the whole video before refining
-    global_context = None
-    if review_backend == "ollama":
-        global_context = analyze_global_context_via_ollama(segments, phase=phase)
-
     for index, item in enumerate(segments):
         item["previousTranslatedText"] = normalize_text(segments[index - 1].get("translatedText") or "") if index > 0 else ""
         item["nextTranslatedText"] = normalize_text(segments[index + 1].get("translatedText") or "") if index + 1 < len(segments) else ""
 
     for position, item in pending_segments:
         translated_text = normalize_text(item.get("translatedText") or item.get("machineTranslatedText") or "")
-        if review_backend and should_review_machine_translation(item, translated_text):
+        if (
+            review_backend
+            and item.get("translationProvider") != "fallback"
+            and should_review_machine_translation(item, translated_text)
+        ):
             review_candidates.append((position, item))
             continue
         translations[item["id"]] = apply_machine_review_result(
@@ -2151,7 +2400,11 @@ def translate_segments(
         pending_updates += 1
         flush_translation_cache()
 
-    if review_candidates and review_backend == "ollama":
+    if (
+        review_candidates
+        and review_backend == "ollama"
+        and os.getenv("DUB_AI_MODE") != "cloud"
+    ):
         try:
             warmup_ollama_model(phase=phase, progress=0.39)
         except Exception as exc:
@@ -2163,13 +2416,7 @@ def translate_segments(
                 extra={"warning": normalize_text(str(exc))[:180]},
             )
 
-    for start, batch in iter_translation_batches(
-        [item for _, item in review_candidates],
-        batch_size=TRANSLATE_BATCH_SIZE,
-        first_batch_size=TRANSLATE_FIRST_BATCH_SIZE,
-    ):
-        start_position = review_candidates[start][0]
-        end_index = review_candidates[start + len(batch) - 1][0]
+    for start_position, batch, end_index in iter_ollama_translation_batches(review_candidates):
         emit_progress(
             phase=phase,
             step="translate",
@@ -2292,7 +2539,30 @@ def translate_segments(
     # This must happen BEFORE flushing the cache so that the clean versions are persisted.
     segments = validate_translation_quality(segments)
 
-    flush_translation_cache(force=True)
+    for item in segments:
+        final_text = normalize_text(item.get("translatedText") or "")
+        item.setdefault("faithfulTranslation", normalize_text(item.get("machineTranslatedText") or final_text))
+        item.setdefault("spokenAdaptation", final_text)
+        item["finalText"] = final_text
+        item["translationPromptVersion"] = TRANSLATION_PROMPT_VERSION
+        if item.get("id"):
+            translations[str(item["id"])] = {
+                "translatedText": final_text,
+                "faithfulTranslation": normalize_text(item.get("faithfulTranslation") or final_text),
+                "spokenAdaptation": normalize_text(item.get("spokenAdaptation") or final_text),
+                "finalText": final_text,
+                "delivery": normalize_delivery_choice(item.get("delivery")),
+                "machineTranslatedText": normalize_text(item.get("machineTranslatedText") or final_text),
+                "translationProvider": normalize_text(item.get("translationProvider") or "ai"),
+            }
+    quality_report = audit_translation_segments(
+        segments,
+        source_language=source_language,
+    )
+    assert_translation_renderable(quality_report)
+
+    persist_translation_cache(cache_path, cache_key, translations)
+    pending_updates = 0
     flush_machine_cache(force=True)
 
     return segments
@@ -2715,23 +2985,18 @@ def build_intro_hook_text_with_context(
 
 
 def validate_translation_quality(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Final audit of translation results to fix common ASR and translation artifacts."""
+    """Normalize formatting without making semantic or register changes."""
     for item in segments:
         text = item.get("translatedText") or ""
         if not text:
             continue
-            
-        # 1. Enforce pronoun 'mình' consistency
-        if text.startswith("Tôi ") or text.startswith("Tui "):
-            text = "Mình " + text[4:]
-        if text.startswith("Chúng tôi"):
-            text = text.replace("Chúng tôi", "Chúng mình", 1)
-            
-        # 2. Remove any leftover hanzi
-        text = re.sub(r'[\u4e00-\u9fff]+', '', text)
-        
-        # 3. Final cleanup of multiple spaces
+
+        # Do not silently delete source-language characters. The deterministic
+        # quality gate must see and block leaks instead of exporting a sentence
+        # with missing meaning.
+
+        # Final cleanup of multiple spaces.
         text = re.sub(r'\s+', ' ', text).strip()
-        
+
         item["translatedText"] = text
     return segments

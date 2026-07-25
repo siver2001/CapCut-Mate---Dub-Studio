@@ -1851,33 +1851,11 @@ def _run_tts_chain(
                 global_speed=global_speed,
             )
         except Exception as exc:
-            safe_print(
-                f"  [!] TTS thất bại cho segment {item['index']} ({item['speaker_id']}): {exc} — tạo clip im thay thế để hoàn tất video",
-                flush=True,
-            )
-            target_ms = int(item["target_ms"])
-            silent_duration = max(target_ms / 1000.0, 0.05)
-            silent_clip = tts_dir / f"{item['index']:04d}_silent_fallback.wav"
-            silent_clip.parent.mkdir(parents=True, exist_ok=True)
-            run(
-                [
-                    "ffmpeg", "-y",
-                    "-f", "lavfi",
-                    "-t", f"{silent_duration:.3f}",
-                    "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-                    "-ac", str(STABLE_AUDIO_CHANNELS),
-                    "-ar", str(STABLE_AUDIO_SAMPLE_RATE),
-                    "-c:a", "pcm_s16le",
-                    str(silent_clip),
-                ],
-                timeout=30.0,
-            )
-            fitted_clip = silent_clip
-            clip_ms = int(target_ms)
-            rate = "+0%"
-            pitch = "+0Hz"
-            volume = "+0%"
-            tts_text = str(item.get("translated") or "")
+            segment_id = item.get("segment", {}).get("id") or item["index"]
+            raise RuntimeError(
+                f"TTS failed for dialogue segment {segment_id} "
+                f"({item['speaker_id']}); render stopped instead of exporting missing speech: {exc}"
+            ) from exc
         previous_rate = rate
         chain_results.append(
             {
@@ -1918,7 +1896,7 @@ def create_dub_audio(
     generated_items: list[dict[str, Any]] = []
 
     for index, segment in enumerate(segments, start=1):
-        translated = normalize_text(segment.get("translatedText") or "")
+        translated = normalize_text(segment.get("finalText") or segment.get("translatedText") or "")
         delivery = normalize_text(segment.get("delivery") or "neutral").lower() or "neutral"
         speaker_id = segment.get("speakerId") or "speaker_1"
         voice_override = normalize_text(
@@ -2047,8 +2025,37 @@ def create_dub_audio(
                     print(f"DEBUG: Finished _run_tts_chain for {len(chain)} items.", flush=True)
     generated_items.sort(key=lambda item: int(item["index"]))
 
+    # Enforce local timeline budgets before mixing. A long clip must be fitted or
+    # rejected inside its own slot; it must never push every later line and make
+    # the end of the dub drift beyond the picture.
+    video_duration_ms = int(video_meta.get("durationMs", 0))
+    for idx, item in enumerate(generated_items):
+        segment = item["segment"]
+        original_start = max(int(segment.get("startMs", 0)), 0)
+        next_start = (
+            max(int(generated_items[idx + 1]["segment"].get("startMs", original_start + 500)), original_start + 300)
+            if idx + 1 < len(generated_items)
+            else max(video_duration_ms, original_start + 300)
+        )
+        slot_ms = max(next_start - original_start - 40, 300)
+        if int(item["clip_ms"]) > slot_ms + 100:
+            constrained_path = tts_dir / f"{int(item['index']):04d}_timeline_constrained.wav"
+            constrained_ms = fit_audio_length_with_mode(
+                Path(item["fitted_clip"]),
+                constrained_path,
+                slot_ms,
+                "ultra_tight",
+                preserve_voice=False,
+            )
+            item["fitted_clip"] = constrained_path
+            item["clip_ms"] = int(constrained_ms)
+        if int(item["clip_ms"]) > slot_ms + 250:
+            raise RuntimeError(
+                f"TTS segment {segment.get('id') or item['index']} cannot fit its timeline slot "
+                f"({item['clip_ms']}ms > {slot_ms}ms). Render stopped to prevent cumulative drift."
+            )
+
     # Anchor-Sub-Sync pre-pass: Recalculate and synchronize subtitle/audio timing anchors dynamically
-    timeline_cursor = 0
     for idx, item in enumerate(generated_items):
         segment = item["segment"]
         clip_ms = int(item["clip_ms"])
@@ -2059,13 +2066,9 @@ def create_dub_audio(
         item["orig_start"] = orig_start
         item["orig_end"] = orig_end
         
-        # Prevent speech overlaps by forcing sequential start bounds (minimum 50ms interval)
-        actual_start = max(orig_start, timeline_cursor)
-        if idx > 0:
-            prev_end = generated_items[idx - 1]["actual_end"]
-            if actual_start < prev_end + 50:
-                actual_start = prev_end + 50
-                
+        # Preserve the source anchor. Local fitting above prevents a segment from
+        # creating unbounded cumulative drift.
+        actual_start = orig_start
         actual_end = actual_start + clip_ms
         
         # Save computed timings back to tracking variables and segment dictionary
@@ -2074,7 +2077,10 @@ def create_dub_audio(
         segment["startMs"] = actual_start
         segment["endMs"] = actual_end
         
-        timeline_cursor = actual_end
+        if video_duration_ms and actual_end > video_duration_ms + 250:
+            raise RuntimeError(
+                f"Dub timeline exceeds video duration by {actual_end - video_duration_ms}ms."
+            )
 
     for item in generated_items:
         index = int(item["index"])

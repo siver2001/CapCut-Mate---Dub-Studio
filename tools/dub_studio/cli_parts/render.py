@@ -48,6 +48,11 @@ from .translation import (
 )
 from ..subtitle_utils import renumber_subtitle_timeline
 from ..tts.text import sanitize_for_tts_or_raise
+from ..quality import (
+    assert_translation_renderable,
+    audit_timeline,
+    audit_translation_segments,
+)
 
 def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     import re
@@ -62,7 +67,22 @@ def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[d
         last = cleaned_raw_segments[-1]
         t1 = normalize_text(item.get("text") or item.get("sourceText") or "")
         t2 = normalize_text(last.get("text") or last.get("sourceText") or "")
-        if t1 == t2:
+        same_speaker = (
+            (item.get("speakerId") or item.get("speaker") or "speaker_1")
+            == (last.get("speakerId") or last.get("speaker") or "speaker_1")
+        )
+        item_start = int(item.get("startMs", 0))
+        item_end = int(item.get("endMs", item_start))
+        last_start = int(last.get("startMs", 0))
+        last_end = int(last.get("endMs", last_start))
+        duplicate_timing = (
+            item_start < last_end
+            or (
+                abs(item_start - last_start) <= 120
+                and abs(item_end - last_end) <= 250
+            )
+        )
+        if t1 == t2 and same_speaker and duplicate_timing:
             last["endMs"] = max(last.get("endMs", 0), item.get("endMs", 0))
         else:
             cleaned_raw_segments.append(copy.deepcopy(item))
@@ -87,7 +107,18 @@ def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[d
         for s in sentences:
             if len(s) > 40:
                 parts = re.findall(r'[^,，]*(?:[,，]|$)', s)
-                refined.extend([p.strip() for p in parts if p.strip()])
+                for part in (p.strip() for p in parts if p.strip()):
+                    if len(part) <= 80:
+                        refined.append(part)
+                    elif " " in part:
+                        refined.extend(split_long_clause(part, max_words=18, max_chars=80))
+                    else:
+                        # CJK ASR often omits punctuation entirely. Bound each
+                        # canonical clause without duplicating the source text.
+                        refined.extend(
+                            part[offset:offset + 60]
+                            for offset in range(0, len(part), 60)
+                        )
             else:
                 refined.append(s)
         sentences = refined
@@ -155,7 +186,13 @@ def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[d
         gap = seg["startMs"] - last["endMs"]
         combined_text = (last["sourceText"] + " " + seg["sourceText"]).strip()
         # Merge if they have the same speaker, the gap is small (< 500ms), and the text is not too long.
-        if seg["speakerId"] == last["speakerId"] and (gap < 500 or (last["endMs"] - last["startMs"] < 1500)) and len(combined_text) < 80:
+        if (
+            seg["speakerId"] == last["speakerId"]
+            and 0 <= gap < 500
+            and (last["endMs"] - last["startMs"] >= 300)
+            and len(combined_text) < 80
+            and not re.search(r"[.!?…。！？]$", last["sourceText"])
+        ):
             last["endMs"] = seg["endMs"]
             last["sourceText"] = combined_text
             last["subtitleChunks"] = split_display_text(combined_text)
@@ -166,6 +203,7 @@ def _split_segments_into_sentences(raw_segments: list[dict[str, Any]]) -> list[d
     for i, seg in enumerate(merged_segments):
         seg["id"] = f"seg_{(i+1):04d}"
         seg["index"] = i + 1
+        seg["sourceSegmentId"] = seg["id"]
 
     return merged_segments
 
@@ -2187,8 +2225,9 @@ def restore_cached_analysis(
         sample_path = target_speaker_dir / f"{speaker_id}_sample.wav"
         speaker["samplePath"] = str(sample_path) if sample_path.exists() else ""
         speaker["voiceCloneReady"] = sample_path.exists()
-    if "segments" in restored:
-        restored["segments"] = _split_translated_segments_by_sentence(restored["segments"])
+    # Cached analyses already contain canonical source segments. Re-splitting the
+    # translated prose here used to duplicate the complete source text across
+    # several target rows and broke cache/context alignment.
     return restored
 
 
@@ -2335,7 +2374,15 @@ def do_analyze_resilient(
     detected_language = transcription.get("sourceLanguage") or ""
     heuristic_language, heuristic_confidence, alternatives = detect_source_language(transcript_text)
     source_language = detected_language if detected_language in LANGUAGE_OPTIONS else heuristic_language
-    language_confidence = 0.92 if detected_language == heuristic_language else max(0.74, heuristic_confidence)
+    language_confidence = (
+        max(0.92, heuristic_confidence)
+        if detected_language == heuristic_language
+        else (
+            0.48
+            if detected_language in LANGUAGE_OPTIONS
+            else heuristic_confidence
+        )
+    )
     emit_progress(phase="analyze", step="language", progress=0.55, message="Đang xác nhận ngôn ngữ nguồn")
 
     speaker_count = max(int(transcription.get("speakerCount", 1)), 1)
@@ -2433,7 +2480,18 @@ def do_analyze_resilient(
         phase="analyze",
         localization_mode=localization_mode,
     )
-    segments = _split_translated_segments_by_sentence(segments)
+    translation_quality = audit_translation_segments(
+        segments,
+        source_language=source_language,
+    )
+    if translation_quality.get("warningCount"):
+        warnings.append(
+            f"Bản dịch có {translation_quality['warningCount']} cảnh báo nhịp nói; "
+            "hệ thống sẽ giữ nguyên nghĩa và xử lý timing ở bước lồng tiếng."
+        )
+    # Keep the canonical source-to-target mapping intact. Display subtitles may
+    # be split later without duplicating the complete source text into every
+    # child sentence.
     subtitle_timeline = build_subtitle_timeline(segments)
 
     analysis = {
@@ -2452,6 +2510,7 @@ def do_analyze_resilient(
         "detectedSpeakerCountRaw": speaker_count,
         "voiceLayout": voice_layout,
         "segments": segments,
+        "translationQuality": translation_quality,
         "transcriptionProvider": transcription_provider,
         "alignmentProvider": alignment_provider,
         "diarizationProvider": diarization_provider,
@@ -2750,6 +2809,12 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     output_targets = render_options.get("outputTargets") or {"mp4": True, "draft": False}
     output_ratio = render_options.get("outputRatio") or "original"
     video_speed = float(render_options.get("videoSpeed") or analysis.get("renderDefaults", {}).get("videoSpeed") or 1.0)
+    if not math.isfinite(video_speed) or video_speed <= 0:
+        raise RuntimeError(f"Invalid videoSpeed: {video_speed}")
+    render_video_meta = {
+        **analysis["videoMeta"],
+        "durationMs": int(round(int(analysis["videoMeta"].get("durationMs", 0)) / video_speed)),
+    }
     subtitle_enabled = bool(subtitle_preset.get("enabled", True))
     effective_subtitle_region = resolve_subtitle_region_for_position(
         analysis["videoMeta"],
@@ -2881,6 +2946,23 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         else editable_subtitle_timeline
     )
     segments = apply_subtitle_timeline_to_segments(segments, subtitle_timeline)
+    # Imported or manually edited subtitle text is applied after translation.
+    # Re-run the hard gate here so an empty/source-language edit cannot bypass
+    # validation and reach TTS.
+    final_translation_quality = audit_translation_segments(
+        segments,
+        source_language=source_language,
+    )
+    assert_translation_renderable(final_translation_quality)
+    final_timeline_quality = audit_timeline(
+        segments,
+        video_duration_ms=int(render_video_meta.get("durationMs", 0)),
+    )
+    if final_timeline_quality["status"] == "blocked":
+        raise RuntimeError(
+            "Subtitle timeline is invalid or exceeds the video duration: "
+            f"{final_timeline_quality}"
+        )
     subtitle_timeline = renumber_subtitle_timeline(subtitle_timeline)
     display_subtitles: list[SubtitleLine] = split_subtitle_lines_for_display(
         subtitle_timeline_to_lines(subtitle_timeline),
@@ -2952,7 +3034,7 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     dub_audio_path = dirs["audio"] / "dub_voice.wav"
     manifest = create_dub_audio(
         job_id=str(analysis.get('jobId') or ''),
-        video_meta=analysis['videoMeta'],
+        video_meta=render_video_meta,
         source_video_path=input_path,
         segments=segments,
         voices=voice_mapping,
