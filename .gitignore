@@ -82,6 +82,7 @@ scratch/
 tmp_*/
 logs/
 *.log
+=50
 
 # Rendered media / large local inputs
 douyin_video.mp4

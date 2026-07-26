@@ -63,7 +63,7 @@ from gui.config import (
 from gui.preview_canvas import PreviewCanvas
 from gui.video_preview_widget import VideoPreviewWidget
 from gui.utils import APP_STYLESHEET, repair_mojibake_text
-from tools.dub_studio.config import DEFAULT_CLOUD_MODEL
+from tools.dub_studio.config import DEFAULT_CLOUD_MODEL, FREE_TIER_CLOUD_MODELS
 from .helpers import SafeDoubleSpinBox, SafeSlider, SafeSpinBox, SectionWidget
 
 
@@ -1786,18 +1786,49 @@ class WindowLayoutMixin:
         left_grid.addWidget(self.conf_ai_mode_combo, 4, 1)
 
         # 6. DUB_CLOUD_MODEL
-        left_grid.addWidget(self._field_label("Cloud Model Name:"), 5, 0)
-        self.conf_cloud_model_edit = QLineEdit()
-        prepare_input(
-            self.conf_cloud_model_edit,
-            placeholder=f"Ví dụ: {DEFAULT_CLOUD_MODEL}",
+        left_grid.addWidget(self._field_label("Cloud Model:"), 5, 0)
+        self.conf_cloud_model_combo = QComboBox()
+        initial_models = [
+            DEFAULT_CLOUD_MODEL,
+            *sorted(
+                model
+                for model in FREE_TIER_CLOUD_MODELS
+                if model != DEFAULT_CLOUD_MODEL
+            ),
+        ]
+        self.conf_cloud_model_combo.addItems(initial_models)
+        self.conf_cloud_model_combo.setEditable(False)
+        prepare_input(self.conf_cloud_model_combo)
+        self.conf_cloud_model_combo.setToolTip(
+            "Chọn model từ danh sách mà nút Kiểm tra tải theo API key đã chọn."
         )
-        left_grid.addWidget(self.conf_cloud_model_edit, 5, 1)
+        # Compatibility alias for code/extensions written before the model
+        # selector became a non-editable combo box.
+        self.conf_cloud_model_edit = self.conf_cloud_model_combo
+        left_grid.addWidget(self.conf_cloud_model_combo, 5, 1)
 
         # 7. Gemini key pool. Secrets are stored with Windows DPAPI and are never
         # rendered back into the table.
-        left_grid.addWidget(self._field_label("Gemini API Keys:"), 6, 0)
-        cloud_key_panel = QVBoxLayout()
+        cloud_key_section = QFrame()
+        cloud_key_section.setObjectName("GeminiKeySection")
+        cloud_key_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        cloud_key_section.setStyleSheet(
+            "QFrame#GeminiKeySection {"
+            " background: rgba(7, 22, 42, 0.55);"
+            " border: 1px solid #15577a;"
+            " border-radius: 12px;"
+            "}"
+        )
+        cloud_key_panel = QVBoxLayout(cloud_key_section)
+        cloud_key_panel.setContentsMargins(12, 10, 12, 10)
+        cloud_key_panel.setSpacing(8)
+
+        cloud_key_title = QLabel("Gemini API Keys")
+        cloud_key_title.setObjectName("SectionTitle")
+        cloud_key_panel.addWidget(cloud_key_title)
         self.conf_cloud_key_table = QTableWidget(0, 4)
         self.conf_cloud_key_table.setHorizontalHeaderLabels(
             ["Tên key", "Ưu tiên", "Trạng thái", "Đã dùng hôm nay"]
@@ -1816,22 +1847,46 @@ class WindowLayoutMixin:
         key_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in range(1, 4):
             key_header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.conf_cloud_key_table.setMinimumHeight(190)
+        self.conf_cloud_key_table.setMinimumHeight(150)
+        self.conf_cloud_key_table.setMaximumHeight(210)
+        self.conf_cloud_key_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         cloud_key_panel.addWidget(self.conf_cloud_key_table)
+        cloud_key_panel.addSpacing(12)
+
+        cloud_key_input_row = QHBoxLayout()
+        self.conf_cloud_new_key_edit = QLineEdit()
+        self.conf_cloud_new_key_edit.setEchoMode(
+            QLineEdit.EchoMode.PasswordEchoOnEdit
+        )
+        prepare_input(
+            self.conf_cloud_new_key_edit,
+            placeholder="Dán Gemini API key mới vào đây...",
+        )
+        self.conf_cloud_key_add_btn = self._make_button(
+            "Thêm key vào danh sách",
+            "primary",
+        )
+        self.conf_cloud_key_add_btn.setMinimumHeight(36)
+        self.conf_cloud_key_add_btn.setMinimumWidth(180)
+        self.conf_cloud_key_add_btn.clicked.connect(self.add_gemini_key)
+        self.conf_cloud_new_key_edit.returnPressed.connect(self.add_gemini_key)
+        cloud_key_input_row.addWidget(self.conf_cloud_new_key_edit, 1)
+        cloud_key_input_row.addWidget(self.conf_cloud_key_add_btn)
+        cloud_key_panel.addLayout(cloud_key_input_row)
 
         cloud_key_buttons = QHBoxLayout()
-        self.conf_cloud_key_add_btn = self._make_button("Thêm", "ghost")
-        self.conf_cloud_key_edit_btn = self._make_button("Sửa", "ghost")
-        self.conf_cloud_key_delete_btn = self._make_button("Xóa", "ghost")
+        self.conf_cloud_key_edit_btn = self._make_button("Sửa key", "ghost")
+        self.conf_cloud_key_delete_btn = self._make_button("Xóa key", "ghost")
         self.conf_cloud_key_toggle_btn = self._make_button("Bật/Tắt", "ghost")
-        self.conf_cloud_api_check_btn = self._make_button("Kiểm tra", "ghost")
-        self.conf_cloud_key_add_btn.clicked.connect(self.add_gemini_key)
+        self.conf_cloud_api_check_btn = self._make_button("Tra cứu model", "ghost")
         self.conf_cloud_key_edit_btn.clicked.connect(self.edit_gemini_key)
         self.conf_cloud_key_delete_btn.clicked.connect(self.delete_gemini_key)
         self.conf_cloud_key_toggle_btn.clicked.connect(self.toggle_gemini_key)
         self.conf_cloud_api_check_btn.clicked.connect(self.check_cloud_models)
         for button in (
-            self.conf_cloud_key_add_btn,
             self.conf_cloud_key_edit_btn,
             self.conf_cloud_key_delete_btn,
             self.conf_cloud_key_toggle_btn,
@@ -1841,7 +1896,6 @@ class WindowLayoutMixin:
             cloud_key_buttons.addWidget(button)
         cloud_key_buttons.addStretch(1)
         cloud_key_panel.addLayout(cloud_key_buttons)
-        left_grid.addLayout(cloud_key_panel, 6, 1)
         self._gemini_key_refresh_timer = QTimer(self)
         self._gemini_key_refresh_timer.setInterval(5000)
         self._gemini_key_refresh_timer.timeout.connect(
@@ -1926,7 +1980,9 @@ class WindowLayoutMixin:
         config_cols_layout.addLayout(right_grid, 1)
         config_inner_layout.addLayout(config_cols_layout)
 
-        config_inner_layout.addSpacing(16)
+        config_inner_layout.addSpacing(8)
+        config_inner_layout.addWidget(cloud_key_section)
+        config_inner_layout.addSpacing(8)
 
         # Combined wide buttons layout at the bottom
         buttons_layout = QHBoxLayout()

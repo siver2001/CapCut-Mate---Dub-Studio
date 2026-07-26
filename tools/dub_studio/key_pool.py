@@ -90,9 +90,9 @@ def unprotect_secret(encrypted_secret: str) -> str:
 
 def mask_key(secret: str) -> str:
     value = str(secret or "").strip()
-    if len(value) <= 10:
+    if len(value) <= 14:
         return "••••••"
-    return f"{value[:5]}…{value[-4:]}"
+    return f"{value[:8]}…{value[-4:]}"
 
 
 def _utc_now() -> datetime:
@@ -442,6 +442,12 @@ class GeminiKeyPool:
             now = _utc_now()
             rows: list[dict[str, Any]] = []
             for item in self._data["keys"]:
+                try:
+                    display_mask = mask_key(
+                        unprotect_secret(item["encryptedKey"])
+                    )
+                except Exception:
+                    display_mask = str(item.get("maskedKey") or "••••••")
                 status = str(item.get("status") or "ready")
                 cooldown_raw = str(item.get("cooldownUntil") or "")
                 if cooldown_raw:
@@ -479,7 +485,7 @@ class GeminiKeyPool:
                     {
                         "id": str(item["id"]),
                         "name": str(item.get("name") or "Gemini key"),
-                        "maskedKey": str(item.get("maskedKey") or "••••••"),
+                        "maskedKey": display_mask,
                         "priority": int(item.get("priority") or 9999),
                         "status": status,
                         "statusLabel": status_label,
@@ -501,6 +507,19 @@ class GeminiKeyPool:
     def has_keys(self) -> bool:
         with self._lock:
             return bool(self._data["keys"])
+
+    def has_secret(self, secret: str) -> bool:
+        value = str(secret or "").strip()
+        if not value:
+            return False
+        with self._lock:
+            for item in self._data["keys"]:
+                try:
+                    if unprotect_secret(item["encryptedKey"]) == value:
+                        return True
+                except Exception:
+                    continue
+            return False
 
 
 def get_gemini_key_pool(*, reload: bool = False) -> GeminiKeyPool:

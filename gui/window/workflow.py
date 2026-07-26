@@ -4,6 +4,7 @@ import copy
 import hashlib
 import importlib
 import logging
+import os
 import shutil
 import time
 import uuid
@@ -47,6 +48,35 @@ from tools.dub_studio.render_utils import default_subtitle_region
 from tools.dub_studio.subtitle_utils import compose_srt_from_timeline, parse_srt_to_timeline
 
 
+def _available_gemini_models(
+    payload: dict[str, Any],
+    *,
+    free_only: bool,
+) -> list[str]:
+    models: list[str] = []
+    for item in payload.get("models") or []:
+        if not isinstance(item, dict):
+            continue
+        methods = item.get("supportedGenerationMethods") or []
+        if "generateContent" not in methods:
+            continue
+        name = str(item.get("name") or "").removeprefix("models/").strip()
+        if not name or not name.startswith("gemini-"):
+            continue
+        if free_only and name not in FREE_TIER_CLOUD_MODELS:
+            continue
+        if name not in models:
+            models.append(name)
+    return sorted(
+        models,
+        key=lambda name: (
+            name != DEFAULT_CLOUD_MODEL,
+            "flash" not in name,
+            name,
+        ),
+    )
+
+
 class WindowWorkflowMixin:
     def _selected_gemini_key_id(self) -> str:
         table = getattr(self, "conf_cloud_key_table", None)
@@ -64,10 +94,13 @@ class WindowWorkflowMixin:
         table.setRowCount(len(rows))
         selected_row = -1
         for row_index, row in enumerate(rows):
-            name = str(row["name"])
+            name = f'{row["name"]} · {row["maskedKey"]}'
             if row.get("active"):
                 name += "  • đang dùng"
             name_item = QTableWidgetItem(name)
+            name_item.setToolTip(
+                f'Tên: {row["name"]}\nNhận diện key: {row["maskedKey"]}'
+            )
             name_item.setData(Qt.ItemDataRole.UserRole, row["id"])
             table.setItem(row_index, 0, name_item)
             table.setItem(row_index, 1, QTableWidgetItem(str(row["priority"])))
@@ -82,36 +115,44 @@ class WindowWorkflowMixin:
             table.selectRow(selected_row)
 
     def add_gemini_key(self) -> None:
-        name, accepted = QInputDialog.getText(
-            self, "Thêm Gemini API Key", "Tên key:"
-        )
-        if not accepted:
+        key_input = getattr(self, "conf_cloud_new_key_edit", None)
+        secret = key_input.text().strip() if key_input is not None else ""
+        if not secret:
+            QMessageBox.information(
+                self,
+                "Chưa nhập API key",
+                "Hãy dán Gemini API key vào ô “Dán Gemini API key mới vào đây”.",
+            )
+            if key_input is not None:
+                key_input.setFocus()
             return
-        secret, accepted = QInputDialog.getText(
-            self,
-            "Thêm Gemini API Key",
-            "API key:",
-            QLineEdit.EchoMode.Password,
-        )
-        if not accepted or not secret.strip():
+        pool = get_gemini_key_pool()
+        if pool.has_secret(secret):
+            QMessageBox.information(
+                self,
+                "Key đã tồn tại",
+                "API key này đã có trong danh sách.",
+            )
+            key_input.clear()
             return
-        priority, accepted = QInputDialog.getInt(
-            self,
-            "Thêm Gemini API Key",
-            "Ưu tiên (số nhỏ chạy trước):",
-            max(len(get_gemini_key_pool().rows()) + 1, 1),
-            1,
-            9999,
-        )
-        if not accepted:
-            return
+        existing_rows = pool.rows()
+        priority = max(
+            [int(row.get("priority") or 0) for row in existing_rows] + [0]
+        ) + 1
+        name = f"Gemini Key {priority}"
         try:
-            get_gemini_key_pool().add_key(
-                name=name.strip() or f"Gemini key {priority}",
-                secret=secret.strip(),
+            pool.add_key(
+                name=name,
+                secret=secret,
                 priority=priority,
             )
+            key_input.clear()
             self.refresh_gemini_key_table()
+            QMessageBox.information(
+                self,
+                "Đã thêm API key",
+                f"{name} đã được lưu vào kho bảo mật.",
+            )
         except Exception as exc:
             QMessageBox.warning(self, "Không thể thêm key", str(exc))
 
@@ -1700,7 +1741,12 @@ class WindowWorkflowMixin:
             "DUB_CLOUD_MODEL",
             DEFAULT_CLOUD_MODEL,
         )
-        self.conf_cloud_model_edit.setText(cloud_model)
+        bare_cloud_model = cloud_model.removeprefix("models/")
+        model_index = self.conf_cloud_model_combo.findText(bare_cloud_model)
+        if model_index < 0 and bare_cloud_model in FREE_TIER_CLOUD_MODELS:
+            self.conf_cloud_model_combo.addItem(bare_cloud_model)
+            model_index = self.conf_cloud_model_combo.findText(bare_cloud_model)
+        self.conf_cloud_model_combo.setCurrentIndex(max(model_index, 0))
 
         voice_api_url = env_data.get("DUB_VOICE_API_URL") or os.getenv("DUB_VOICE_API_URL", "")
         self.conf_voice_api_url_edit.setText(voice_api_url)
@@ -1729,7 +1775,7 @@ class WindowWorkflowMixin:
             env_file = Path(__file__).resolve().parent.parent.parent / ".env"
         
         ai_mode = self.conf_ai_mode_combo.currentText().strip()
-        cloud_model = self.conf_cloud_model_edit.text().strip()
+        cloud_model = self.conf_cloud_model_combo.currentText().strip()
         voice_api_url = self.conf_voice_api_url_edit.text().strip()
         voice_api_key = self.conf_voice_api_key_edit.text().strip()
 
@@ -1839,17 +1885,22 @@ class WindowWorkflowMixin:
             return
 
         import requests
-        model_name = self.conf_cloud_model_edit.text().strip() or DEFAULT_CLOUD_MODEL
-        qualified = (
-            model_name if model_name.startswith("models/") else f"models/{model_name}"
+        current_model = (
+            self.conf_cloud_model_combo.currentText().strip()
+            or DEFAULT_CLOUD_MODEL
         )
-        # Model metadata validates key/model access without consuming a generated
-        # answer. It cannot reveal exact remaining Gemini project quota.
-        url = f"https://generativelanguage.googleapis.com/v1beta/{qualified}"
+        free_only = os.getenv(
+            "DUB_CLOUD_FREE_ONLY",
+            "true",
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        # Listing model metadata does not generate content or consume generation
+        # tokens. The result is specific to the selected API key.
+        url = "https://generativelanguage.googleapis.com/v1beta/models"
         try:
             resp = requests.get(
                 url,
                 headers={"x-goog-api-key": candidate.secret},
+                params={"pageSize": 1000},
                 timeout=15,
             )
             if resp.status_code == 429:
@@ -1876,14 +1927,42 @@ class WindowWorkflowMixin:
                     f"API Key hoặc model không thể truy cập:\n{err_msg}",
                 )
                 return
+
+            available_models = _available_gemini_models(
+                resp.json(),
+                free_only=free_only,
+            )
+            if not available_models:
+                if free_only:
+                    detail = (
+                        "Key hoạt động nhưng không tìm thấy model nào vừa khả dụng "
+                        "vừa nằm trong danh sách Free Tier an toàn của ứng dụng."
+                    )
+                else:
+                    detail = "Key hoạt động nhưng không có model generateContent khả dụng."
+                QMessageBox.warning(self, "Không có model phù hợp", detail)
+                return
+
+            self.conf_cloud_model_combo.blockSignals(True)
+            self.conf_cloud_model_combo.clear()
+            self.conf_cloud_model_combo.addItems(available_models)
+            selected_index = self.conf_cloud_model_combo.findText(current_model)
+            if selected_index < 0:
+                selected_index = self.conf_cloud_model_combo.findText(
+                    DEFAULT_CLOUD_MODEL
+                )
+            self.conf_cloud_model_combo.setCurrentIndex(max(selected_index, 0))
+            self.conf_cloud_model_combo.blockSignals(False)
             pool.record_verified(key_id)
             self.refresh_gemini_key_table()
             QMessageBox.information(
                 self,
-                "Kiểm tra thành công",
+                "Đã tải danh sách model",
                 (
-                    f"{candidate.name} có quyền truy cập {model_name}.\n\n"
-                    "Ứng dụng sẽ tự chuyển sang key kế tiếp nếu key này hết quota."
+                    f"Tìm thấy {len(available_models)} model phù hợp với "
+                    f"{candidate.name}.\n\n"
+                    "Hãy bấm vào danh sách Cloud Model để chọn. "
+                    "Ứng dụng sẽ dùng đúng model đó cho toàn bộ pipeline."
                 ),
             )
         except Exception as e:
