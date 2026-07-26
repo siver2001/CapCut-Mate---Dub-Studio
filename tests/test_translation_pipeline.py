@@ -10,6 +10,7 @@ from tools.dub_studio.cli_parts.runtime import TRANSLATION_PROMPT_VERSION
 from tools.dub_studio.cli_parts.translation import (
     _build_localization_items_payload,
     _build_localization_prompt,
+    _cloud_action_extra,
     _prefilled_translation_is_authoritative,
     apply_machine_review_result,
     iter_ollama_translation_batches,
@@ -18,6 +19,14 @@ from tools.dub_studio.cli_parts.translation import (
 
 
 class TranslationPipelineTests(unittest.TestCase):
+    def test_cloud_quota_maps_to_gui_action(self):
+        class QuotaError(RuntimeError):
+            code = "gemini_quota_exhausted"
+
+        extra = _cloud_action_extra(QuotaError("quota"))
+        self.assertTrue(extra["actionRequired"])
+        self.assertEqual(extra["recommendedAction"], "update_cloud_api_key")
+
     def test_long_silence_is_not_assumed_same_speaker(self):
         previous = SubtitleLine(1, 0, 500, "First line")
         current = SubtitleLine(2, 2500, 3000, "Second line")
@@ -141,6 +150,40 @@ class TranslationPipelineTests(unittest.TestCase):
             cache_path.with_name("test_translation_pipeline_cache.microsoft.json").unlink(missing_ok=True)
         self.assertEqual(result[0]["finalText"], "Đây là phép thử.")
         self.assertEqual(result[0]["quality"]["status"], "pass")
+
+    def test_bad_current_cache_is_requeued_and_repaired(self):
+        segments = [{
+            "id": "seg_0001",
+            "sourceText": "This is the place where we can see the old bridge.",
+            "translatedText": "This is a place where we can see that old bridge.",
+            "translationPromptVersion": TRANSLATION_PROMPT_VERSION,
+            "startMs": 0,
+            "endMs": 3000,
+            "speakerId": "speaker_1",
+        }]
+        cache_path = Path("temp/test_translation_repair_cache.json")
+        cache_path.unlink(missing_ok=True)
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"DUB_TRANSLATE_PROVIDER": "google", "DUB_AI_MODE": "local"},
+                    clear=False,
+                ),
+                patch(
+                    "tools.dub_studio.cli_parts.translation.translate_via_google_free",
+                    return_value="Đây là nơi chúng ta có thể nhìn thấy cây cầu cổ.",
+                ),
+            ):
+                result = translate_segments(segments, "en", cache_path)
+        finally:
+            cache_path.unlink(missing_ok=True)
+            cache_path.with_name(
+                "test_translation_repair_cache.microsoft.json"
+            ).unlink(missing_ok=True)
+
+        self.assertEqual(result[0]["quality"]["status"], "pass")
+        self.assertIn("cây cầu", result[0]["finalText"])
 
 
 if __name__ == "__main__":

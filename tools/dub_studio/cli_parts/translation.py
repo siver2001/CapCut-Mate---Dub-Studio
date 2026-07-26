@@ -1694,6 +1694,22 @@ def fallback_translate_items(
     return localized_items
 
 
+def _cloud_action_extra(exc: Exception) -> dict[str, Any]:
+    code = normalize_text(getattr(exc, "code", "") or "")
+    if code not in {
+        "gemini_quota_exhausted",
+        "gemini_api_key_invalid",
+        "gemini_api_key_missing",
+    }:
+        return {}
+    return {
+        "actionRequired": True,
+        "errorCode": code,
+        "recommendedAction": "update_cloud_api_key",
+        "provider": "gemini",
+    }
+
+
 def localize_batch_via_ollama_resilient(
     batch: list[dict[str, Any]],
     *,
@@ -1717,12 +1733,16 @@ def localize_batch_via_ollama_resilient(
         )
     except Exception as exc:
         if os.getenv("DUB_AI_MODE") == "cloud":
+            action_extra = _cloud_action_extra(exc)
             emit_progress(
                 phase=phase,
                 step="translate",
                 progress=progress_hint,
                 message=f"Cloud AI lỗi ở cụm {label}; dừng retry chia nhỏ và chuyển fallback một lần",
-                extra={"warning": normalize_text(str(exc))[:180]},
+                extra={
+                    "warning": normalize_text(str(exc))[:180],
+                    **action_extra,
+                },
             )
             return fallback_translate_items(
                 batch,
@@ -1815,12 +1835,16 @@ def review_machine_batch_via_ollama_resilient(
         return review_machine_batch_via_ollama(batch, source_language, global_context=global_context)
     except Exception as exc:
         if os.getenv("DUB_AI_MODE") == "cloud":
+            action_extra = _cloud_action_extra(exc)
             emit_progress(
                 phase=phase,
                 step="translate",
                 progress=progress_hint,
                 message=f"Cloud AI review lỗi ở cụm {label}; giữ bản dịch trung thành thay vì retry từng câu",
-                extra={"warning": normalize_text(str(exc))[:180]},
+                extra={
+                    "warning": normalize_text(str(exc))[:180],
+                    **action_extra,
+                },
             )
             return [
                 {
@@ -2185,18 +2209,44 @@ def translate_segments(
             message=f"Đã bỏ qua {sfx_count} đoạn âm thanh/hiệu ứng không phải lời thoại",
         )
     if not pending_segments:
-        if seeded_translations or invalidated_cached_entries or prefilled_override_count:
-            persist_translation_cache(cache_path, cache_key, translations)
         for item in segments:
             final_text = normalize_text(item.get("translatedText") or "")
             item.setdefault("faithfulTranslation", normalize_text(item.get("machineTranslatedText") or final_text))
             item.setdefault("spokenAdaptation", final_text)
             item["finalText"] = final_text
             item["translationPromptVersion"] = TRANSLATION_PROMPT_VERSION
-        assert_translation_renderable(
-            audit_translation_segments(segments, source_language=source_language)
+        cached_quality = audit_translation_segments(
+            segments,
+            source_language=source_language,
         )
-        return segments
+        if not cached_quality.get("criticalCount"):
+            if seeded_translations or invalidated_cached_entries or prefilled_override_count:
+                persist_translation_cache(cache_path, cache_key, translations)
+            return segments
+
+        # A previous interrupted run may have flushed an incomplete intermediate
+        # cache before the final quality gate. Requeue only the broken segments
+        # instead of failing forever on every retry of the same video.
+        for position, item in enumerate(segments, start=1):
+            if (item.get("quality") or {}).get("status") != "blocked":
+                continue
+            item["translatedText"] = ""
+            item.pop("machineTranslatedText", None)
+            item.pop("faithfulTranslation", None)
+            item.pop("spokenAdaptation", None)
+            item.pop("finalText", None)
+            item.pop("translationProvider", None)
+            translations.pop(str(item.get("id") or ""), None)
+            pending_segments.append((position, item))
+        emit_progress(
+            phase=phase,
+            step="translate_repair",
+            progress=0.32,
+            message=(
+                f"Đang tự dịch lại {len(pending_segments)} đoạn lỗi từ cache "
+                "thay vì dừng batch"
+            ),
+        )
 
     pending_updates = 0
     pending_machine_updates = 0
@@ -2500,7 +2550,18 @@ def translate_segments(
             use_llama_cpp=review_backend == "llama_cpp",
         )
         if localized_items:
-            translations[item["id"]] = apply_localized_result(item, localized_items[0], source_text)
+            localized = localized_items[0]
+            item["translationProvider"] = normalize_text(
+                localized.get("translationProvider") or "fallback"
+            )
+            translations[item["id"]] = apply_localized_result(
+                item,
+                localized,
+                source_text,
+            )
+            translations[item["id"]]["translationProvider"] = item[
+                "translationProvider"
+            ]
         translated_text = normalize_text(item.get("translatedText") or "")
         if not translated_text:
             forced_text = normalize_text(item.get("machineTranslatedText") or "")
@@ -2538,6 +2599,77 @@ def translate_segments(
     # Final step: Audit and fix common translation artifacts to ensure persona consistency
     # This must happen BEFORE flushing the cache so that the clean versions are persisted.
     segments = validate_translation_quality(segments)
+
+    for item in segments:
+        final_text = normalize_text(item.get("translatedText") or "")
+        item["finalText"] = final_text
+        item["spokenAdaptation"] = final_text
+    preliminary_quality = audit_translation_segments(
+        segments,
+        source_language=source_language,
+    )
+    blocked_for_repair = [
+        (position, item)
+        for position, item in enumerate(segments, start=1)
+        if (item.get("quality") or {}).get("status") == "blocked"
+    ]
+    if blocked_for_repair:
+        emit_progress(
+            phase=phase,
+            step="translate_repair",
+            progress=0.448,
+            message=(
+                f"Đang tự vá {len(blocked_for_repair)} đoạn chưa đạt quality gate"
+            ),
+            extra={"quality": preliminary_quality},
+        )
+        for start_position, repair_batch, end_position in iter_ollama_translation_batches(
+            blocked_for_repair
+        ):
+            texts = [
+                normalize_text(item.get("sourceText") or "")
+                for item in repair_batch
+            ]
+            if review_backend == "ollama":
+                repaired_items = localize_batch_via_ollama_resilient(
+                    repair_batch,
+                    source_hint=source_hint,
+                    target_language=target_language,
+                    llama_cpp_available=llama_cpp_available,
+                    label=f"repair-{start_position}-{end_position}",
+                    phase=phase,
+                    progress_hint=0.449,
+                    localization_mode=localization_mode,
+                    global_context=global_context,
+                )
+            else:
+                repaired_items = fallback_translate_items(
+                    repair_batch,
+                    texts=texts,
+                    source_hint=source_hint,
+                    use_llama_cpp=review_backend == "llama_cpp",
+                    localization_mode=localization_mode,
+                )
+            for item, repaired in zip(repair_batch, repaired_items):
+                result = apply_localized_result(
+                    item,
+                    repaired,
+                    normalize_text(item.get("sourceText") or ""),
+                )
+                provider_name = normalize_text(
+                    repaired.get("translationProvider")
+                    or ("ai" if review_backend else "fallback")
+                )
+                item["translationProvider"] = provider_name
+                faithful_text = normalize_text(item.get("translatedText") or "")
+                item["machineTranslatedText"] = faithful_text
+                item["spokenAdaptation"] = faithful_text
+                item["finalText"] = faithful_text
+                result["machineTranslatedText"] = faithful_text
+                result["translationProvider"] = provider_name
+                translations[str(item.get("id") or "")] = result
+
+        segments = validate_translation_quality(segments)
 
     for item in segments:
         final_text = normalize_text(item.get("translatedText") or "")

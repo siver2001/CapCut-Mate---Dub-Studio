@@ -280,6 +280,7 @@ class DubStudioJobController(QWidget):
             "logs": copy.deepcopy(job.get("logs") or []),
             "warnings": copy.deepcopy(job.get("warnings") or []),
             "lastError": job.get("lastError"),
+            "actionRequired": copy.deepcopy(job.get("actionRequired")),
             "hasAnalysis": bool(job.get("analysis")),
             "hasRenderResult": bool(job.get("renderResult")),
             "renderResult": copy.deepcopy(job.get("renderResult")),
@@ -347,6 +348,7 @@ class DubStudioJobController(QWidget):
         job["step"] = "prepare"
         job["progress"] = 0.02
         job["lastError"] = None
+        job["actionRequired"] = None
         job["cancelRequested"] = False
         append_job_log(job, f"Starting {mode} pipeline.")
         self.active_job_id = job_id
@@ -391,6 +393,13 @@ class DubStudioJobController(QWidget):
             current_progress = float(job.get("progress") or 0)
             job["progress"] = max(current_progress, incoming_progress)
             job["status"] = payload.get("status", "running")
+            if payload.get("actionRequired"):
+                job["actionRequired"] = {
+                    "errorCode": payload.get("errorCode"),
+                    "recommendedAction": payload.get("recommendedAction"),
+                    "provider": payload.get("provider"),
+                    "message": payload.get("warning") or payload.get("message"),
+                }
             append_job_log(
                 job, payload.get("message") or f"{job['phase']}:{job['step']}"
             )

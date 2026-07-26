@@ -1594,8 +1594,11 @@ class WindowWorkflowMixin:
 
             import requests
             m_name = cloud_model if cloud_model.startswith("models/") else f"models/{cloud_model}"
-            url = f"https://generativelanguage.googleapis.com/v1beta/{m_name}:generateContent?key={cloud_api_key}"
-            headers = {"Content-Type": "application/json"}
+            url = f"https://generativelanguage.googleapis.com/v1beta/{m_name}:generateContent"
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": cloud_api_key,
+            }
             payload = {
                 "contents": [{"parts": [{"text": "Hello, answer immediately in 1 word: OK"}]}],
                 "generationConfig": {"maxOutputTokens": 10}
@@ -1689,9 +1692,13 @@ class WindowWorkflowMixin:
             return
         
         import requests
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models"
         try:
-            resp = requests.get(url, timeout=15)
+            resp = requests.get(
+                url,
+                headers={"x-goog-api-key": api_key},
+                timeout=15,
+            )
             if resp.status_code == 429:
                 QMessageBox.warning(self, "Lỗi", "Hết quota. Vui lòng kiểm tra lại API Key.")
                 return
@@ -2124,9 +2131,81 @@ class WindowWorkflowMixin:
     def on_status_changed(self, job_id: str, payload: dict[str, Any]) -> None:
         if self._is_batch_job(job_id):
             return
+        self._handle_cloud_action_required(
+            job_id,
+            payload,
+            is_batch=False,
+        )
         if self.job_id == job_id:
             self.job_status = payload
             self.refresh_status_only()
+
+    def _handle_cloud_action_required(
+        self,
+        job_id: str,
+        payload: dict[str, Any],
+        *,
+        is_batch: bool,
+    ) -> None:
+        action = payload.get("actionRequired") or {}
+        error_code = str(action.get("errorCode") or "")
+        if error_code not in {
+            "gemini_quota_exhausted",
+            "gemini_api_key_invalid",
+            "gemini_api_key_missing",
+        }:
+            return
+
+        shown = getattr(self, "_cloud_action_prompts_shown", set())
+        prompt_key = f"{'batch' if is_batch else job_id}:{error_code}"
+        if prompt_key in shown:
+            return
+        shown.add(prompt_key)
+        self._cloud_action_prompts_shown = shown
+
+        if error_code == "gemini_quota_exhausted":
+            reason = (
+                "Gemini API Key đã hết quota hoặc đang bị giới hạn tốc độ."
+            )
+        elif error_code == "gemini_api_key_invalid":
+            reason = "Gemini API Key không hợp lệ hoặc không có quyền truy cập."
+        else:
+            reason = "Ứng dụng chưa có Gemini API Key."
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Gemini cần API Key khác")
+        dialog.setText(reason)
+        dialog.setInformativeText(
+            "Video hiện tại sẽ tiếp tục bằng bộ dịch dự phòng nếu kết quả đạt "
+            "quality gate.\n\nBạn có thể mở Cấu hình để nhập key khác; batch sẽ "
+            "tạm dừng trước video kế tiếp. Hoặc tiếp tục batch bằng dịch dự phòng."
+        )
+        open_config_btn = dialog.addButton(
+            "Mở cấu hình API",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        dialog.addButton(
+            "Tiếp tục bằng fallback",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        dialog.exec()
+
+        if dialog.clickedButton() is not open_config_btn:
+            return
+        if is_batch:
+            self._batch_waiting_for_api_key = True
+            self._update_batch_log(
+                "⏸ Gemini hết quota: sẽ tạm dừng batch sau video hiện tại để "
+                "bạn thay API Key."
+            )
+        self._switch_page(2)
+        QTimer.singleShot(
+            0,
+            lambda: self.conf_cloud_api_key_edit.setFocus()
+            if hasattr(self, "conf_cloud_api_key_edit")
+            else None,
+        )
 
     def on_job_failed(self, job_id: str, message: str) -> None:
         if self._is_batch_job(job_id):

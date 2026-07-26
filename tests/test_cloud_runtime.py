@@ -21,6 +21,24 @@ class _FakeResponse:
         }
 
 
+class _QuotaResponse:
+    status_code = 429
+    text = "quota"
+    headers = {}
+
+    def json(self):
+        return {"error": {"message": "Resource exhausted"}}
+
+
+class _InvalidKeyResponse:
+    status_code = 400
+    text = "API key not valid"
+    headers = {}
+
+    def json(self):
+        return {"error": {"message": "API key not valid. Please pass a valid API key."}}
+
+
 class CloudRuntimeTests(unittest.TestCase):
     def test_gemini_ignores_thought_parts_and_uses_schema(self):
         runtime._CLOUD_AI_UNAVAILABLE_REASON = ""
@@ -54,6 +72,42 @@ class CloudRuntimeTests(unittest.TestCase):
         runtime._CLOUD_AI_UNAVAILABLE_REASON = "quota from previous job"
         runtime.reset_cloud_ai_circuit_breaker()
         self.assertEqual(runtime._CLOUD_AI_UNAVAILABLE_REASON, "")
+
+    def test_gemini_quota_has_structured_error_code(self):
+        runtime.reset_cloud_ai_circuit_breaker()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "DUB_AI_MODE": "cloud",
+                    "DUB_CLOUD_API_KEY": "test-key",
+                    "DUB_CLOUD_MODEL": "gemini-2.5-flash",
+                },
+                clear=False,
+            ),
+            patch.object(runtime.requests, "post", return_value=_QuotaResponse()),
+            self.assertRaises(runtime.CloudAIError) as raised,
+        ):
+            runtime.run_ollama_prompt("return json", max_tokens=64)
+        self.assertEqual(raised.exception.code, "gemini_quota_exhausted")
+
+    def test_invalid_gemini_key_has_structured_error_code(self):
+        runtime.reset_cloud_ai_circuit_breaker()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "DUB_AI_MODE": "cloud",
+                    "DUB_CLOUD_API_KEY": "bad-key",
+                    "DUB_CLOUD_MODEL": "gemini-2.5-flash",
+                },
+                clear=False,
+            ),
+            patch.object(runtime.requests, "post", return_value=_InvalidKeyResponse()),
+            self.assertRaises(runtime.CloudAIError) as raised,
+        ):
+            runtime.run_ollama_prompt("return json", max_tokens=64)
+        self.assertEqual(raised.exception.code, "gemini_api_key_invalid")
 
 
 if __name__ == "__main__":

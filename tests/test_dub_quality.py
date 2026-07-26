@@ -45,7 +45,7 @@ class DubQualityTests(unittest.TestCase):
         report = audit_translation_segments(segments, source_language="en")
         self.assertEqual(report["criticalCount"], 0)
 
-    def test_unverified_fallback_is_blocked(self):
+    def test_valid_fallback_is_warning_not_blocked(self):
         segments = [{
             "id": "seg_fallback",
             "sourceText": "source",
@@ -55,7 +55,9 @@ class DubQualityTests(unittest.TestCase):
             "endMs": 1200,
         }]
         report = audit_translation_segments(segments, source_language="en")
-        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["status"], "warning")
+        self.assertEqual(report["criticalCount"], 0)
+        self.assertEqual(report["findingCounts"]["fallback_translation_used"], 1)
 
     def test_english_output_left_in_english_is_blocked(self):
         segments = [{
@@ -82,6 +84,18 @@ class DubQualityTests(unittest.TestCase):
             "missing_source_number",
             {finding["code"] for finding in segments[0]["quality"]["findings"]},
         )
+
+    def test_spelled_out_number_is_not_falsely_blocked(self):
+        segments = [{
+            "id": "seg_number_words",
+            "sourceText": "The bridge was built in 1987.",
+            "translatedText": "Cây cầu được xây vào năm một nghìn chín trăm tám mươi bảy.",
+            "startMs": 0,
+            "endMs": 3500,
+        }]
+        report = audit_translation_segments(segments, source_language="en")
+        self.assertEqual(report["criticalCount"], 0)
+        self.assertEqual(report["status"], "warning")
 
 
     def test_timeline_audit_detects_video_overflow(self):

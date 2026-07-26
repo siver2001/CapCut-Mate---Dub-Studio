@@ -9,6 +9,10 @@ from .subtitle_utils import normalize_text
 
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 _PLACEHOLDER_RE = re.compile(r"^\s*(?:\[?\.{3}\]?|n/?a|không rõ)\s*$", re.IGNORECASE)
+_VIETNAMESE_NUMBER_WORDS = {
+    "không", "một", "hai", "ba", "bốn", "tư", "năm", "sáu", "bảy", "tám",
+    "chín", "mười", "mươi", "trăm", "nghìn", "ngàn", "triệu", "tỷ", "lẻ",
+}
 
 
 def _significant_numbers(text: str) -> set[str]:
@@ -76,6 +80,8 @@ def audit_translation_segments(
     critical = 0
     warnings = 0
     duplicate_runs = 0
+    critical_segments: list[dict[str, Any]] = []
+    finding_counts: dict[str, int] = {}
     previous_translation = ""
     previous_source = ""
 
@@ -90,7 +96,10 @@ def audit_translation_segments(
         findings: list[dict[str, str]] = []
 
         if item.get("translationProvider") == "fallback":
-            findings.append({"severity": "critical", "code": "unverified_translation_fallback"})
+            # A fallback provider is a provenance warning, not proof that the
+            # sentence is broken. Missing text, source-language leakage and
+            # dropped numbers are still independently blocked below.
+            findings.append({"severity": "warning", "code": "fallback_translation_used"})
         is_non_dialogue = bool(item.get("isNonDialogue"))
         if source and not is_non_dialogue and (not translated or _PLACEHOLDER_RE.match(translated)):
             findings.append({"severity": "critical", "code": "missing_translation"})
@@ -100,7 +109,20 @@ def audit_translation_segments(
             source_numbers = _significant_numbers(source)
             translated_numbers = _significant_numbers(translated)
             if source_numbers - translated_numbers:
-                findings.append({"severity": "critical", "code": "missing_source_number"})
+                translated_tokens = set(
+                    re.findall(r"\w+", translated.lower(), flags=re.UNICODE)
+                )
+                if translated_tokens & _VIETNAMESE_NUMBER_WORDS:
+                    findings.append(
+                        {
+                            "severity": "warning",
+                            "code": "source_number_spelled_out_unverified",
+                        }
+                    )
+                else:
+                    findings.append(
+                        {"severity": "critical", "code": "missing_source_number"}
+                    )
 
         duration_ms = max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 1)
         spoken_chars_per_second = len(translated) / (duration_ms / 1000.0)
@@ -118,8 +140,23 @@ def audit_translation_segments(
 
         item_critical = sum(1 for finding in findings if finding["severity"] == "critical")
         item_warnings = sum(1 for finding in findings if finding["severity"] == "warning")
+        for finding in findings:
+            code = finding["code"]
+            finding_counts[code] = finding_counts.get(code, 0) + 1
         critical += item_critical
         warnings += item_warnings
+        if item_critical:
+            critical_segments.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "sourceText": source[:160],
+                    "codes": [
+                        finding["code"]
+                        for finding in findings
+                        if finding["severity"] == "critical"
+                    ],
+                }
+            )
         item["quality"] = {
             "status": "blocked" if item_critical else ("warning" if item_warnings else "pass"),
             "findings": findings,
@@ -134,14 +171,21 @@ def audit_translation_segments(
         "criticalCount": critical,
         "warningCount": warnings,
         "duplicateRuns": duplicate_runs,
+        "findingCounts": finding_counts,
+        "criticalSegments": critical_segments,
     }
 
 
 def assert_translation_renderable(report: dict[str, Any]) -> None:
     if int(report.get("criticalCount") or 0) > 0:
+        details = ", ".join(
+            f"{item.get('id') or '?'}:{'/'.join(item.get('codes') or [])}"
+            for item in (report.get("criticalSegments") or [])[:8]
+        )
         raise RuntimeError(
             "Bản dịch không vượt qua quality gate: "
             f"{report['criticalCount']} đoạn thiếu dịch hoặc còn nguyên ngôn ngữ nguồn. "
+            f"Chi tiết: {details or 'không xác định'}. "
             "Đã dừng trước bước lồng tiếng để tránh xuất video lỗi."
         )
 

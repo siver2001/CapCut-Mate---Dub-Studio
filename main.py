@@ -196,7 +196,25 @@ def main():
                 sys.path.insert(0, root)
             from tools.dub_studio_pipeline import main as run_pipeline, setup_quiet_excepthook
             setup_quiet_excepthook()
-            sys.exit(run_pipeline())
+            try:
+                result = run_pipeline()
+                sys.exit(result if isinstance(result, int) else 0)
+            except Exception as exc:
+                # Never let a worker exception escape to the PyInstaller bootloader:
+                # Windows otherwise shows an "Unhandled exception in script"
+                # modal for every failed batch item. The GUI consumes this
+                # structured line and continues with the remaining videos.
+                import json
+                message = str(exc) or exc.__class__.__name__
+                try:
+                    print(
+                        f"ERROR::{json.dumps({'message': message}, ensure_ascii=False)}",
+                        flush=True,
+                    )
+                    print(f"Pipeline failed: {message}", file=sys.stderr, flush=True)
+                except (BrokenPipeError, OSError):
+                    pass
+                sys.exit(1)
         elif mode == "yt_dlp":
             # Act as yt-dlp entry point
             sys.argv.pop(1)

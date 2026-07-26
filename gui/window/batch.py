@@ -96,6 +96,7 @@ class WindowBatchMixin:
         self._batch_phase: str = ""  # "analyze" | "render"
         self._batch_output_dir: str = ""
         self._batch_cancelled: bool = False
+        self._batch_waiting_for_api_key: bool = False
 
     # ── queue management ─────────────────────────────────────────────
     def batch_add_videos(self) -> None:
@@ -277,6 +278,8 @@ class WindowBatchMixin:
 
         self._batch_running = True
         self._batch_cancelled = False
+        self._batch_waiting_for_api_key = False
+        self._cloud_action_prompts_shown = set()
         self._batch_current_index = -1
         
         pending_count = len(pending_items)
@@ -317,6 +320,16 @@ class WindowBatchMixin:
     # ── internal: sequential processing ──────────────────────────────
     def _batch_process_next(self) -> None:
         """Find the next pending item and start its analysis."""
+        if self._batch_waiting_for_api_key:
+            self._batch_running = False
+            self._batch_current_index = -1
+            self._refresh_batch_ui()
+            self._update_batch_log(
+                "⏸ Batch đã tạm dừng để thay Gemini API Key. Nhập key mới ở "
+                "trang Cấu hình, bấm Lưu cấu hình, rồi bấm Bắt đầu batch để "
+                "chạy tiếp các video còn lại."
+            )
+            return
         if self._batch_cancelled or not self._batch_running:
             self._batch_finalize()
             return
@@ -529,6 +542,12 @@ class WindowBatchMixin:
         item = self._find_batch_item_by_job_id(job_id)
         if item is None:
             return
+
+        self._handle_cloud_action_required(
+            job_id,
+            payload,
+            is_batch=True,
+        )
 
         raw_progress = float(payload.get("progress") or 0)
         phase = str(payload.get("phase") or "").strip().lower()

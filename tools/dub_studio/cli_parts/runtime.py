@@ -532,13 +532,21 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
     return result
 
 
+class CloudAIError(RuntimeError):
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 _CLOUD_AI_UNAVAILABLE_REASON = ""
+_CLOUD_AI_UNAVAILABLE_CODE = ""
 
 
 def reset_cloud_ai_circuit_breaker() -> None:
     """Start a fresh cloud-availability scope for a new translation job."""
-    global _CLOUD_AI_UNAVAILABLE_REASON
+    global _CLOUD_AI_UNAVAILABLE_REASON, _CLOUD_AI_UNAVAILABLE_CODE
     _CLOUD_AI_UNAVAILABLE_REASON = ""
+    _CLOUD_AI_UNAVAILABLE_CODE = ""
 
 
 def run_ollama_prompt(
@@ -549,17 +557,23 @@ def run_ollama_prompt(
     timeout: int | None = None,
     json_schema: dict[str, Any] | None = None,
 ) -> str:
-    global _CLOUD_AI_UNAVAILABLE_REASON
+    global _CLOUD_AI_UNAVAILABLE_REASON, _CLOUD_AI_UNAVAILABLE_CODE
     if os.getenv("DUB_AI_MODE") == "cloud":
         if _CLOUD_AI_UNAVAILABLE_REASON:
-            raise RuntimeError(_CLOUD_AI_UNAVAILABLE_REASON)
+            raise CloudAIError(
+                _CLOUD_AI_UNAVAILABLE_REASON,
+                code=_CLOUD_AI_UNAVAILABLE_CODE or "gemini_unavailable",
+            )
         api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
         model_name = os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash").strip()
         if not model_name.startswith("models/"):
             model_name = f"models/{model_name}"
         safe_print(f"[info] Đang gửi yêu cầu tới Gemini Cloud API ({model_name})...", flush=True)
         if not api_key:
-            raise RuntimeError("Thiếu DUB_CLOUD_API_KEY cho Gemini Cloud.")
+            raise CloudAIError(
+                "Chưa nhập Gemini API Key.",
+                code="gemini_api_key_missing",
+            )
         url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
         # Keep credentials out of URLs, proxy logs and exception messages.
         headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
@@ -584,12 +598,39 @@ def run_ollama_prompt(
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout or 60)
             if resp.status_code == 429:
                 _CLOUD_AI_UNAVAILABLE_REASON = "Hết quota Gemini trong job hiện tại"
-                raise RuntimeError("Hết quota")
+                _CLOUD_AI_UNAVAILABLE_CODE = "gemini_quota_exhausted"
+                raise CloudAIError(
+                    "Gemini API Key đã hết quota hoặc đang bị giới hạn tốc độ.",
+                    code="gemini_quota_exhausted",
+                )
+            if resp.status_code in {401, 403}:
+                _CLOUD_AI_UNAVAILABLE_REASON = "Gemini API Key không hợp lệ hoặc không có quyền truy cập"
+                _CLOUD_AI_UNAVAILABLE_CODE = "gemini_api_key_invalid"
+                raise CloudAIError(
+                    _CLOUD_AI_UNAVAILABLE_REASON,
+                    code="gemini_api_key_invalid",
+                )
             if resp.status_code != 200:
                 try:
                     err_msg = resp.json().get("error", {}).get("message", resp.text)
                 except Exception:
                     err_msg = resp.text
+                normalized_error = normalize_text(str(err_msg)).lower()
+                if resp.status_code == 400 and (
+                    "api key" in normalized_error
+                    and any(
+                        marker in normalized_error
+                        for marker in ("invalid", "not valid", "missing", "expired")
+                    )
+                ):
+                    _CLOUD_AI_UNAVAILABLE_REASON = (
+                        "Gemini API Key không hợp lệ hoặc đã hết hiệu lực"
+                    )
+                    _CLOUD_AI_UNAVAILABLE_CODE = "gemini_api_key_invalid"
+                    raise CloudAIError(
+                        _CLOUD_AI_UNAVAILABLE_REASON,
+                        code="gemini_api_key_invalid",
+                    )
                 raise RuntimeError(f"Gemini API Error: {err_msg}")
             data = resp.json()
             try:
@@ -619,10 +660,15 @@ def run_ollama_prompt(
                 return txt
             except (KeyError, IndexError):
                 raise RuntimeError("Phản hồi từ Gemini API không đúng cấu trúc.")
+        except CloudAIError:
+            raise
         except Exception as exc:
             safe_error = str(exc).replace(api_key, "***") if api_key else str(exc)
             if "quota" in safe_error.lower():
-                raise RuntimeError("Hết quota")
+                raise CloudAIError(
+                    "Gemini API Key đã hết quota hoặc đang bị giới hạn tốc độ.",
+                    code="gemini_quota_exhausted",
+                )
             raise RuntimeError(f"Cloud AI Error: {safe_error}")
 
     ensure_ollama_runtime(
