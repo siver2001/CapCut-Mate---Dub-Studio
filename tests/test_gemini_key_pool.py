@@ -120,6 +120,70 @@ class GeminiKeyPoolTests(unittest.TestCase):
         self.assertEqual(rows[second]["requestsToday"], 1)
         self.assertEqual(rows[second]["tokensToday"], 14)
 
+    def test_rotation_continues_mid_job_without_manual_switch(self):
+        first = self.pool.add_key(
+            name="Key 1",
+            secret="first-test-secret",
+            priority=1,
+        )
+        second = self.pool.add_key(
+            name="Key 2",
+            secret="second-test-secret",
+            priority=2,
+        )
+        responses = [
+            _success("request-1"),
+            _Response(
+                429,
+                {
+                    "error": {
+                        "message": "Quota exceeded: requests per day",
+                        "details": [{"quotaId": "GenerateRequestsPerDay"}],
+                    }
+                },
+            ),
+            _success("request-2"),
+            _success("request-3"),
+        ]
+        seen_keys = []
+
+        def fake_post(url, headers, json, timeout):
+            seen_keys.append(headers["x-goog-api-key"])
+            return responses.pop(0)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "DUB_AI_MODE": "cloud",
+                    "DUB_CLOUD_API_KEY": "",
+                    "DUB_CLOUD_KEY_POOL_ENABLED": "true",
+                    "DUB_CLOUD_MODEL": "gemini-3.5-flash",
+                    "DUB_CLOUD_FREE_ONLY": "true",
+                },
+                clear=False,
+            ),
+            patch.object(runtime, "get_gemini_key_pool", return_value=self.pool),
+            patch.object(runtime.requests, "post", side_effect=fake_post),
+        ):
+            self.assertEqual(runtime.run_ollama_prompt("prompt 1"), "request-1")
+            self.assertEqual(runtime.run_ollama_prompt("prompt 2"), "request-2")
+            self.assertEqual(runtime.run_ollama_prompt("prompt 3"), "request-3")
+
+        self.assertEqual(
+            seen_keys,
+            [
+                "first-test-secret",
+                "first-test-secret",
+                "second-test-secret",
+                "second-test-secret",
+            ],
+        )
+        rows = {row["id"]: row for row in self.pool.rows()}
+        self.assertEqual(rows[first]["status"], "daily_exhausted")
+        self.assertEqual(rows[second]["status"], "ready")
+        self.assertTrue(rows[second]["active"])
+
     def test_invalid_key_rotates_without_leaking_secret(self):
         first = self.pool.add_key(
             name="Bad key",
