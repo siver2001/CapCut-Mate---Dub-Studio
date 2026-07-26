@@ -7,6 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from .common import *
+from ..key_pool import get_gemini_key_pool, get_primary_gemini_api_key
 from .analysis import (
     analyze_with_local_whisper,
     analyze_with_whisperx,
@@ -1013,7 +1014,7 @@ def render_intro_hook(
             
         # 3. Retrieve semantically matching segment for each sentence using LlamaIndex
         temp_clips = []
-        api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+        api_key = get_primary_gemini_api_key()
         matched_clips_info = []
         
         if api_key and segments:
@@ -1026,7 +1027,8 @@ def render_intro_hook(
                 from llama_index.llms.gemini import Gemini
                 from llama_index.embeddings.gemini import GeminiEmbedding
                 
-                Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
+                cloud_model = cloud_model_name(qualified=True)
+                Settings.llm = Gemini(model=cloud_model, api_key=api_key)
                 Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
                 
                 documents = []
@@ -2639,10 +2641,7 @@ def recover_whisperx_missed_segments(
 
     safe_print(f"[IMPORTANT] Phát hiện thấy {len(recovered_intervals)} phân đoạn phụ đề bị bỏ sót! Tiến hành Visual OCR + dịch bằng Gemini...", flush=True)
 
-    api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
-    model_name = os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash").strip()
-    if not model_name.startswith("models/"):
-        model_name = f"models/{model_name}"
+    model_name = cloud_model_name(qualified=True)
 
     injected_count = 0
     for start_ms, end_ms in recovered_intervals:
@@ -2656,12 +2655,21 @@ def recover_whisperx_missed_segments(
         chinese_text = ""
         vietnamese_text = ""
 
-        if api_key:
+        pool_enabled = os.getenv(
+            "DUB_CLOUD_KEY_POOL_ENABLED",
+            "false",
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        pool = get_gemini_key_pool() if pool_enabled else None
+        if pool is not None:
+            visual_candidates = pool.candidates()
+        else:
+            legacy_key = get_primary_gemini_api_key()
+            visual_candidates = [legacy_key] if legacy_key else []
+
+        if visual_candidates:
             _, buffer = cv2.imencode('.jpg', frame)
             img_b64 = base64.b64encode(buffer).decode('utf-8')
-            
-            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
-            headers = {"Content-Type": "application/json"}
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
             
             prompt = (
                 "Identify the Chinese subtitle text at the bottom of this image. "
@@ -2689,16 +2697,63 @@ def recover_whisperx_missed_segments(
                 }
             }
 
-            try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                if resp.status_code == 200:
+            for visual_candidate in visual_candidates:
+                if pool is not None:
+                    api_key = visual_candidate.secret
+                    key_name = visual_candidate.name
+                    pool.record_attempt(visual_candidate.key_id)
+                else:
+                    api_key = str(visual_candidate)
+                    key_name = "Gemini key"
+                headers = {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key,
+                }
+                try:
+                    resp = requests.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=30,
+                    )
+                    if resp.status_code == 429 and pool is not None:
+                        pool.record_quota_failure(
+                            visual_candidate.key_id,
+                            {
+                                "body": resp.json(),
+                                "retryAfter": resp.headers.get("Retry-After", ""),
+                            },
+                        )
+                        safe_print(
+                            f"[warn] {key_name} hết quota OCR; chuyển key kế tiếp.",
+                            flush=True,
+                        )
+                        continue
+                    if resp.status_code in {400, 401, 403} and pool is not None:
+                        pool.record_invalid(
+                            visual_candidate.key_id,
+                            "Visual OCR API key rejected",
+                        )
+                        continue
+                    if resp.status_code != 200:
+                        continue
                     data = resp.json()
                     txt = data["candidates"][0]["content"]["parts"][0]["text"]
                     res = json.loads(txt)
                     chinese_text = res.get("chinese", "").strip()
                     vietnamese_text = res.get("vietnamese", "").strip()
-            except Exception as e:
-                safe_print(f"[warn] Gemini Visual OCR API error: {e}", flush=True)
+                    if pool is not None:
+                        pool.record_success(
+                            visual_candidate.key_id,
+                            data.get("usageMetadata") or {},
+                        )
+                    break
+                except Exception as e:
+                    safe_error = str(e).replace(api_key, "***")
+                    safe_print(
+                        f"[warn] Gemini Visual OCR API error: {safe_error}",
+                        flush=True,
+                    )
 
         if not chinese_text or not vietnamese_text:
             # Fallback if API fails or no keys found

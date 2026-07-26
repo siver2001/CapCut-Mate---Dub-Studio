@@ -59,6 +59,23 @@ class DubQualityTests(unittest.TestCase):
         self.assertEqual(report["criticalCount"], 0)
         self.assertEqual(report["findingCounts"]["fallback_translation_used"], 1)
 
+    def test_cloud_review_quota_failure_is_blocked_before_tts(self):
+        segments = [{
+            "id": "seg_unreviewed",
+            "sourceText": "This is a long source sentence.",
+            "translatedText": "Đây là một câu nguồn dài.",
+            "translationProvider": "ai_unreviewed",
+            "reviewStatus": "skipped_cloud_error",
+            "startMs": 0,
+            "endMs": 2500,
+        }]
+        report = audit_translation_segments(segments, source_language="en")
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn(
+            "cloud_review_incomplete",
+            report["findingCounts"],
+        )
+
     def test_english_output_left_in_english_is_blocked(self):
         segments = [{
             "id": "seg_en",

@@ -4,6 +4,7 @@ import os
 
 from .common import *
 from ..quality import assert_translation_renderable, audit_translation_segments
+from ..key_pool import get_primary_gemini_api_key
 from .runtime import (
     TRANSLATION_PROMPT_VERSION,
     apply_localized_result,
@@ -590,6 +591,10 @@ def _build_localization_prompt(
         "1. Preserve every fact, subject, action, relationship, number, unit and uncertainty.\n"
         "2. Never invent explanations, filler, jokes, emotions or facts to fill timing. Natural silence is allowed.\n"
         "3. Keep names and recurring terminology consistent with GLOBAL_CONTEXT.\n"
+        "   Treat GLOBAL_CONTEXT.glossary as a binding terminology contract: use exactly one "
+        "canonical Vietnamese term per entity, never alternate with a broader species/category "
+        "or a slash-separated synonym. Prefer the established Vietnamese common/scientific name "
+        "over a literal compound translation.\n"
         "4. Use previous/next context only to resolve meaning; translate sourceText only.\n"
         "5. Produce natural spoken Vietnamese, but fidelity has priority over catchiness.\n"
         "6. Return exactly one result per sourceId. Never merge, omit, reorder or duplicate IDs.\n"
@@ -633,7 +638,7 @@ def _build_localization_prompt(
         "4. Translate every sourceText, including single words, short phrases, reactions, interjections, slang, jokes, and idioms.\n"
         "5. Do NOT leave meaningful source-language words untranslated.\n"
         "6. STRICT BAN ON CHINESE CHARACTERS: Absolutely ZERO Chinese hanzi (e.g., 堆积如山) must remain in the output. Translate EVERY single word into standard, natural Vietnamese.\n"
-        "7. TRANSLATE PROPER NAMES TO SINO-VIETNAMESE: Translate all proper names, character names, and titles (especially Chinese character names and historical terms) into standard Sino-Vietnamese (Hán-Việt) for easy understanding (e.g. translate 'Zhen Huan' -> 'Chân Hoàn', 'Chunyuan' -> 'Thuần Nguyên', 'Duan' or 'Duan Fei' -> 'Đoan Phi', 'Jing' or 'Jing Fei' -> 'Kính Phi', 'Longyue' -> 'Long Nguyệt', 'Eniang' -> 'Ngạch nương', 'Wei Lin' -> 'Ngụy Lâm', etc.). Do not keep them in Pinyin/English.\n"
+        "7. NAMES AND TERMS: Preserve established names, brands, and places. For Chinese historical names, use a well-established Hán-Việt form only when the mapping is confident; otherwise use one consistent transliteration. Never guess or rename an entity.\n"
         "\n"
         "Each item must be a JSON object with exactly these keys:\n"
         '- "translatedText": natural, concise, captivating Vietnamese subtitle text. It MUST fit within the provided "maxSubtitleChars" or "maxSpokenChars" limits.\n'
@@ -641,33 +646,98 @@ def _build_localization_prompt(
         "\n"
         "LOCALIZATION & WRITING EXCELLENCE RULES:\n"
         f"{mode_instructions}"
-        "- IDIOMATIC & COHERENT: Do NOT translate word-for-word. Do not use direct literal meanings. Translate the complete contextual meaning to make sense in Vietnamese. For example, do not translate '打' as 'đánh' unless it makes sense.\n"
-        "- CLARITY & FLOW: The translation must sound like a human storyteller, not a machine. Use natural Vietnamese discourse markers (nhé, nha, nè, hén) to make it sound friendly and alive.\n"
-        "- WRITING EXCELLENCE: Every sentence must be 'hay' (beautiful, engaging, and catchy). Use expressive verbs and warm adjectives. Avoid stiff, formal, or robotic phrasing. If a sentence sounds dry, rewrite it to be more playful and cute.\n"
-        "- ADAPTIVE LENGTH & PACING: You MUST aim for the 'targetSpokenChars' length to ensure the narrator speaks at a natural pace. If the translation is significantly shorter than the target, add natural filler words or expand the sentence. If it's too long, condense it. DO NOT leave silence gaps at the end of segments.\n"
-        "- NO NONSENSE & GIBBERISH: Completely eliminate gibberish sentences and Whisper hallucinations. Rewrite them smoothly to match the pet vlog topic.\n"
+        "- IDIOMATIC & FAITHFUL: Express the complete contextual meaning in natural Vietnamese. Preserve every fact, action, subject, object, negation, uncertainty, number, unit, and relationship. Never strengthen a claim beyond the source.\n"
+        "- CLARITY & FLOW: Sound natural for the genre identified in GLOBAL CONTEXT. Use discourse particles only when the source tone and speaker role support them.\n"
+        "- STYLE CONTROL: Match the source and global genre. Do not make neutral, technical, documentary, news, dramatic, or formal material playful, cute, sensational, or intimate.\n"
+        "- ADAPTIVE LENGTH & PACING: Condense wording only when needed for the speaking window, without deleting facts. Natural silence is allowed. Never add filler, adjectives, reactions, explanations, or facts merely to fill time.\n"
+        "- UNCERTAIN ASR: If a phrase appears corrupted or uncertain, choose the most context-supported conservative reading. Do not invent a topic-specific replacement.\n"
         "- CONTEXTUAL COHERENCE: Ensure that the story flows logically from one segment to the next. Use the provided context to resolve ambiguities.\n"
         "- GLOBAL THEME ALIGNMENT: Ensure the vocabulary and style match the overall topic of the video (e.g., technical for tech reviews, playful for vlogs).\n"
-        "- NATURAL PRONOUNS & ADDRESSING: Choose natural, context-appropriate Vietnamese pronouns to avoid a robotic feel. Never translate English 'you' or Chinese '你'/'你们' literally as 'bạn'/'các bạn' if it sounds stiff. Instead:\n"
-        "  - If the video is a pet vlog / cute animal video: the narrator self-reference is 'mình' or the pet's name, and audience is 'Các cô chú' or 'Cả nhà'. Use cute, warm, and friendly particles (nè, nha, nhé, cơ, á). Specific names: 'Wantuan' -> 'Vằn Thầu', 'Nuomin' -> 'Nhu Mễ' (keep consistent). Owner reference: 'Mẹ' or 'Ba'.\n"
-        "  - If the video is a tech review, gaming, tutorial, or general vlog: self-reference is 'mình', and audience is 'mọi người', 'cả nhà', or 'anh em' to sound friendly and modern.\n"
-        "  - If the video is an educational, documentational, or news narration: use standard, professional narration pronouns.\n"
+        "- PRONOUNS & ADDRESSING: Follow the speaker roles, relationships, register, and pronoun policy in GLOBAL CONTEXT. Keep pronouns consistent across segments. If evidence is insufficient, use neutral Vietnamese phrasing rather than guessing age, gender, intimacy, or hierarchy.\n"
         "\n"
         "\n"
         f"{json.dumps(items_payload, ensure_ascii=False)}"
     )
 
 
+def _translation_optimization_mode() -> str:
+    mode = normalize_text(
+        os.getenv("DUB_TRANSLATION_OPTIMIZATION", "legacy")
+    ).lower()
+    return "legacy" if mode == "legacy" else "adaptive"
+
+
+def build_global_context_digest(
+    segments: list[dict[str, Any]],
+    *,
+    max_chars: int = 8000,
+) -> str:
+    """Build a chronological, information-dense transcript digest."""
+    rows: list[tuple[int, str, float]] = []
+    for index, item in enumerate(segments):
+        text = normalize_text(item.get("sourceText") or "")
+        if not text:
+            continue
+        score = min(len(text) / 80.0, 3.0)
+        if index < 5 or index >= max(len(segments) - 5, 0):
+            score += 8.0
+        if re.search(r"\d", text):
+            score += 5.0
+        if re.search(r"\b[A-Z][a-z]{2,}\b", text):
+            score += 4.0
+        if re.search(r"[?!\u2026]", text):
+            score += 2.0
+        rows.append((index, text, score))
+    if not rows:
+        return ""
+
+    def render(indices: set[int]) -> str:
+        return "\n".join(
+            f"[{index + 1}|{segments[index].get('speakerId') or 'speaker_1'}] "
+            f"{normalize_text(segments[index].get('sourceText') or '')}"
+            for index in sorted(indices)
+            if normalize_text(segments[index].get("sourceText") or "")
+        )
+
+    all_text = render({index for index, _, _ in rows})
+    if len(all_text) <= max_chars:
+        return all_text
+
+    selected = {index for index, _, _ in rows[:5]}
+    selected.update(index for index, _, _ in rows[-5:])
+    for index, _, _ in sorted(rows, key=lambda row: row[2], reverse=True):
+        selected.add(index)
+        if len(render(selected)) > int(max_chars * 0.78):
+            selected.remove(index)
+
+    stride = max(len(segments) // 18, 1)
+    for index in range(0, len(segments), stride):
+        if not normalize_text(segments[index].get("sourceText") or ""):
+            continue
+        selected.add(index)
+        if len(render(selected)) > max_chars:
+            selected.remove(index)
+    return render(selected)[:max_chars]
+
+
 def _build_global_analysis_prompt(full_transcript: str) -> str:
     """Build a prompt to analyze the global theme and style of the video."""
     return (
-        "Analyze this complete source transcript before translation. Do not translate it yet.\n"
+        "Analyze this representative chronological transcript digest before translation. Do not translate it yet.\n"
         "Identify genre, theme, chronology, speakers/roles, relationships, recurring entities, names, "
         "technical terms, ambiguous ASR phrases, tone, and a suitable Vietnamese pronoun policy.\n"
         "Do not assume a pet vlog, narrator persona, gender, or informal style unless supported by the transcript.\n"
+        "For every recurring animal, plant, product, tool, place or technical concept, resolve the real-world "
+        "referent from the complete context and choose one established Vietnamese common/scientific term. "
+        "Distinguish easily confused categories (for example shrimp/crayfish/lobster), repair obvious ASR "
+        "homophones only when context is strong, and distinguish life stages such as egg, larva, juvenile and "
+        "adult. Put uncertain alternatives in uncertainTerms instead of the glossary. Each glossary entry must "
+        "be an object containing sourceTerm, canonicalEnglish, vietnameseTerm and confidence. The English anchor "
+        "must name the exact real-world referent, not a literal transliteration; vietnameseTerm must be one "
+        "canonical term and never contain '/'.\n"
         "Return only JSON with keys: theme, genre, audience, tone, pronouns, characters, glossary, "
-        "properNames, uncertainTerms. glossary may be an array of concise source-to-Vietnamese mappings.\n\n"
-        f"TRANSCRIPT:\n{full_transcript[:24000]}"
+        "properNames, uncertainTerms.\n\n"
+        f"TRANSCRIPT DIGEST:\n{full_transcript[:24000]}"
     )
 
     return (
@@ -693,13 +763,227 @@ def _build_global_analysis_prompt(full_transcript: str) -> str:
     )
 
 
+_VERIFIED_VIETNAMESE_TERMS = {
+    # High-risk concepts that language models frequently collapse into a nearby
+    # species. These are semantic anchors, not per-video phrase replacements.
+    "tasmanian giant freshwater crayfish": "tôm hùm đất khổng lồ Tasmania",
+    "giant freshwater crayfish": "tôm hùm đất nước ngọt khổng lồ",
+    "hoop net / crayfish trap": "lưới bẫy tôm hùm đất",
+    "crayfish trap": "bẫy tôm hùm đất",
+    "hoop net": "lưới bẫy",
+    "crayfish": "tôm hùm đất",
+    "tasmanian devil": "quỷ Tasmania",
+    "echidna": "thú lông nhím",
+    "platypus": "thú mỏ vịt",
+    "monotreme": "động vật có vú đẻ trứng",
+    "invertebrate": "động vật không xương sống",
+}
+
+
+def _load_translation_glossary_overrides() -> dict[str, str]:
+    """Load optional user terminology without making it part of the API prompt cache."""
+    payloads: list[Any] = []
+    raw_json = normalize_text(os.getenv("DUB_TRANSLATION_GLOSSARY_JSON") or "")
+    if raw_json:
+        try:
+            payloads.append(json.loads(raw_json))
+        except Exception:
+            safe_print("[warn] DUB_TRANSLATION_GLOSSARY_JSON không phải JSON hợp lệ.", flush=True)
+
+    configured_path = normalize_text(os.getenv("DUB_TRANSLATION_GLOSSARY_PATH") or "")
+    glossary_path = Path(configured_path) if configured_path else ROOT / "translation_glossary.json"
+    if glossary_path.exists():
+        try:
+            payloads.append(json.loads(glossary_path.read_text(encoding="utf-8-sig")))
+        except Exception as exc:
+            safe_print(f"[warn] Không đọc được glossary {glossary_path}: {exc}", flush=True)
+
+    result: dict[str, str] = {}
+    for payload in payloads:
+        if isinstance(payload, dict):
+            candidates = payload.get("terms") if isinstance(payload.get("terms"), dict) else payload
+            for key, value in candidates.items():
+                normalized_key = normalize_text(str(key)).casefold()
+                normalized_value = normalize_text(str(value))
+                if normalized_key and normalized_value:
+                    result[normalized_key] = normalized_value
+        elif isinstance(payload, list):
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                value = normalize_text(
+                    item.get("vietnameseTerm") or item.get("target") or ""
+                )
+                for key in (
+                    item.get("sourceTerm"),
+                    item.get("canonicalEnglish"),
+                    item.get("source"),
+                ):
+                    normalized_key = normalize_text(str(key or "")).casefold()
+                    if normalized_key and value:
+                        result[normalized_key] = value
+    return result
+
+
+def normalize_global_context_contract(context: dict[str, Any] | None) -> dict[str, Any]:
+    """Turn model-produced context into an auditable, deterministic term contract."""
+    normalized = dict(context or {})
+    raw_glossary = normalized.get("glossary")
+    entries = raw_glossary if isinstance(raw_glossary, list) else []
+    overrides = _load_translation_glossary_overrides()
+    verified_keys = sorted(_VERIFIED_VIETNAMESE_TERMS, key=len, reverse=True)
+    normalized_entries: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+    seen_source_terms: set[str] = set()
+
+    for raw_entry in entries:
+        if isinstance(raw_entry, str):
+            source_term, _, vietnamese_term = raw_entry.partition(":")
+            canonical_english = ""
+            confidence = "low"
+        elif isinstance(raw_entry, dict):
+            source_term = normalize_text(raw_entry.get("sourceTerm") or "")
+            canonical_english = normalize_text(raw_entry.get("canonicalEnglish") or "")
+            vietnamese_term = normalize_text(raw_entry.get("vietnameseTerm") or "")
+            confidence = normalize_text(raw_entry.get("confidence") or "low").lower()
+        else:
+            continue
+
+        source_term = normalize_text(source_term)
+        canonical_english = normalize_text(canonical_english)
+        vietnamese_term = normalize_text(vietnamese_term)
+        if not source_term or source_term.casefold() in seen_source_terms:
+            continue
+
+        override_term = (
+            overrides.get(source_term.casefold())
+            or overrides.get(canonical_english.casefold())
+        )
+        source_of_truth = "model"
+        if override_term:
+            vietnamese_term = override_term
+            confidence = "high"
+            source_of_truth = "user"
+        else:
+            english_key = canonical_english.casefold()
+            verified_key = next(
+                (key for key in verified_keys if key in english_key),
+                "",
+            )
+            if verified_key:
+                vietnamese_term = _VERIFIED_VIETNAMESE_TERMS[verified_key]
+                confidence = "high"
+                source_of_truth = "verified"
+
+        if confidence not in {"high", "medium", "low"}:
+            confidence = "low"
+        if not vietnamese_term or "/" in vietnamese_term:
+            warnings.append(
+                {
+                    "code": "ambiguous_glossary_term",
+                    "sourceTerm": source_term,
+                    "detail": vietnamese_term or "missing Vietnamese term",
+                }
+            )
+            confidence = "low"
+        if confidence == "low":
+            warnings.append(
+                {
+                    "code": "low_confidence_glossary_term",
+                    "sourceTerm": source_term,
+                    "detail": canonical_english,
+                }
+            )
+
+        normalized_entries.append(
+            {
+                "sourceTerm": source_term,
+                "canonicalEnglish": canonical_english,
+                "vietnameseTerm": vietnamese_term,
+                "confidence": confidence,
+                "sourceOfTruth": source_of_truth,
+            }
+        )
+        seen_source_terms.add(source_term.casefold())
+
+    normalized["glossary"] = normalized_entries
+    normalized["contractVersion"] = 1
+    normalized["contractWarnings"] = warnings
+    normalized["requiresTerminologyReview"] = bool(warnings)
+    return normalized
+
+
+def audit_translation_contract(
+    segments: list[dict[str, Any]],
+    context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Check that every applicable high-confidence canonical term reached output."""
+    source_passage = " ".join(
+        normalize_text(item.get("sourceText") or "") for item in segments
+    )
+    translated_passage = " ".join(
+        normalize_text(
+            item.get("finalText")
+            or item.get("spokenAdaptation")
+            or item.get("translatedText")
+            or ""
+        )
+        for item in segments
+    )
+    critical: list[dict[str, str]] = []
+    warnings = list((context or {}).get("contractWarnings") or [])
+    checked = 0
+    for entry in (context or {}).get("glossary") or []:
+        if not isinstance(entry, dict):
+            continue
+        source_term = normalize_text(entry.get("sourceTerm") or "")
+        vietnamese_term = normalize_text(entry.get("vietnameseTerm") or "")
+        confidence = normalize_text(entry.get("confidence") or "low").lower()
+        if (
+            confidence != "high"
+            or not source_term
+            or source_term not in source_passage
+        ):
+            continue
+        checked += 1
+        if vietnamese_term and vietnamese_term.casefold() not in translated_passage.casefold():
+            critical.append(
+                {
+                    "code": "required_glossary_term_missing",
+                    "sourceTerm": source_term,
+                    "requiredTerm": vietnamese_term,
+                }
+            )
+    return {
+        "status": "blocked" if critical else ("warning" if warnings else "pass"),
+        "checkedHighConfidenceTerms": checked,
+        "criticalCount": len(critical),
+        "warningCount": len(warnings),
+        "criticalFindings": critical,
+        "warnings": warnings,
+    }
+
+
 def analyze_global_context_via_ollama(
     segments: list[dict[str, Any]],
     *,
     phase: str = "render",
 ) -> dict[str, Any]:
     """Analyze the full transcript to provide global context for translation."""
-    full_text = " ".join([normalize_text(s.get("sourceText") or "") for s in segments])
+    raw_full_text = "\n".join(
+        normalize_text(s.get("sourceText") or "")
+        for s in segments
+        if normalize_text(s.get("sourceText") or "")
+    )
+    full_text = (
+        raw_full_text[:24000]
+        if _translation_optimization_mode() == "legacy"
+        else (
+            raw_full_text
+            if len(raw_full_text) <= 8000
+            else build_global_context_digest(segments, max_chars=8000)
+        )
+    )
     if not full_text.strip():
         return {}
 
@@ -714,7 +998,7 @@ def analyze_global_context_via_ollama(
         prompt = _build_global_analysis_prompt(full_text)
         response = run_ollama_prompt(
             prompt,
-            max_tokens=1200,
+            max_tokens=1200 if _translation_optimization_mode() == "legacy" else 850,
             temperature=0.1,
             timeout=60,
             json_schema={
@@ -728,7 +1012,28 @@ def analyze_global_context_via_ollama(
                     "tone": {"type": "string"},
                     "pronouns": {"type": "string"},
                     "characters": {"type": "array", "items": {"type": "string"}},
-                    "glossary": {"type": "array", "items": {"type": "string"}},
+                    "glossary": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "sourceTerm",
+                                "canonicalEnglish",
+                                "vietnameseTerm",
+                                "confidence",
+                            ],
+                            "properties": {
+                                "sourceTerm": {"type": "string"},
+                                "canonicalEnglish": {"type": "string"},
+                                "vietnameseTerm": {"type": "string"},
+                                "confidence": {
+                                    "type": "string",
+                                    "enum": ["high", "medium", "low"],
+                                },
+                            },
+                        },
+                    },
                     "properNames": {"type": "array", "items": {"type": "string"}},
                     "uncertainTerms": {"type": "array", "items": {"type": "string"}},
                 },
@@ -760,8 +1065,10 @@ def analyze_global_context_via_ollama(
                 analysis = {}
                 
         if isinstance(analysis, dict):
+            analysis["_contextSourceChars"] = len(raw_full_text)
+            analysis["_contextDigestChars"] = len(full_text)
             safe_print(f"[info] Đã xác định ngữ cảnh video: {analysis.get('theme', 'N/A')} ({analysis.get('tone', 'N/A')})", flush=True)
-            return analysis
+            return normalize_global_context_contract(analysis)
     except Exception as exc:
         safe_print(f"[warn] Không thể phân tích ngữ cảnh toàn cục: {exc}", flush=True)
         if os.getenv("DUB_AI_MODE") == "cloud":
@@ -776,11 +1083,67 @@ def analyze_global_context_via_ollama(
 
 
 def should_review_machine_translation(item: dict[str, Any], translated_text: str) -> bool:
-    # Luôn review toàn bộ bản dịch máy để đạt chất lượng văn phong thuyết minh cao nhất,
-    # đặc biệt với các video tài liệu động vật/khoa học hoặc ngôn ngữ phi Trung Quốc.
     if not normalize_text(translated_text):
         return False
-    return True
+    if _translation_optimization_mode() == "legacy":
+        item["translationRisk"] = {
+            "score": 99,
+            "reasons": ["legacy_review_all"],
+            "reviewed": True,
+        }
+        return True
+
+    source = normalize_text(item.get("sourceText") or "")
+    translated = normalize_text(translated_text)
+    duration_ms = max(
+        int(item.get("endMs", 0)) - int(item.get("startMs", 0)),
+        400,
+    )
+    score = 0
+    reasons: list[str] = []
+    if re.search(r"\d", source):
+        score += 3
+        reasons.append("numbers")
+    if re.search(r"\b[A-Z][a-z]{2,}\b", source):
+        score += 2
+        reasons.append("proper_names")
+    if len(source) >= 120 or len(source.split()) >= 22:
+        score += 2
+        reasons.append("complex_source")
+    if len(translated) / (duration_ms / 1000.0) > 18.0:
+        score += 3
+        reasons.append("timing_pressure")
+    source_len = max(len(source.replace(" ", "")), 1)
+    length_ratio = len(translated.replace(" ", "")) / source_len
+    if len(source) >= 20 and (length_ratio < 0.42 or length_ratio > 2.15):
+        score += 3
+        reasons.append("suspicious_length_ratio")
+    if _looks_like_source_language(translated, source):
+        score += 6
+        reasons.append("source_language_leak")
+    if _looks_like_placeholder_translation(translated):
+        score += 6
+        reasons.append("placeholder")
+    try:
+        asr_confidence = float(item.get("asrConfidence"))
+    except (TypeError, ValueError):
+        asr_confidence = 1.0
+    if asr_confidence < 0.55:
+        score += 2
+        reasons.append("low_asr_confidence")
+    previous_translation = normalize_text(
+        item.get("previousTranslatedText") or ""
+    )
+    if previous_translation and translated == previous_translation:
+        score += 3
+        reasons.append("duplicate_neighbor")
+
+    item["translationRisk"] = {
+        "score": score,
+        "reasons": reasons,
+        "reviewed": score >= 3,
+    }
+    return score >= 3
 
 
 def _compact_machine_review_item(
@@ -859,9 +1222,19 @@ def _build_machine_review_prompt(
         f"Source language: {source_language or 'auto'}. Style: {localization_mode}.\n"
         "Polish spoken cadence without changing, adding, removing, generalizing or guessing any meaning.\n"
         "Keep names, facts, quantities, chronology, pronouns and terminology consistent across the batch.\n"
+        "GLOBAL VIDEO CONTEXT glossary entries are binding. Never replace their canonical term with a literal "
+        "synonym, a broader category, or a different species/entity. If a draft conflicts with the glossary, "
+        "correct every occurrence consistently.\n"
+        "Reuse the established Vietnamese pronoun for each named person; never alternate anh/ông/cô/bà without evidence of a speaker or relationship change.\n"
+        "Use correct Vietnamese classifiers for countable people/animals/objects (for example con, người, chiếc). "
+        "Preserve attachment in species and life-stage noun phrases: say 'con non của loài X khổng lồ', "
+        "not an ambiguous form where 'non' or 'khổng lồ' modifies the wrong noun.\n"
+        "Adjacent sourceText items may split one sentence mid-clause. Make adjacent translatedText items join into one grammatical spoken sentence; minimally move boundary words between batch items when needed, without changing total meaning, order, or timing.\n"
         "Do not add filler to occupy duration. A pause is preferable to invented wording.\n"
-        "When text exceeds maxSpokenChars, condense wording and syntax without dropping any semantic unit.\n"
-        "Use previous/next context to connect wording, but edit only machineTranslatedText.\n"
+        "Treat maxSpokenChars as a hard dubbing budget whenever it is linguistically possible. First remove "
+        "redundancy and compress syntax; preserve every semantic unit, number, negation and uncertainty. Never "
+        "solve timing by deleting facts. Do not expand a segment toward targetSpokenChars.\n"
+        "Use previous/next context to connect wording, but edit only items in this batch.\n"
         "Return a JSON array with exactly one object per sourceId, in the same order.\n"
         "Each object must contain sourceId, translatedText and delivery.\n"
         "delivery is one of calm, neutral, curious, excited, urgent, suspense.\n\n"
@@ -940,7 +1313,8 @@ def review_machine_batch_via_ollama(
             f"- Theme: {global_context.get('theme', 'N/A')}\n"
             f"- Tone: {global_context.get('tone', 'N/A')}\n"
             f"- Preferred Pronouns: {global_context.get('pronouns', 'N/A')}\n"
-            f"- Key Terms: {', '.join(str(value) for value in (global_context.get('glossary') or []))}\n"
+            "- Binding Glossary: "
+            f"{json.dumps(global_context.get('glossary') or [], ensure_ascii=False)}\n"
         )
 
     base_prompt = _build_machine_review_prompt(items_payload, source_language=source_language)
@@ -965,6 +1339,80 @@ def review_machine_batch_via_ollama(
             temperature=0.35,
             timeout=timeout,
             json_schema=_ollama_translation_array_schema(len(items_payload)),
+        )
+    )
+    return _normalize_machine_review_items(batch, reviewed)
+
+
+def repair_spoken_timing_batch_via_ollama(
+    batch: list[dict[str, Any]],
+    *,
+    source_language: str,
+    global_context: dict[str, Any] | None,
+    timeout: int = 150,
+) -> list[dict[str, str]]:
+    """Rewrite only timing failures while keeping the faithful layer immutable."""
+    payload = []
+    for index, item in enumerate(batch):
+        duration_ms = max(
+            int(item.get("endMs", 0)) - int(item.get("startMs", 0)),
+            400,
+        )
+        payload.append(
+            {
+                "sourceId": str(item.get("id") or f"segment_{index + 1}"),
+                "sourceText": normalize_text(item.get("sourceText") or ""),
+                "faithfulTranslation": normalize_text(
+                    item.get("faithfulTranslation")
+                    or item.get("machineTranslatedText")
+                    or item.get("translatedText")
+                    or ""
+                ),
+                "currentSpokenText": normalize_text(
+                    item.get("finalText") or item.get("translatedText") or ""
+                ),
+                "durationMs": duration_ms,
+                "maxSpokenChars": max(int(duration_ms / 1000.0 * 21.5), 12),
+                "previousSpokenText": normalize_text(
+                    batch[index - 1].get("finalText")
+                    or batch[index - 1].get("translatedText")
+                    or ""
+                )
+                if index > 0
+                else normalize_text(item.get("previousTranslatedText") or ""),
+                "nextSpokenText": normalize_text(
+                    batch[index + 1].get("finalText")
+                    or batch[index + 1].get("translatedText")
+                    or ""
+                )
+                if index + 1 < len(batch)
+                else normalize_text(item.get("nextTranslatedText") or ""),
+            }
+        )
+    prompt = (
+        "You are a Vietnamese dubbing timing editor. These lines already have an immutable "
+        "faithful translation. Rewrite only the spoken wording so each translatedText is at "
+        "or below maxSpokenChars whenever possible.\n"
+        "NON-NEGOTIABLE: preserve every fact, entity, action, relationship, number, unit, "
+        "negation, uncertainty and chronology from faithfulTranslation. Never generalize a "
+        "specific term. Use every high-confidence Binding Glossary vietnameseTerm exactly. "
+        "Remove redundancy and compress Vietnamese syntax; never delete meaning. Segment "
+        "boundaries may split a sentence, so adjacent outputs must still join grammatically. "
+        "Keep Vietnamese classifiers and noun attachment grammatical; preserve forms such as "
+        "'con non của loài X khổng lồ' instead of reordering modifiers ambiguously. "
+        "Return exactly one JSON object per sourceId with sourceId, translatedText and delivery. "
+        "delivery must be calm, neutral, curious, excited, urgent or suspense. JSON only.\n\n"
+        "Binding Glossary:\n"
+        f"{json.dumps((global_context or {}).get('glossary') or [], ensure_ascii=False)}\n\n"
+        f"LINES:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+    reviewed = parse_json_response_payload(
+        run_ollama_prompt(
+            prompt,
+            max_tokens=_estimate_machine_review_max_tokens(payload),
+            temperature=0.0,
+            timeout=timeout,
+            json_schema=_ollama_translation_array_schema(len(payload)),
         )
     )
     return _normalize_machine_review_items(batch, reviewed)
@@ -1009,7 +1457,12 @@ def _normalize_machine_review_items(
                 "sourceId": source_id,
                 "translatedText": translated_text,
                 "delivery": delivery,
-                "translationProvider": "ai",
+                "translationProvider": normalize_text(
+                    item.get("translationProvider") or "ai"
+                ),
+                "reviewStatus": normalize_text(
+                    item.get("reviewStatus") or "completed"
+                ),
             }
         )
     return normalized_items
@@ -1059,6 +1512,14 @@ def apply_machine_review_result(
     item["finalText"] = final_text
     item["delivery"] = delivery
     item["machineTranslatedText"] = machine_translated_text
+    item["translationProvider"] = normalize_text(
+        (reviewed or {}).get("translationProvider")
+        or item.get("translationProvider")
+        or "ai"
+    )
+    item["reviewStatus"] = normalize_text(
+        (reviewed or {}).get("reviewStatus") or "completed"
+    )
     item.pop("spoken" + "Text", None)
     
     return {
@@ -1068,6 +1529,8 @@ def apply_machine_review_result(
         "finalText": item["finalText"],
         "delivery": delivery,
         "machineTranslatedText": machine_translated_text,
+        "translationProvider": item["translationProvider"],
+        "reviewStatus": item["reviewStatus"],
     }
 
 
@@ -1327,12 +1790,13 @@ def _load_copywriting_patterns(video_theme: str = "") -> list[dict[str, Any]]:
         from llama_index.llms.gemini import Gemini
         from llama_index.embeddings.gemini import GeminiEmbedding
 
-        api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+        api_key = get_primary_gemini_api_key()
         if not api_key:
             return all_hooks[:3]
 
         # Configure LlamaIndex to use Gemini Cloud Services
-        Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
+        cloud_model = cloud_model_name(qualified=True)
+        Settings.llm = Gemini(model=cloud_model, api_key=api_key)
         Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
 
         documents = []
@@ -1495,7 +1959,7 @@ def generate_intro_hook_via_ollama(
 ) -> str:
     """Generate a Vietnamese intro teaser hook using LlamaIndex to structure the narrative and score it via Python."""
     video_theme = ""
-    api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+    api_key = get_primary_gemini_api_key()
     
     # Step 1: Use LlamaIndex to query the climax/theme of the segments
     full_timeline = all_segments if all_segments is not None else window_segments
@@ -1508,7 +1972,8 @@ def generate_intro_hook_via_ollama(
             from llama_index.llms.gemini import Gemini
             from llama_index.embeddings.gemini import GeminiEmbedding
 
-            Settings.llm = Gemini(model="models/gemini-2.5-flash", api_key=api_key)
+            cloud_model = cloud_model_name(qualified=True)
+            Settings.llm = Gemini(model=cloud_model, api_key=api_key)
             Settings.embed_model = GeminiEmbedding(model_name="models/gemini-embedding-001", api_key=api_key)
 
             docs = [Document(text=f"Time: {s.get('startMs')}-{s.get('endMs')}ms. Context: {s.get('translatedText') or s.get('sourceText')}") for s in full_timeline]
@@ -1700,12 +2165,18 @@ def _cloud_action_extra(exc: Exception) -> dict[str, Any]:
         "gemini_quota_exhausted",
         "gemini_api_key_invalid",
         "gemini_api_key_missing",
+        "gemini_model_not_free_tier",
+        "gemini_model_unavailable",
     }:
         return {}
     return {
         "actionRequired": True,
         "errorCode": code,
-        "recommendedAction": "update_cloud_api_key",
+        "recommendedAction": (
+            "update_cloud_model"
+            if code.startswith("gemini_model_")
+            else "update_cloud_api_key"
+        ),
         "provider": "gemini",
     }
 
@@ -1854,6 +2325,8 @@ def review_machine_batch_via_ollama_resilient(
                         item.get("sourceText") or "",
                         item.get("translatedText") or "",
                     ),
+                    "translationProvider": "ai_unreviewed",
+                    "reviewStatus": "skipped_cloud_error",
                 }
                 for item in batch
             ]
@@ -1930,9 +2403,16 @@ def iter_ollama_translation_batches(
     indexed_segments: list[tuple[int, dict[str, Any]]],
 ):
     configured_batch_size = max(TRANSLATE_BATCH_SIZE, 1)
-    if os.getenv("DUB_AI_MODE") == "cloud":
+    cloud_mode = os.getenv("DUB_AI_MODE") == "cloud"
+    if cloud_mode:
         configured_batch_size = max(configured_batch_size, 12)
-    warmup_batch_size = max(min(TRANSLATE_FIRST_BATCH_SIZE, configured_batch_size), 1)
+    # A small warm-up batch only helps local models. On Gemini it needlessly
+    # breaks one sentence window into two paid requests and weakens continuity.
+    warmup_batch_size = (
+        configured_batch_size
+        if cloud_mode
+        else max(min(TRANSLATE_FIRST_BATCH_SIZE, configured_batch_size), 1)
+    )
     steady_batch_size = max(configured_batch_size, 3)
     cursor = 0
     is_first = True
@@ -2012,6 +2492,7 @@ def translate_segments(
                 "sourceLanguage": source_language,
                 "targetLanguage": target_language,
                 "localizationMode": localization_mode,
+                "optimizationMode": _translation_optimization_mode(),
                 "texts": [item["sourceText"] for item in segments],
             },
             ensure_ascii=False,
@@ -2034,6 +2515,28 @@ def translate_segments(
                 invalidated_cached_entries += 1
             continue
         localized = translations.get(item["id"], {})
+        # Fallback text is an emergency result for the current job, not a
+        # durable quality result. After quota/key recovery, a new run must call
+        # the configured translator instead of silently reusing this cache.
+        if (
+            isinstance(localized, dict)
+            and normalize_text(localized.get("translationProvider") or "").lower()
+            == "fallback"
+        ):
+            translations.pop(item["id"], None)
+            localized = {}
+            invalidated_cached_entries += 1
+        if (
+            normalize_text(item.get("translationProvider") or "").lower()
+            == "fallback"
+            and not item.get("translationEditedByUser")
+        ):
+            item["translatedText"] = ""
+            item.pop("machineTranslatedText", None)
+            item.pop("faithfulTranslation", None)
+            item.pop("spokenAdaptation", None)
+            item.pop("finalText", None)
+            item.pop("translationProvider", None)
         if isinstance(localized, dict):
             cached_translated = normalize_text(
                 localized.get("translatedText", item.get("translatedText", "")) or ""
@@ -2116,6 +2619,8 @@ def translate_segments(
             item["machineTranslatedText"] = localized.get("machineTranslatedText")
         if localized.get("translationProvider"):
             item["translationProvider"] = localized.get("translationProvider")
+        if localized.get("reviewStatus"):
+            item["reviewStatus"] = localized.get("reviewStatus")
         if item["translatedText"]:
             cached_count += 1
     seeded_translations = 0
@@ -2219,7 +2724,10 @@ def translate_segments(
             segments,
             source_language=source_language,
         )
-        if not cached_quality.get("criticalCount"):
+        if (
+            not cached_quality.get("criticalCount")
+            and not cached_quality.get("warningCount")
+        ):
             if seeded_translations or invalidated_cached_entries or prefilled_override_count:
                 persist_translation_cache(cache_path, cache_key, translations)
             return segments
@@ -2301,22 +2809,50 @@ def translate_segments(
     # translated in isolation, which was too late to resolve names and pronouns.
     global_context: dict[str, Any] = {}
     if review_backend == "ollama":
-        global_context = analyze_global_context_via_ollama(segments, phase=phase)
         context_path = cache_path.with_name("translation_context.json")
-        context_path.write_text(
-            json.dumps(
-                {
-                    "promptVersion": TRANSLATION_PROMPT_VERSION,
-                    "sourceLanguage": source_language,
-                    "targetLanguage": target_language,
-                    "transcriptHash": cache_key,
-                    "context": global_context,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        try:
+            cached_context_payload = json.loads(
+                context_path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            cached_context_payload = {}
+        if (
+            cached_context_payload.get("promptVersion")
+            == TRANSLATION_PROMPT_VERSION
+            and cached_context_payload.get("transcriptHash") == cache_key
+            and isinstance(cached_context_payload.get("context"), dict)
+        ):
+            global_context = normalize_global_context_contract(
+                cached_context_payload["context"]
+            )
+        else:
+            global_context = analyze_global_context_via_ollama(
+                segments,
+                phase=phase,
+            )
+            global_context = normalize_global_context_contract(global_context)
+            context_path.write_text(
+                json.dumps(
+                    {
+                        "promptVersion": TRANSLATION_PROMPT_VERSION,
+                        "sourceLanguage": source_language,
+                        "targetLanguage": target_language,
+                        "transcriptHash": cache_key,
+                        "context": global_context,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        if os.getenv("DUB_AI_MODE") == "cloud" and not normalize_text(
+            global_context.get("theme") or ""
+        ):
+            raise RuntimeError(
+                "Gemini không tạo được semantic context hợp lệ cho video. "
+                "Đã dừng trước khi dịch để tránh mất thuật ngữ và dịch sai chủ thể; "
+                "hãy thử lại khi quota ổn định."
+            )
 
     for position, item in pending_segments:
         # Preserve the canonical source verbatim. Fillers can carry character and
@@ -2671,6 +3207,99 @@ def translate_segments(
 
         segments = validate_translation_quality(segments)
 
+    # A second full-document review is expensive and often rewrites good lines.
+    # Repair only lines that still exceed the production speech-density budget.
+    timing_repair_enabled = os.getenv(
+        "DUB_TRANSLATION_TIMING_REPAIR",
+        "true",
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    try:
+        timing_repair_cps = float(
+            os.getenv("DUB_TRANSLATION_TIMING_REPAIR_CPS", "22.0")
+        )
+    except ValueError:
+        timing_repair_cps = 22.0
+    def collect_timing_repair_candidates() -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        if not timing_repair_enabled or review_backend != "ollama":
+            return candidates
+        for item in segments:
+            duration_ms = max(
+                int(item.get("endMs", 0)) - int(item.get("startMs", 0)),
+                1,
+            )
+            spoken_text = normalize_text(
+                item.get("finalText") or item.get("translatedText") or ""
+            )
+            cps = len(spoken_text) / (duration_ms / 1000.0)
+            if spoken_text and cps > timing_repair_cps:
+                candidates.append(item)
+        return candidates
+
+    for timing_repair_pass in range(2):
+        timing_repair_candidates = collect_timing_repair_candidates()
+        if not timing_repair_candidates:
+            break
+        emit_progress(
+            phase=phase,
+            step="translate_timing_repair",
+            progress=0.449 + timing_repair_pass * 0.001,
+            message=(
+                f"Đang rút gọn chọn lọc {len(timing_repair_candidates)} câu "
+                f"vượt thời lượng (lượt {timing_repair_pass + 1}/2), "
+                "không đọc lại toàn video"
+            ),
+        )
+        try:
+            repaired_timing_items = repair_spoken_timing_batch_via_ollama(
+                timing_repair_candidates,
+                source_language=source_hint,
+                global_context=global_context,
+            )
+        except Exception as exc:
+            repaired_timing_items = []
+            safe_print(f"[warn] Không thể tối ưu timing chọn lọc: {exc}", flush=True)
+        for item, repaired in zip(
+            timing_repair_candidates,
+            repaired_timing_items,
+        ):
+            current_text = normalize_text(
+                item.get("finalText") or item.get("translatedText") or ""
+            )
+            candidate_text = normalize_text(repaired.get("translatedText") or "")
+            if (
+                not candidate_text
+                or _looks_like_source_language(
+                    candidate_text,
+                    normalize_text(item.get("sourceText") or ""),
+                )
+                or len(candidate_text) >= len(current_text)
+            ):
+                continue
+            item.setdefault(
+                "faithfulTranslation",
+                normalize_text(
+                    item.get("machineTranslatedText")
+                    or item.get("translatedText")
+                    or current_text
+                ),
+            )
+            item["translatedText"] = candidate_text
+            item["spokenAdaptation"] = candidate_text
+            item["finalText"] = candidate_text
+            item["delivery"] = normalize_delivery_choice(
+                repaired.get("delivery"),
+                default=item.get("delivery") or "neutral",
+            )
+            item["timingRepair"] = {
+                "applied": True,
+                "passes": int(
+                    (item.get("timingRepair") or {}).get("passes") or 0
+                ) + 1,
+                "beforeChars": len(current_text),
+                "afterChars": len(candidate_text),
+            }
+
     for item in segments:
         final_text = normalize_text(item.get("translatedText") or "")
         item.setdefault("faithfulTranslation", normalize_text(item.get("machineTranslatedText") or final_text))
@@ -2686,11 +3315,41 @@ def translate_segments(
                 "delivery": normalize_delivery_choice(item.get("delivery")),
                 "machineTranslatedText": normalize_text(item.get("machineTranslatedText") or final_text),
                 "translationProvider": normalize_text(item.get("translationProvider") or "ai"),
+                "reviewStatus": normalize_text(item.get("reviewStatus") or "completed"),
             }
     quality_report = audit_translation_segments(
         segments,
         source_language=source_language,
     )
+    contract_report = audit_translation_contract(segments, global_context)
+    quality_report["semanticContract"] = contract_report
+    if contract_report["criticalCount"]:
+        quality_report["status"] = "blocked"
+        quality_report["criticalCount"] = int(
+            quality_report.get("criticalCount") or 0
+        ) + int(contract_report["criticalCount"])
+        quality_report.setdefault("findingCounts", {})[
+            "required_glossary_term_missing"
+        ] = int(contract_report["criticalCount"])
+        quality_report.setdefault("criticalSegments", []).extend(
+            {
+                "id": "semantic_contract",
+                "sourceText": finding["sourceTerm"],
+                "codes": [
+                    "required_glossary_term_missing",
+                    f"expected:{finding['requiredTerm']}",
+                ],
+            }
+            for finding in contract_report["criticalFindings"]
+        )
+    for item in segments:
+        item["semanticContract"] = {
+            "version": int(global_context.get("contractVersion") or 0),
+            "status": contract_report["status"],
+            "requiresTerminologyReview": bool(
+                global_context.get("requiresTerminologyReview")
+            ),
+        }
     assert_translation_renderable(quality_report)
 
     persist_translation_cache(cache_path, cache_key, translations)

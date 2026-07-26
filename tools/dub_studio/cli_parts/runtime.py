@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from .common import *
+from ..key_pool import KeyCandidate, get_gemini_key_pool
 
 def ensure_local_whisper_model(*, phase: str, step: str, progress: float) -> Path:
     existing = [candidate for candidate in MODEL_CANDIDATES if candidate.exists()]
@@ -501,6 +502,7 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
 
     fragments: list[str] = []
     done_reason = None
+    usage: dict[str, Any] = {}
     for raw_line in resp.iter_lines(decode_unicode=True):
         if not raw_line:
             continue
@@ -524,11 +526,17 @@ def _ollama_stream_generate(payload: dict, *, connect_timeout: float = 15.0, sta
             
         if chunk.get("done"):
             done_reason = chunk.get("done_reason")
+            usage = chunk
             break
 
     result = "".join(fragments).strip()
     if not result and done_reason:
         raise RuntimeError(f"Ollama ngừng đột ngột (lý do: {done_reason}). Có thể do hết VRAM hoặc vượt quá giới hạn ngữ cảnh (context length).")
+    _AI_USAGE_STATS["outputChars"] += len(result)
+    _AI_USAGE_STATS["promptTokens"] += int(usage.get("prompt_eval_count") or 0)
+    _AI_USAGE_STATS["outputTokens"] += int(usage.get("eval_count") or 0)
+    _AI_USAGE_STATS["totalTokens"] += int(usage.get("prompt_eval_count") or 0)
+    _AI_USAGE_STATS["totalTokens"] += int(usage.get("eval_count") or 0)
     return result
 
 
@@ -540,6 +548,23 @@ class CloudAIError(RuntimeError):
 
 _CLOUD_AI_UNAVAILABLE_REASON = ""
 _CLOUD_AI_UNAVAILABLE_CODE = ""
+_AI_USAGE_STATS: dict[str, int] = {
+    "requests": 0,
+    "promptChars": 0,
+    "outputChars": 0,
+    "promptTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 0,
+}
+
+
+def reset_ai_usage_stats() -> None:
+    for key in _AI_USAGE_STATS:
+        _AI_USAGE_STATS[key] = 0
+
+
+def get_ai_usage_stats() -> dict[str, int]:
+    return dict(_AI_USAGE_STATS)
 
 
 def reset_cloud_ai_circuit_breaker() -> None:
@@ -547,6 +572,267 @@ def reset_cloud_ai_circuit_breaker() -> None:
     global _CLOUD_AI_UNAVAILABLE_REASON, _CLOUD_AI_UNAVAILABLE_CODE
     _CLOUD_AI_UNAVAILABLE_REASON = ""
     _CLOUD_AI_UNAVAILABLE_CODE = ""
+
+
+def _gemini_error_payload(resp: Any) -> Any:
+    try:
+        return resp.json()
+    except Exception:
+        return {"error": {"message": str(getattr(resp, "text", "") or "")}}
+
+
+def _gemini_error_message(resp: Any) -> str:
+    payload = _gemini_error_payload(resp)
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+    return str(getattr(resp, "text", "") or "")
+
+
+def _gemini_generation_payload(
+    prompt: str,
+    *,
+    model_name: str,
+    max_tokens: int,
+    temperature: float | None,
+    json_schema: dict[str, Any] | None,
+) -> dict[str, Any]:
+    requested_output_tokens = max_tokens or 2048
+    is_gemini_3 = model_name.startswith("models/gemini-3")
+    generation_config: dict[str, Any] = {
+        "maxOutputTokens": (
+            max(
+                requested_output_tokens,
+                min(16384, requested_output_tokens * 2 + 1024),
+            )
+            if is_gemini_3
+            else requested_output_tokens
+        ),
+    }
+    if is_gemini_3:
+        thinking_level = os.getenv(
+            "DUB_CLOUD_THINKING_LEVEL",
+            "low",
+        ).strip().lower()
+        if thinking_level not in {"minimal", "low", "medium", "high"}:
+            thinking_level = "low"
+        generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
+    else:
+        generation_config["temperature"] = (
+            temperature if temperature is not None else 0.35
+        )
+    payload: dict[str, Any] = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": generation_config,
+    }
+    if "gemini-2.5" in model_name:
+        generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+    if json_schema or "json" in str(prompt).lower():
+        generation_config["responseMimeType"] = "application/json"
+    if json_schema:
+        generation_config["responseJsonSchema"] = json_schema
+    return payload
+
+
+def _parse_gemini_success(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    try:
+        candidate = data["candidates"][0]
+        parts = (candidate.get("content") or {}).get("parts") or []
+        text_parts = [
+            str(part.get("text") or "")
+            for part in parts
+            if isinstance(part, dict) and part.get("text") and not part.get("thought")
+        ]
+        if not text_parts:
+            text_parts = [
+                str(part.get("text") or "")
+                for part in parts
+                if isinstance(part, dict) and part.get("text")
+            ]
+        text = "".join(text_parts).strip()
+        if not text:
+            finish_reason = candidate.get("finishReason") or "unknown"
+            raise RuntimeError(
+                f"Gemini returned no text (finishReason={finish_reason})."
+            )
+        return text, data.get("usageMetadata") or {}
+    except (KeyError, IndexError):
+        raise RuntimeError("Phản hồi từ Gemini API không đúng cấu trúc.")
+
+
+def _record_gemini_usage(text: str, usage: dict[str, Any]) -> None:
+    _AI_USAGE_STATS["outputChars"] += len(text)
+    _AI_USAGE_STATS["promptTokens"] += int(usage.get("promptTokenCount") or 0)
+    _AI_USAGE_STATS["outputTokens"] += int(
+        usage.get("candidatesTokenCount") or 0
+    )
+    _AI_USAGE_STATS["totalTokens"] += int(usage.get("totalTokenCount") or 0)
+
+
+def _run_gemini_key_pool_prompt(
+    prompt: str,
+    *,
+    max_tokens: int,
+    temperature: float | None,
+    timeout: int | None,
+    json_schema: dict[str, Any] | None,
+) -> str:
+    """Run one Gemini request with bounded, status-aware key failover."""
+    global _CLOUD_AI_UNAVAILABLE_REASON, _CLOUD_AI_UNAVAILABLE_CODE
+
+    pool = get_gemini_key_pool()
+    legacy_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
+    if legacy_key:
+        pool.migrate_legacy_key(legacy_key)
+    candidates = pool.candidates()
+    if not candidates:
+        raise CloudAIError(
+            "Không còn Gemini API Key sẵn sàng. Hãy thêm key mới hoặc chờ quota hồi phục.",
+            code="gemini_api_key_missing",
+        )
+
+    # A key added or a cooldown that has expired makes the old job-level breaker
+    # stale. Availability is now decided by the pool on every request.
+    _CLOUD_AI_UNAVAILABLE_REASON = ""
+    _CLOUD_AI_UNAVAILABLE_CODE = ""
+
+    model_name = cloud_model_name(qualified=True)
+    bare_model_name = model_name.removeprefix("models/")
+    free_only = os.getenv("DUB_CLOUD_FREE_ONLY", "true").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    if free_only and bare_model_name not in FREE_TIER_CLOUD_MODELS:
+        raise CloudAIError(
+            f"Model {bare_model_name} không nằm trong danh sách Free Tier được cho phép.",
+            code="gemini_model_not_free_tier",
+        )
+    if not model_name.startswith("models/"):
+        model_name = f"models/{model_name}"
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"{model_name}:generateContent"
+    )
+    payload = _gemini_generation_payload(
+        prompt,
+        model_name=model_name,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        json_schema=json_schema,
+    )
+    safe_print(
+        f"[info] Đang gửi yêu cầu tới Gemini Cloud API ({model_name})...",
+        flush=True,
+    )
+
+    attempted_projects: set[str] = set()
+    saw_quota = False
+    saw_invalid = False
+    secrets = [candidate.secret for candidate in candidates]
+    for candidate in candidates:
+        if candidate.project_group in attempted_projects:
+            continue
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": candidate.secret,
+        }
+        resp = None
+        try:
+            for cloud_attempt in range(3):
+                pool.record_attempt(candidate.key_id)
+                _AI_USAGE_STATS["requests"] += 1
+                _AI_USAGE_STATS["promptChars"] += len(prompt)
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout or 60,
+                )
+                if resp.status_code not in {500, 502, 503, 504} or cloud_attempt >= 2:
+                    break
+                safe_print(
+                    f"[warn] Gemini tạm quá tải; thử lại {cloud_attempt + 2}/3...",
+                    flush=True,
+                )
+                time.sleep(2.0 * (cloud_attempt + 1))
+            assert resp is not None
+
+            if resp.status_code == 429:
+                saw_quota = True
+                attempted_projects.add(candidate.project_group)
+                quota_payload = {
+                    "body": _gemini_error_payload(resp),
+                    "retryAfter": str(
+                        getattr(resp, "headers", {}).get("Retry-After", "")
+                    ),
+                }
+                pool.record_quota_failure(
+                    candidate.key_id,
+                    quota_payload,
+                )
+                safe_print(
+                    f"[warn] {candidate.name} hết/hạn chế quota; chuyển key kế tiếp.",
+                    flush=True,
+                )
+                continue
+
+            error_message = _gemini_error_message(resp)
+            normalized_error = normalize_text(error_message).lower()
+            invalid_key = resp.status_code in {401, 403} or (
+                resp.status_code == 400
+                and "api key" in normalized_error
+                and any(
+                    marker in normalized_error
+                    for marker in ("invalid", "not valid", "missing", "expired")
+                )
+            )
+            if invalid_key:
+                saw_invalid = True
+                pool.record_invalid(candidate.key_id, error_message)
+                safe_print(
+                    f"[warn] {candidate.name} không hợp lệ; chuyển key kế tiếp.",
+                    flush=True,
+                )
+                continue
+            if resp.status_code in {400, 404} and any(
+                marker in normalized_error
+                for marker in ("no longer available", "model not found", "is not found")
+            ):
+                raise CloudAIError(
+                    f"Model Gemini {bare_model_name} không còn khả dụng.",
+                    code="gemini_model_unavailable",
+                )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Gemini API Error: {error_message}")
+
+            text, usage = _parse_gemini_success(resp.json())
+            pool.record_success(candidate.key_id, usage)
+            _record_gemini_usage(text, usage)
+            return text
+        except CloudAIError:
+            raise
+        except Exception as exc:
+            safe_error = str(exc)
+            for secret in secrets:
+                if secret:
+                    safe_error = safe_error.replace(secret, "***")
+            raise RuntimeError(f"Cloud AI Error: {safe_error}") from exc
+
+    if saw_quota:
+        _CLOUD_AI_UNAVAILABLE_REASON = (
+            "Tất cả Gemini API Key sẵn sàng đều đã hết quota hoặc đang cooldown"
+        )
+        _CLOUD_AI_UNAVAILABLE_CODE = "gemini_quota_exhausted"
+    elif saw_invalid:
+        _CLOUD_AI_UNAVAILABLE_REASON = "Tất cả Gemini API Key đều không hợp lệ"
+        _CLOUD_AI_UNAVAILABLE_CODE = "gemini_api_key_invalid"
+    else:
+        _CLOUD_AI_UNAVAILABLE_REASON = "Không còn Gemini API Key sẵn sàng"
+        _CLOUD_AI_UNAVAILABLE_CODE = "gemini_api_key_missing"
+    raise CloudAIError(
+        _CLOUD_AI_UNAVAILABLE_REASON,
+        code=_CLOUD_AI_UNAVAILABLE_CODE,
+    )
 
 
 def run_ollama_prompt(
@@ -559,13 +845,40 @@ def run_ollama_prompt(
 ) -> str:
     global _CLOUD_AI_UNAVAILABLE_REASON, _CLOUD_AI_UNAVAILABLE_CODE
     if os.getenv("DUB_AI_MODE") == "cloud":
+        if os.getenv(
+            "DUB_CLOUD_KEY_POOL_ENABLED",
+            "false",
+        ).strip().lower() in {"1", "true", "yes", "on"}:
+            return _run_gemini_key_pool_prompt(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=timeout,
+                json_schema=json_schema,
+            )
         if _CLOUD_AI_UNAVAILABLE_REASON:
             raise CloudAIError(
                 _CLOUD_AI_UNAVAILABLE_REASON,
                 code=_CLOUD_AI_UNAVAILABLE_CODE or "gemini_unavailable",
             )
         api_key = os.getenv("DUB_CLOUD_API_KEY", "").strip()
-        model_name = os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash").strip()
+        model_name = cloud_model_name(qualified=True)
+        bare_model_name = model_name.removeprefix("models/")
+        free_only = os.getenv("DUB_CLOUD_FREE_ONLY", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        if free_only and bare_model_name not in FREE_TIER_CLOUD_MODELS:
+            raise CloudAIError(
+                (
+                    f"Model {bare_model_name} không nằm trong danh sách Free Tier "
+                    "được ứng dụng cho phép. Hãy chọn gemini-3.5-flash hoặc "
+                    "gemini-3.5-flash-lite."
+                ),
+                code="gemini_model_not_free_tier",
+            )
         if not model_name.startswith("models/"):
             model_name = f"models/{model_name}"
         safe_print(f"[info] Đang gửi yêu cầu tới Gemini Cloud API ({model_name})...", flush=True)
@@ -577,12 +890,35 @@ def run_ollama_prompt(
         url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
         # Keep credentials out of URLs, proxy logs and exception messages.
         headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+        requested_output_tokens = max_tokens or 2048
+        is_gemini_3 = model_name.startswith("models/gemini-3")
+        generation_config: dict[str, Any] = {
+            "maxOutputTokens": (
+                max(
+                    requested_output_tokens,
+                    min(16384, requested_output_tokens * 2 + 1024),
+                )
+                if is_gemini_3
+                else requested_output_tokens
+            ),
+        }
+        if is_gemini_3:
+            thinking_level = os.getenv(
+                "DUB_CLOUD_THINKING_LEVEL",
+                "low",
+            ).strip().lower()
+            if thinking_level not in {"minimal", "low", "medium", "high"}:
+                thinking_level = "low"
+            generation_config["thinkingConfig"] = {
+                "thinkingLevel": thinking_level,
+            }
+        else:
+            generation_config["temperature"] = (
+                temperature if temperature is not None else 0.35
+            )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": temperature if temperature is not None else 0.35,
-                "maxOutputTokens": max_tokens or 2048
-            }
+            "generationConfig": generation_config,
         }
         if "gemini-2.5" in model_name:
             # Translation needs deterministic JSON, not hidden reasoning that can
@@ -595,7 +931,33 @@ def run_ollama_prompt(
             # essential for stable sourceId mapping across contextual batches.
             payload["generationConfig"]["responseJsonSchema"] = json_schema
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=timeout or 60)
+            resp = None
+            for cloud_attempt in range(3):
+                _AI_USAGE_STATS["requests"] += 1
+                _AI_USAGE_STATS["promptChars"] += len(prompt)
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout or 60,
+                )
+                transient_server_error = resp.status_code in {
+                    500,
+                    502,
+                    503,
+                    504,
+                }
+                if not transient_server_error or cloud_attempt >= 2:
+                    break
+                safe_print(
+                    (
+                        "[warn] Gemini tạm quá tải; thử lại "
+                        f"{cloud_attempt + 2}/3 sau ít giây..."
+                    ),
+                    flush=True,
+                )
+                time.sleep(2.0 * (cloud_attempt + 1))
+            assert resp is not None
             if resp.status_code == 429:
                 _CLOUD_AI_UNAVAILABLE_REASON = "Hết quota Gemini trong job hiện tại"
                 _CLOUD_AI_UNAVAILABLE_CODE = "gemini_quota_exhausted"
@@ -631,6 +993,21 @@ def run_ollama_prompt(
                         _CLOUD_AI_UNAVAILABLE_REASON,
                         code="gemini_api_key_invalid",
                     )
+                if resp.status_code in {400, 404} and any(
+                    marker in normalized_error
+                    for marker in (
+                        "no longer available",
+                        "model not found",
+                        "is not found",
+                    )
+                ):
+                    raise CloudAIError(
+                        (
+                            f"Model Gemini {bare_model_name} không còn khả dụng. "
+                            "Hãy chọn một model Free Tier hiện hành."
+                        ),
+                        code="gemini_model_unavailable",
+                    )
                 raise RuntimeError(f"Gemini API Error: {err_msg}")
             data = resp.json()
             try:
@@ -657,6 +1034,17 @@ def run_ollama_prompt(
                     raise RuntimeError(
                         f"Gemini returned no text (finishReason={finish_reason})."
                     )
+                usage = data.get("usageMetadata") or {}
+                _AI_USAGE_STATS["outputChars"] += len(txt)
+                _AI_USAGE_STATS["promptTokens"] += int(
+                    usage.get("promptTokenCount") or 0
+                )
+                _AI_USAGE_STATS["outputTokens"] += int(
+                    usage.get("candidatesTokenCount") or 0
+                )
+                _AI_USAGE_STATS["totalTokens"] += int(
+                    usage.get("totalTokenCount") or 0
+                )
                 return txt
             except (KeyError, IndexError):
                 raise RuntimeError("Phản hồi từ Gemini API không đúng cấu trúc.")
@@ -713,6 +1101,8 @@ def run_ollama_prompt(
             flush=True,
         )
         try:
+            _AI_USAGE_STATS["requests"] += 1
+            _AI_USAGE_STATS["promptChars"] += len(prompt)
             output = _ollama_stream_generate(
                 payload,
                 connect_timeout=15.0,
@@ -775,7 +1165,7 @@ def translation_batch_progress(end_index: int, total: int) -> float:
     return 0.32 + (min(end_index, safe_total) / safe_total) * 0.12
 
 
-TRANSLATION_PROMPT_VERSION = 10
+TRANSLATION_PROMPT_VERSION = 16
 TRANSLATION_CACHE_SCHEMA_VERSION = 2
 
 
@@ -818,7 +1208,7 @@ def persist_translation_cache(cache_path: Path, cache_key: str, translations: di
                 "promptVersion": TRANSLATION_PROMPT_VERSION,
                 "provider": DUB_TRANSLATE_PROVIDER,
                 "model": (
-                    os.getenv("DUB_CLOUD_MODEL", "gemini-2.5-flash")
+                    cloud_model_name()
                     if os.getenv("DUB_AI_MODE") == "cloud"
                     else OLLAMA_MODEL
                 ),

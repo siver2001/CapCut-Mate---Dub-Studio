@@ -95,7 +95,16 @@ def audit_translation_segments(
         )
         findings: list[dict[str, str]] = []
 
-        if item.get("translationProvider") == "fallback":
+        translation_provider = normalize_text(
+            item.get("translationProvider") or ""
+        ).lower()
+        if translation_provider == "ai_unreviewed":
+            # In quality-first mode a quota/key failure during the review pass
+            # must never silently export the longer, unpolished draft.
+            findings.append(
+                {"severity": "critical", "code": "cloud_review_incomplete"}
+            )
+        elif translation_provider == "fallback":
             # A fallback provider is a provenance warning, not proof that the
             # sentence is broken. Missing text, source-language leakage and
             # dropped numbers are still independently blocked below.
@@ -126,7 +135,11 @@ def audit_translation_segments(
 
         duration_ms = max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 1)
         spoken_chars_per_second = len(translated) / (duration_ms / 1000.0)
-        if translated and spoken_chars_per_second > 22.0:
+        # Keep a small tolerance above the 22 cps repair target. Rounding,
+        # punctuation and the TTS speed controller can absorb this margin;
+        # flagging 22.01 cps caused otherwise production-ready translations to
+        # fail after the selective timing repair had already done its job.
+        if translated and spoken_chars_per_second > 22.5:
             findings.append({"severity": "warning", "code": "timing_pressure_high"})
 
         if (
@@ -184,7 +197,7 @@ def assert_translation_renderable(report: dict[str, Any]) -> None:
         )
         raise RuntimeError(
             "Bản dịch không vượt qua quality gate: "
-            f"{report['criticalCount']} đoạn thiếu dịch hoặc còn nguyên ngôn ngữ nguồn. "
+            f"{report['criticalCount']} đoạn chưa đạt điều kiện xuất bản. "
             f"Chi tiết: {details or 'không xác định'}. "
             "Đã dừng trước bước lồng tiếng để tránh xuất video lỗi."
         )

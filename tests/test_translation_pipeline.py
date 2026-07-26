@@ -13,12 +13,78 @@ from tools.dub_studio.cli_parts.translation import (
     _cloud_action_extra,
     _prefilled_translation_is_authoritative,
     apply_machine_review_result,
+    audit_translation_contract,
+    build_global_context_digest,
     iter_ollama_translation_batches,
+    normalize_global_context_contract,
+    should_review_machine_translation,
     translate_segments,
 )
 
 
 class TranslationPipelineTests(unittest.TestCase):
+    def test_quality_first_mode_is_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            item = {
+                "sourceText": "The cat is sleeping.",
+                "startMs": 0,
+                "endMs": 2500,
+            }
+            self.assertTrue(
+                should_review_machine_translation(item, "Con mèo đang ngủ.")
+            )
+        self.assertIn(
+            "legacy_review_all",
+            item["translationRisk"]["reasons"],
+        )
+
+    def test_context_digest_is_bounded_and_keeps_boundaries_and_numbers(self):
+        segments = [
+            {
+                "sourceText": f"Segment {index} " + ("detail " * 35),
+                "speakerId": "speaker_1",
+            }
+            for index in range(80)
+        ]
+        digest = build_global_context_digest(segments, max_chars=4000)
+        self.assertLessEqual(len(digest), 4000)
+        self.assertIn("[1|speaker_1]", digest)
+        self.assertIn("[80|speaker_1]", digest)
+
+    def test_selective_review_skips_simple_low_risk_sentence(self):
+        item = {
+            "sourceText": "The cat is sleeping.",
+            "startMs": 0,
+            "endMs": 2500,
+        }
+        with patch.dict(
+            os.environ,
+            {"DUB_TRANSLATION_OPTIMIZATION": "adaptive"},
+            clear=False,
+        ):
+            self.assertFalse(
+                should_review_machine_translation(item, "Con mèo đang ngủ.")
+            )
+
+    def test_selective_review_keeps_numeric_fact_high_risk(self):
+        item = {
+            "sourceText": "The bridge was built in 1987.",
+            "startMs": 0,
+            "endMs": 2500,
+        }
+        with patch.dict(
+            os.environ,
+            {"DUB_TRANSLATION_OPTIMIZATION": "adaptive"},
+            clear=False,
+        ):
+            self.assertTrue(
+                should_review_machine_translation(
+                    item,
+                    "Cây cầu được xây dựng vào năm 1987.",
+                )
+            )
+        self.assertIn("numbers", item["translationRisk"]["reasons"])
+
     def test_cloud_quota_maps_to_gui_action(self):
         class QuotaError(RuntimeError):
             code = "gemini_quota_exhausted"
@@ -65,7 +131,99 @@ class TranslationPipelineTests(unittest.TestCase):
         self.assertEqual(payload[0]["sourceId"], "src_42")
         self.assertIn("Never invent", prompt)
         self.assertIn("Natural silence is allowed", prompt)
+        self.assertIn("binding terminology contract", prompt)
+        self.assertIn("never alternate with a broader species/category", prompt)
         self.assertNotIn("pet vlog topic", prompt)
+
+    def test_semantic_contract_corrects_high_risk_species_term(self):
+        context = normalize_global_context_contract(
+            {
+                "glossary": [
+                    {
+                        "sourceTerm": "塔斯玛尼亚淡水敖虾",
+                        "canonicalEnglish": "Tasmanian giant freshwater crayfish",
+                        "vietnameseTerm": "tôm rồng đất Tasmania",
+                        "confidence": "high",
+                    }
+                ]
+            }
+        )
+        term = context["glossary"][0]
+        self.assertEqual(term["vietnameseTerm"], "tôm hùm đất khổng lồ Tasmania")
+        self.assertEqual(term["sourceOfTruth"], "verified")
+
+    def test_semantic_contract_does_not_collapse_crayfish_trap_into_animal(self):
+        context = normalize_global_context_contract(
+            {
+                "glossary": [
+                    {
+                        "sourceTerm": "地龙网",
+                        "canonicalEnglish": "hoop net / crayfish trap",
+                        "vietnameseTerm": "tôm hùm đất",
+                        "confidence": "high",
+                    }
+                ]
+            }
+        )
+        term = context["glossary"][0]
+        self.assertEqual(term["vietnameseTerm"], "lưới bẫy tôm hùm đất")
+        self.assertEqual(term["sourceOfTruth"], "verified")
+        self.assertFalse(context["requiresTerminologyReview"])
+
+    def test_user_glossary_override_has_priority(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DUB_TRANSLATION_GLOSSARY_JSON": (
+                    '{"Tasmanian giant freshwater crayfish": '
+                    '"tôm càng Tasmania do biên tập viên duyệt"}'
+                )
+            },
+            clear=False,
+        ):
+            context = normalize_global_context_contract(
+                {
+                    "glossary": [
+                        {
+                            "sourceTerm": "塔斯玛尼亚淡水敖虾",
+                            "canonicalEnglish": "Tasmanian giant freshwater crayfish",
+                            "vietnameseTerm": "bản nháp",
+                            "confidence": "low",
+                        }
+                    ]
+                }
+            )
+        term = context["glossary"][0]
+        self.assertEqual(
+            term["vietnameseTerm"],
+            "tôm càng Tasmania do biên tập viên duyệt",
+        )
+        self.assertEqual(term["sourceOfTruth"], "user")
+
+    def test_semantic_contract_blocks_missing_canonical_term(self):
+        context = normalize_global_context_contract(
+            {
+                "glossary": [
+                    {
+                        "sourceTerm": "鸭嘴兽",
+                        "canonicalEnglish": "platypus",
+                        "vietnameseTerm": "con vật",
+                        "confidence": "high",
+                    }
+                ]
+            }
+        )
+        report = audit_translation_contract(
+            [
+                {
+                    "sourceText": "溪流里有鸭嘴兽",
+                    "translatedText": "Dưới suối có một con vật.",
+                }
+            ],
+            context,
+        )
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["criticalCount"], 1)
 
     def test_dynamic_batches_keep_multiple_short_segments_together(self):
         indexed = []
@@ -95,7 +253,7 @@ class TranslationPipelineTests(unittest.TestCase):
         ]
         with patch.dict(os.environ, {"DUB_AI_MODE": "cloud"}, clear=False):
             batches = list(iter_ollama_translation_batches(indexed))
-        self.assertLessEqual(len(batches), 3)
+        self.assertLessEqual(len(batches), 2)
 
     def test_canonical_segmentation_does_not_merge_complete_sentence(self):
         result = _split_segments_into_sentences([
@@ -184,6 +342,41 @@ class TranslationPipelineTests(unittest.TestCase):
 
         self.assertEqual(result[0]["quality"]["status"], "pass")
         self.assertIn("cây cầu", result[0]["finalText"])
+
+    def test_fallback_prefill_is_retranslated_after_provider_recovers(self):
+        segments = [{
+            "id": "seg_0001",
+            "sourceText": "The bridge is 80 meters long.",
+            "translatedText": "Cau dai 80 met.",
+            "translationProvider": "fallback",
+            "translationPromptVersion": TRANSLATION_PROMPT_VERSION,
+            "startMs": 0,
+            "endMs": 2500,
+            "speakerId": "speaker_1",
+        }]
+        cache_path = Path("temp/test_translation_fallback_retry.json")
+        cache_path.unlink(missing_ok=True)
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"DUB_TRANSLATE_PROVIDER": "google", "DUB_AI_MODE": "local"},
+                    clear=False,
+                ),
+                patch(
+                    "tools.dub_studio.cli_parts.translation.translate_via_google_free",
+                    return_value="Cay cau nay dai 80 met.",
+                ) as translator,
+            ):
+                result = translate_segments(segments, "en", cache_path)
+        finally:
+            cache_path.unlink(missing_ok=True)
+            cache_path.with_name(
+                "test_translation_fallback_retry.microsoft.json"
+            ).unlink(missing_ok=True)
+
+        translator.assert_called_once()
+        self.assertEqual(result[0]["finalText"], "Cay cau nay dai 80 met.")
 
 
 if __name__ == "__main__":

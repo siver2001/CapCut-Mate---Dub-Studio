@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextOption, QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -63,6 +63,7 @@ from gui.config import (
 from gui.preview_canvas import PreviewCanvas
 from gui.video_preview_widget import VideoPreviewWidget
 from gui.utils import APP_STYLESHEET, repair_mojibake_text
+from tools.dub_studio.config import DEFAULT_CLOUD_MODEL
 from .helpers import SafeDoubleSpinBox, SafeSlider, SafeSpinBox, SectionWidget
 
 
@@ -1787,21 +1788,66 @@ class WindowLayoutMixin:
         # 6. DUB_CLOUD_MODEL
         left_grid.addWidget(self._field_label("Cloud Model Name:"), 5, 0)
         self.conf_cloud_model_edit = QLineEdit()
-        prepare_input(self.conf_cloud_model_edit, placeholder="Ví dụ: gemini-2.5-flash")
+        prepare_input(
+            self.conf_cloud_model_edit,
+            placeholder=f"Ví dụ: {DEFAULT_CLOUD_MODEL}",
+        )
         left_grid.addWidget(self.conf_cloud_model_edit, 5, 1)
 
-        # 7. DUB_CLOUD_API_KEY
-        left_grid.addWidget(self._field_label("Cloud API Key:"), 6, 0)
-        cloud_api_row = QHBoxLayout()
-        self.conf_cloud_api_key_edit = QLineEdit()
-        self.conf_cloud_api_key_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
-        prepare_input(self.conf_cloud_api_key_edit, placeholder="Nhập Gemini API Key...")
-        self.conf_cloud_api_check_btn = self._make_button("Kiểm tra Model", "ghost")
-        self.conf_cloud_api_check_btn.setMinimumHeight(36)
+        # 7. Gemini key pool. Secrets are stored with Windows DPAPI and are never
+        # rendered back into the table.
+        left_grid.addWidget(self._field_label("Gemini API Keys:"), 6, 0)
+        cloud_key_panel = QVBoxLayout()
+        self.conf_cloud_key_table = QTableWidget(0, 4)
+        self.conf_cloud_key_table.setHorizontalHeaderLabels(
+            ["Tên key", "Ưu tiên", "Trạng thái", "Đã dùng hôm nay"]
+        )
+        self.conf_cloud_key_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.conf_cloud_key_table.setSelectionMode(
+            QTableWidget.SelectionMode.SingleSelection
+        )
+        self.conf_cloud_key_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self.conf_cloud_key_table.verticalHeader().setVisible(False)
+        key_header = self.conf_cloud_key_table.horizontalHeader()
+        key_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, 4):
+            key_header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        self.conf_cloud_key_table.setMinimumHeight(190)
+        cloud_key_panel.addWidget(self.conf_cloud_key_table)
+
+        cloud_key_buttons = QHBoxLayout()
+        self.conf_cloud_key_add_btn = self._make_button("Thêm", "ghost")
+        self.conf_cloud_key_edit_btn = self._make_button("Sửa", "ghost")
+        self.conf_cloud_key_delete_btn = self._make_button("Xóa", "ghost")
+        self.conf_cloud_key_toggle_btn = self._make_button("Bật/Tắt", "ghost")
+        self.conf_cloud_api_check_btn = self._make_button("Kiểm tra", "ghost")
+        self.conf_cloud_key_add_btn.clicked.connect(self.add_gemini_key)
+        self.conf_cloud_key_edit_btn.clicked.connect(self.edit_gemini_key)
+        self.conf_cloud_key_delete_btn.clicked.connect(self.delete_gemini_key)
+        self.conf_cloud_key_toggle_btn.clicked.connect(self.toggle_gemini_key)
         self.conf_cloud_api_check_btn.clicked.connect(self.check_cloud_models)
-        cloud_api_row.addWidget(self.conf_cloud_api_key_edit, 1)
-        cloud_api_row.addWidget(self.conf_cloud_api_check_btn)
-        left_grid.addLayout(cloud_api_row, 6, 1)
+        for button in (
+            self.conf_cloud_key_add_btn,
+            self.conf_cloud_key_edit_btn,
+            self.conf_cloud_key_delete_btn,
+            self.conf_cloud_key_toggle_btn,
+            self.conf_cloud_api_check_btn,
+        ):
+            button.setMinimumHeight(34)
+            cloud_key_buttons.addWidget(button)
+        cloud_key_buttons.addStretch(1)
+        cloud_key_panel.addLayout(cloud_key_buttons)
+        left_grid.addLayout(cloud_key_panel, 6, 1)
+        self._gemini_key_refresh_timer = QTimer(self)
+        self._gemini_key_refresh_timer.setInterval(5000)
+        self._gemini_key_refresh_timer.timeout.connect(
+            self.refresh_gemini_key_table
+        )
+        self._gemini_key_refresh_timer.start()
 
 
         # ----------------------------------------------------

@@ -81,6 +81,24 @@ def env_bool(*names: str, default: bool = False) -> bool:
     return default
 
 
+DEFAULT_CLOUD_MODEL = "gemini-3.5-flash"
+FREE_TIER_CLOUD_MODELS = frozenset(
+    {
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+    }
+)
+
+
+def cloud_model_name(*, qualified: bool = False) -> str:
+    """Return the single Gemini model selected by GUI/.env for every pipeline stage."""
+    model = env_value("DUB_CLOUD_MODEL", default=DEFAULT_CLOUD_MODEL)
+    if qualified and not model.startswith("models/"):
+        return f"models/{model}"
+    return model
+
+
 MODEL_CANDIDATES = [
     ROOT / "temp" / "models" / "ggml-small.bin",
     ROOT / "temp" / "models" / "ggml-base.bin",
