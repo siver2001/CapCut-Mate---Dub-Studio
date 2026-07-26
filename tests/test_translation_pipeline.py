@@ -285,6 +285,23 @@ class TranslationPipelineTests(unittest.TestCase):
         self.assertEqual("".join(item["sourceText"] for item in result), source)
         self.assertTrue(all(len(item["sourceText"]) <= 60 for item in result))
 
+    def test_long_space_separated_clause_is_split_without_name_error(self):
+        source = " ".join(f"word{index}" for index in range(40))
+        result = _split_segments_into_sentences([
+            {
+                "startMs": 0,
+                "endMs": 12000,
+                "text": source,
+                "speakerId": "speaker_1",
+            },
+        ])
+        self.assertGreater(len(result), 1)
+        self.assertEqual(
+            " ".join(item["sourceText"] for item in result),
+            source,
+        )
+        self.assertTrue(all(len(item["sourceText"]) <= 80 for item in result))
+
     def test_current_prefilled_translation_passes_without_network(self):
         segments = [{
             "id": "seg_0001",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import logging
 import tempfile
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 from .common import *
 from .analysis import (
@@ -2342,7 +2345,7 @@ def torchaudio_source_separation_background(
     torchaudio.save(str(output_path), background.cpu(), target_sample_rate)
 
     # Final cleanup
-    del model, background, background_chunks, waveform
+    del model, background, background_chunks
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 

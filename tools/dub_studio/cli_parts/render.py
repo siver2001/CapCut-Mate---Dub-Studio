@@ -47,7 +47,7 @@ from .translation import (
     select_intro_hook_montage,
     translate_segments,
 )
-from ..subtitle_utils import renumber_subtitle_timeline
+from ..subtitle_utils import renumber_subtitle_timeline, split_long_clause
 from ..tts.text import sanitize_for_tts_or_raise
 from ..quality import (
     assert_translation_renderable,
