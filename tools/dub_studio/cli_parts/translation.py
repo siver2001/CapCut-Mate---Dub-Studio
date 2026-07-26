@@ -6,6 +6,7 @@ from .common import *
 from ..quality import assert_translation_renderable, audit_translation_segments
 from ..key_pool import get_primary_gemini_api_key
 from .runtime import (
+    CloudAIError,
     TRANSLATION_PROMPT_VERSION,
     apply_localized_result,
     estimate_ollama_timeout,
@@ -664,7 +665,47 @@ def _translation_optimization_mode() -> str:
     mode = normalize_text(
         os.getenv("DUB_TRANSLATION_OPTIMIZATION", "legacy")
     ).lower()
+    if os.getenv("DUB_AI_MODE") == "cloud":
+        return "adaptive"
     return "legacy" if mode == "legacy" else "adaptive"
+
+
+def _semantic_context_is_usable(context: Any) -> bool:
+    return isinstance(context, dict) and bool(
+        normalize_text(context.get("theme") or "")
+    )
+
+
+def _semantic_context_failure(code: str, message: str) -> dict[str, str]:
+    return {
+        "_contextFailureCode": normalize_text(code) or "gemini_context_failed",
+        "_contextFailureMessage": normalize_text(message)[:500],
+    }
+
+
+def _semantic_context_user_error(context: dict[str, Any]) -> str:
+    code = normalize_text(context.get("_contextFailureCode") or "")
+    detail = normalize_text(context.get("_contextFailureMessage") or "")
+    if code == "gemini_quota_exhausted":
+        return (
+            "Gemini trả về lỗi 429 (giới hạn RPM/TPM/RPD của dự án). "
+            "API key mới thuộc cùng Google Cloud project vẫn dùng chung quota. "
+            f"Chi tiết: {detail or 'RESOURCE_EXHAUSTED'}"
+        )
+    if code == "gemini_api_key_invalid":
+        return f"Gemini API key không hợp lệ hoặc không có quyền truy cập. {detail}"
+    if code in {"gemini_model_unavailable", "gemini_model_not_free_tier"}:
+        return f"Model Gemini đang chọn không khả dụng cho key này. {detail}"
+    if code == "gemini_context_invalid_response":
+        return (
+            "Gemini đã phản hồi nhưng semantic context không đúng JSON yêu cầu. "
+            "Đây không phải bằng chứng key đã hết quota; hãy thử model khác đang Available. "
+            f"Chi tiết: {detail}"
+        )
+    return (
+        "Không tạo được semantic context do lỗi kết nối hoặc phản hồi Gemini. "
+        f"Chi tiết: {detail or code or 'không xác định'}"
+    )
 
 
 def build_global_context_digest(
@@ -1064,15 +1105,29 @@ def analyze_global_context_via_ollama(
             else:
                 analysis = {}
                 
-        if isinstance(analysis, dict):
+        if _semantic_context_is_usable(analysis):
             analysis["_contextSourceChars"] = len(raw_full_text)
             analysis["_contextDigestChars"] = len(full_text)
             safe_print(f"[info] Đã xác định ngữ cảnh video: {analysis.get('theme', 'N/A')} ({analysis.get('tone', 'N/A')})", flush=True)
             return normalize_global_context_contract(analysis)
+        if os.getenv("DUB_AI_MODE") == "cloud":
+            return _semantic_context_failure(
+                "gemini_context_invalid_response",
+                "JSON response is missing theme or cannot be parsed.",
+            )
+    except CloudAIError as exc:
+        safe_print(
+            f"[warn] Gemini semantic context failed ({exc.code}): {exc}",
+            flush=True,
+        )
+        return _semantic_context_failure(exc.code, str(exc))
     except Exception as exc:
         safe_print(f"[warn] Không thể phân tích ngữ cảnh toàn cục: {exc}", flush=True)
         if os.getenv("DUB_AI_MODE") == "cloud":
-            return {}
+            return _semantic_context_failure(
+                "gemini_context_request_failed",
+                str(exc),
+            )
         # Fallback: try one more time with a simpler prompt if JSON failed
         try:
              simple_response = run_ollama_prompt("Summarize the theme and character pronouns of this transcript as JSON: " + full_text[:2000], max_tokens=200)
@@ -2820,7 +2875,9 @@ def translate_segments(
             cached_context_payload.get("promptVersion")
             == TRANSLATION_PROMPT_VERSION
             and cached_context_payload.get("transcriptHash") == cache_key
-            and isinstance(cached_context_payload.get("context"), dict)
+            and _semantic_context_is_usable(
+                cached_context_payload.get("context")
+            )
         ):
             global_context = normalize_global_context_contract(
                 cached_context_payload["context"]
@@ -2831,28 +2888,27 @@ def translate_segments(
                 phase=phase,
             )
             global_context = normalize_global_context_contract(global_context)
-            context_path.write_text(
-                json.dumps(
-                    {
-                        "promptVersion": TRANSLATION_PROMPT_VERSION,
-                        "sourceLanguage": source_language,
-                        "targetLanguage": target_language,
-                        "transcriptHash": cache_key,
-                        "context": global_context,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+            if _semantic_context_is_usable(global_context):
+                context_path.write_text(
+                    json.dumps(
+                        {
+                            "promptVersion": TRANSLATION_PROMPT_VERSION,
+                            "sourceLanguage": source_language,
+                            "targetLanguage": target_language,
+                            "transcriptHash": cache_key,
+                            "context": global_context,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+            else:
+                context_path.unlink(missing_ok=True)
         if os.getenv("DUB_AI_MODE") == "cloud" and not normalize_text(
             global_context.get("theme") or ""
         ):
-            raise RuntimeError(
-                "Gemini không tạo được semantic context hợp lệ cho video. "
-                "Đã dừng trước khi dịch để tránh mất thuật ngữ và dịch sai chủ thể; "
-                "hãy thử lại khi quota ổn định."
-            )
+            raise RuntimeError(_semantic_context_user_error(global_context))
 
     for position, item in pending_segments:
         # Preserve the canonical source verbatim. Fillers can carry character and

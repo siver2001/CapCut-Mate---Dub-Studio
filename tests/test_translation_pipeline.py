@@ -1,17 +1,21 @@
 import unittest
 import os
+import tempfile
 from unittest.mock import patch
 from pathlib import Path
 
 from tools.dub_studio.cli_parts.analysis import is_same_speaker_continuation
 from tools.dub_studio.cli_parts.render import _split_segments_into_sentences
 from tools.dub_studio.subtitle_utils import SubtitleLine
-from tools.dub_studio.cli_parts.runtime import TRANSLATION_PROMPT_VERSION
+from tools.dub_studio.cli_parts.runtime import CloudAIError, TRANSLATION_PROMPT_VERSION
 from tools.dub_studio.cli_parts.translation import (
     _build_localization_items_payload,
     _build_localization_prompt,
     _cloud_action_extra,
     _prefilled_translation_is_authoritative,
+    _semantic_context_is_usable,
+    _semantic_context_user_error,
+    analyze_global_context_via_ollama,
     apply_machine_review_result,
     audit_translation_contract,
     build_global_context_digest,
@@ -37,6 +41,127 @@ class TranslationPipelineTests(unittest.TestCase):
             "legacy_review_all",
             item["translationRisk"]["reasons"],
         )
+
+    def test_cloud_mode_uses_selective_review_even_if_legacy_is_configured(self):
+        item = {
+            "sourceText": "The cat is sleeping.",
+            "startMs": 0,
+            "endMs": 2500,
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "DUB_AI_MODE": "cloud",
+                "DUB_TRANSLATION_OPTIMIZATION": "legacy",
+            },
+            clear=False,
+        ):
+            self.assertFalse(
+                should_review_machine_translation(item, "Con mèo đang ngủ.")
+            )
+
+    def test_semantic_context_rejects_stale_empty_cache_payload(self):
+        self.assertFalse(_semantic_context_is_usable({}))
+        self.assertFalse(
+            _semantic_context_is_usable(
+                {"contractVersion": 1, "glossary": []}
+            )
+        )
+        self.assertTrue(
+            _semantic_context_is_usable(
+                {"theme": "Chăm sóc thú cưng", "glossary": []}
+            )
+        )
+
+    def test_semantic_context_preserves_quota_failure_reason(self):
+        with (
+            patch.dict(os.environ, {"DUB_AI_MODE": "cloud"}, clear=False),
+            patch(
+                "tools.dub_studio.cli_parts.translation.run_ollama_prompt",
+                side_effect=CloudAIError(
+                    "RESOURCE_EXHAUSTED",
+                    code="gemini_quota_exhausted",
+                ),
+            ),
+        ):
+            context = analyze_global_context_via_ollama(
+                [{"sourceText": "A short transcript."}]
+            )
+        self.assertEqual(
+            context["_contextFailureCode"],
+            "gemini_quota_exhausted",
+        )
+        self.assertIn("429", _semantic_context_user_error(context))
+
+    def test_invalid_semantic_json_is_not_reported_as_quota(self):
+        with (
+            patch.dict(os.environ, {"DUB_AI_MODE": "cloud"}, clear=False),
+            patch(
+                "tools.dub_studio.cli_parts.translation.run_ollama_prompt",
+                return_value="not-json",
+            ),
+        ):
+            context = analyze_global_context_via_ollama(
+                [{"sourceText": "A short transcript."}]
+            )
+        self.assertEqual(
+            context["_contextFailureCode"],
+            "gemini_context_invalid_response",
+        )
+        message = _semantic_context_user_error(context)
+        self.assertIn("không phải bằng chứng", message)
+        self.assertNotIn("429", message)
+
+    def test_failed_semantic_context_is_not_cached_or_reused(self):
+        failure = {
+            "_contextFailureCode": "gemini_quota_exhausted",
+            "_contextFailureMessage": "RESOURCE_EXHAUSTED",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "translation_cache.json"
+            context_path = cache_path.with_name("translation_context.json")
+            context_path.write_text(
+                '{"promptVersion": 1, "context": {}}',
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "DUB_AI_MODE": "cloud",
+                        "DUB_TRANSLATE_PROVIDER": "ollama",
+                    },
+                    clear=False,
+                ),
+                patch(
+                    "tools.dub_studio.cli_parts.translation.should_use_ollama",
+                    return_value=True,
+                ),
+                patch(
+                    "tools.dub_studio.cli_parts.translation.should_use_llama_cpp",
+                    return_value=False,
+                ),
+                patch(
+                    "tools.dub_studio.cli_parts.translation.analyze_global_context_via_ollama",
+                    return_value=failure,
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "429"):
+                    translate_segments(
+                        [
+                            {
+                                "id": "seg_0001",
+                                "sourceText": "A short transcript.",
+                                "translatedText": "",
+                                "startMs": 0,
+                                "endMs": 1800,
+                                "speakerId": "speaker_1",
+                            }
+                        ],
+                        "en",
+                        cache_path,
+                    )
+            self.assertFalse(context_path.exists())
 
     def test_context_digest_is_bounded_and_keeps_boundaries_and_numbers(self):
         segments = [
