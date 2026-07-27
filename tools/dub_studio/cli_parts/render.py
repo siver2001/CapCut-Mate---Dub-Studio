@@ -3104,7 +3104,10 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
     # Re-align subtitles with the final shifted timings from create_dub_audio to ensure perfect sync
     if subtitle_enabled:
         final_timings = {
-            str(segment.get("id") or ""): (int(segment.get("startMs", 0)), int(segment.get("endMs", 0)))
+            str(segment.get("id") or ""): (
+                int(segment.get("subtitleStartMs", segment.get("startMs", 0))),
+                int(segment.get("subtitleEndMs", segment.get("endMs", 0))),
+            )
             for segment in segments
             if segment.get("id")
         }
@@ -3117,14 +3120,44 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
             elif idx < len(segments):
                 # Fallback: Align by index if IDs do not match (highly common for edited/imported subtitles)
                 seg = segments[idx]
-                item["startMs"] = int(seg.get("startMs", 0))
-                item["endMs"] = int(seg.get("endMs", 0))
+                item["startMs"] = int(
+                    seg.get("subtitleStartMs", seg.get("startMs", 0))
+                )
+                item["endMs"] = int(
+                    seg.get("subtitleEndMs", seg.get("endMs", 0))
+                )
+
+        segment_by_id = {
+            str(segment.get("id") or ""): segment
+            for segment in segments
+            if segment.get("id")
+        }
+        subtitle_timing_anchors: list[list[int]] = []
+        for idx, timeline_item in enumerate(subtitle_timeline):
+            segment_id = str(
+                timeline_item.get("segmentId")
+                or timeline_item.get("id")
+                or ""
+            )
+            segment = segment_by_id.get(segment_id)
+            if segment is None and idx < len(segments):
+                segment = segments[idx]
+            segment_start = int((segment or {}).get("startMs", 0))
+            subtitle_timing_anchors.append(
+                [
+                    segment_start + int(offset)
+                    for offset in (
+                        (segment or {}).get("ttsPauseOffsetsMs") or []
+                    )
+                ]
+            )
         
         display_subtitles = split_subtitle_lines_for_display(
             subtitle_timeline_to_lines(subtitle_timeline),
             max_words=int(subtitle_preset.get("maxWordsPerChunk", 5)),
             max_chars=int(subtitle_preset.get("maxCharsPerChunk", 22)),
             punctuation_aware=bool(subtitle_preset.get("punctuationAwareSplit", True)),
+            timing_anchors=subtitle_timing_anchors,
         )
         
         subtitle_positions = build_stable_subtitle_positions(

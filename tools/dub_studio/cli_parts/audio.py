@@ -9,6 +9,7 @@ import time
 logger = logging.getLogger(__name__)
 
 from .common import *
+from ..subtitle_utils import inject_mid_sentence_pause
 from .analysis import (
     is_valtec_reference_voice,
     is_valtec_voice_preset,
@@ -264,7 +265,7 @@ def build_tts_delivery_profile(
     pitch_hz = 0
     volume_percent = 0
     source = normalize_text(source_text)
-    spoken = normalize_text(text)
+    spoken = inject_mid_sentence_pause(normalize_text(text))
     if normalized_delivery == "calm":
         pitch_hz -= 2
     elif normalized_delivery == "curious":
@@ -317,7 +318,7 @@ def clamp_rate_percent(percent: int, timing_mode: str = "balanced_natural", *, i
         if ultra_tight:
             min_rate, max_rate = (-6, 20)
         else:
-            min_rate, max_rate = (-10, 12) if timing_mode == "balanced_natural" else (-14, 16)
+            min_rate, max_rate = (-2, 12) if timing_mode == "balanced_natural" else (-10, 16)
     return max(min_rate, min(percent, max_rate))
 
 
@@ -1363,16 +1364,18 @@ def resolve_segment_target_ms(
     gap_after = max(next_start - end_ms, 0)
     ultra_tight = is_ultra_tight_mode(timing_mode)
     lead_guard = min(36 if ultra_tight else 50, gap_before // (4 if ultra_tight else 3))
+    tail_guard = 40 if ultra_tight else 180
     tail_allowance = min(int(gap_after * (0.35 if ultra_tight else 0.75)), 300 if ultra_tight else 850)
-    target_ms = base_duration - lead_guard - (30 if ultra_tight else 50) + tail_allowance
-    max_available = max(next_start - start_ms - (40 if ultra_tight else 70), 520)
+    target_ms = base_duration - lead_guard - tail_guard + tail_allowance
+    max_available = max(next_start - start_ms - tail_guard, 520)
     profile = estimate_tts_text_profile(text or segment.get("translatedText") or segment.get("sourceText") or "")
     punctuation_bonus = 80 if normalize_text(text or "").endswith(("?", "!", "...", "…")) else 0
     speech_floor = int(profile["expectedSeconds"] * 1000) + punctuation_bonus
     min_target = 600 if ultra_tight else 620 if base_duration < 1200 else 760
     target_ms = max(int(target_ms), min(speech_floor, int(max_available)))
-    # Allow 150ms overlap if speech floor is still higher than max available
-    final_limit = max_available + 150
+    # Preserve a real breath between lines. A small exception is allowed for a
+    # dense sentence, but never consume the entire following boundary.
+    final_limit = max_available + (120 if ultra_tight else 80)
     return max(min(int(target_ms), int(final_limit)), min_target)
 
 
@@ -1755,6 +1758,92 @@ def prepare_tts_clip_for_timeline(source_path: Path, output_path: Path) -> Path:
     return output_path
 
 
+def _parse_silencedetect_profile(
+    stderr_text: str,
+    duration_ms: int,
+) -> dict[str, Any]:
+    duration_ms = max(int(duration_ms), 1)
+    intervals: list[tuple[int, int]] = []
+    open_start_ms: int | None = None
+    for match in re.finditer(
+        r"silence_(start|end):\s*(-?\d+(?:\.\d+)?)",
+        str(stderr_text or ""),
+    ):
+        event = match.group(1)
+        position_ms = max(int(float(match.group(2)) * 1000), 0)
+        if event == "start":
+            open_start_ms = position_ms
+        elif open_start_ms is not None:
+            intervals.append(
+                (
+                    min(open_start_ms, duration_ms),
+                    min(max(position_ms, open_start_ms), duration_ms),
+                )
+            )
+            open_start_ms = None
+    if open_start_ms is not None:
+        intervals.append((min(open_start_ms, duration_ms), duration_ms))
+
+    active_start_ms = 0
+    active_end_ms = duration_ms
+    if intervals and intervals[0][0] <= 60:
+        active_start_ms = min(intervals[0][1] + 20, duration_ms)
+    if intervals and intervals[-1][1] >= duration_ms - 60:
+        active_end_ms = max(intervals[-1][0] + 40, active_start_ms + 120)
+        active_end_ms = min(active_end_ms, duration_ms)
+
+    pause_offsets_ms = [
+        int((start_ms + end_ms) / 2)
+        for start_ms, end_ms in intervals
+        if (
+            end_ms - start_ms >= 90
+            and start_ms > active_start_ms + 60
+            and end_ms < active_end_ms - 60
+        )
+    ]
+    return {
+        "activeStartMs": active_start_ms,
+        "activeEndMs": active_end_ms,
+        "pauseOffsetsMs": pause_offsets_ms,
+        "silenceIntervalsMs": intervals,
+    }
+
+
+def detect_tts_speech_profile(path: Path) -> dict[str, Any]:
+    duration_ms = ffprobe_audio_duration_ms(path)
+    fallback = {
+        "activeStartMs": 0,
+        "activeEndMs": duration_ms,
+        "pauseOffsetsMs": [],
+        "silenceIntervalsMs": [],
+    }
+    try:
+        completed = run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-i",
+                str(path),
+                "-af",
+                "silencedetect=noise=-38dB:d=0.08",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            timeout=45.0,
+        )
+        profile = _parse_silencedetect_profile(
+            completed.stderr,
+            duration_ms,
+        )
+        if int(profile["activeEndMs"]) - int(profile["activeStartMs"]) < 180:
+            return fallback
+        return profile
+    except Exception:
+        return fallback
+
+
 def _tts_provider_for_voice(voice: str) -> str:
     selected_voice = resolve_voice_preset(voice)
     if selected_voice.startswith("cloud:"):
@@ -2073,12 +2162,25 @@ def create_dub_audio(
         # creating unbounded cumulative drift.
         actual_start = orig_start
         actual_end = actual_start + clip_ms
+        speech_profile = detect_tts_speech_profile(Path(item["fitted_clip"]))
+        speech_start = actual_start + int(speech_profile["activeStartMs"])
+        speech_end = actual_start + int(speech_profile["activeEndMs"])
+        pause_offsets = [
+            int(offset)
+            for offset in speech_profile.get("pauseOffsetsMs") or []
+        ]
         
         # Save computed timings back to tracking variables and segment dictionary
         item["actual_start"] = actual_start
         item["actual_end"] = actual_end
+        item["speech_start"] = speech_start
+        item["speech_end"] = speech_end
+        item["pause_offsets_ms"] = pause_offsets
         segment["startMs"] = actual_start
         segment["endMs"] = actual_end
+        segment["subtitleStartMs"] = speech_start
+        segment["subtitleEndMs"] = speech_end
+        segment["ttsPauseOffsetsMs"] = pause_offsets
         
         if video_duration_ms and actual_end > video_duration_ms + 250:
             raise RuntimeError(
@@ -2099,6 +2201,11 @@ def create_dub_audio(
         volume = str(item["volume"])
         actual_start = int(item["actual_start"])
         actual_end = int(item["actual_end"])
+        speech_start = int(item["speech_start"])
+        speech_end = int(item["speech_end"])
+        pause_offsets_ms = [
+            int(offset) for offset in item.get("pause_offsets_ms") or []
+        ]
 
         input_index = len(tts_inputs) // 2 + 1
         tts_inputs.extend(["-i", str(fitted_clip)])
@@ -2149,6 +2256,9 @@ def create_dub_audio(
                 reference_energy_db=reference_energy_db,
                 dub_energy_db=dub_energy_db,
                 energy_gain_db=round(energy_gain_db, 3),
+                speech_start_ms=speech_start,
+                speech_end_ms=speech_end,
+                pause_offsets_ms=pause_offsets_ms,
             )
         )
 

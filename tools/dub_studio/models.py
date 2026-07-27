@@ -29,3 +29,6 @@ class ClipManifest:
     reference_energy_db: float | None = None
     dub_energy_db: float | None = None
     energy_gain_db: float = 0.0
+    speech_start_ms: int | None = None
+    speech_end_ms: int | None = None
+    pause_offsets_ms: list[int] | None = None

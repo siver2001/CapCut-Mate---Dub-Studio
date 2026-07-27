@@ -620,10 +620,12 @@ def split_subtitle_lines_for_display(
     max_words: int,
     max_chars: int,
     punctuation_aware: bool,
+    timing_anchors: list[list[int]] | None = None,
 ) -> list[SubtitleLine]:
     display_items: list[SubtitleLine] = []
     counter = 1
-    for subtitle in subtitles:
+    timing_anchors = timing_anchors or []
+    for subtitle_position, subtitle in enumerate(subtitles):
         clean = normalize_text(subtitle.content)
         if not clean:
             continue
@@ -638,15 +640,63 @@ def split_subtitle_lines_for_display(
         start_ms = max(int(subtitle.start_ms), 0)
         end_ms = max(int(subtitle.end_ms), start_ms + 120)
         total_ms = max(end_ms - start_ms, 240)
-        weights = [max(len(chunk.replace(" ", "")), 1) for chunk in chunks]
+        weights = [
+            max(
+                len(chunk.replace(" ", ""))
+                + len(re.findall(r"[,;:]", chunk)) * 2
+                + len(re.findall(r"[.!?\u2026]", chunk)) * 3,
+                1,
+            )
+            for chunk in chunks
+        ]
         total_weight = max(sum(weights), 1)
         cursor = start_ms
+        cumulative_weight = 0
+        available_anchors = sorted(
+            {
+                int(anchor)
+                for anchor in (
+                    timing_anchors[subtitle_position]
+                    if subtitle_position < len(timing_anchors)
+                    else []
+                )
+                if start_ms + 120 < int(anchor) < end_ms - 120
+            }
+        )
         for idx, chunk in enumerate(chunks):
             if idx == len(chunks) - 1:
                 chunk_end = end_ms
             else:
-                duration = max(int(total_ms * weights[idx] / total_weight), 220)
-                chunk_end = min(end_ms, cursor + duration)
+                cumulative_weight += weights[idx]
+                desired_end = start_ms + int(
+                    total_ms * cumulative_weight / total_weight
+                )
+                viable_anchors = [
+                    anchor
+                    for anchor in available_anchors
+                    if cursor + 140 <= anchor <= end_ms - 140
+                ]
+                nearest_anchor = (
+                    min(
+                        viable_anchors,
+                        key=lambda anchor: abs(anchor - desired_end),
+                    )
+                    if viable_anchors
+                    else None
+                )
+                anchor_tolerance = max(280, min(650, int(total_ms * 0.16)))
+                chunk_end = (
+                    nearest_anchor
+                    if (
+                        nearest_anchor is not None
+                        and abs(nearest_anchor - desired_end) <= anchor_tolerance
+                    )
+                    else desired_end
+                )
+                chunk_end = min(end_ms, max(chunk_end, cursor + 140))
+                available_anchors = [
+                    anchor for anchor in available_anchors if anchor > chunk_end
+                ]
             display_items.append(
                 SubtitleLine(
                     index=counter,
