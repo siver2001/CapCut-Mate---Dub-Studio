@@ -568,7 +568,36 @@ def split_display_text(text: str, max_words: int = 5, max_chars: int = 22, punct
             chunks.append(clause)
         else:
             chunks.extend(split_long_clause(clause, max_words=max_words, max_chars=max_chars))
-    return chunks
+    # A punctuation-aware split can leave an ordinal or a final word alone
+    # (for example "Một,"). Such flashes are hard to read and also make
+    # pause-aligned timing unstable. Fold them into an adjacent chunk while
+    # allowing a small, intentional overflow over the preferred line length.
+    merged: list[str] = []
+    index = 0
+    while index < len(chunks):
+        chunk = chunks[index]
+        is_tiny = len(chunk.split()) <= 1 or len(chunk.rstrip(" ,;:.!?")) <= 5
+        if is_tiny and index + 1 < len(chunks):
+            combined = f"{chunk} {chunks[index + 1]}".strip()
+            if (
+                len(combined) <= int(max_chars * 1.4)
+                and len(combined.split()) <= max_words + 1
+            ):
+                merged.append(combined)
+                index += 2
+                continue
+        if is_tiny and merged:
+            combined = f"{merged[-1]} {chunk}".strip()
+            if (
+                len(combined) <= int(max_chars * 1.4)
+                and len(combined.split()) <= max_words + 1
+            ):
+                merged[-1] = combined
+                index += 1
+                continue
+        merged.append(chunk)
+        index += 1
+    return merged
 
 
 def create_display_subtitles(
@@ -650,6 +679,37 @@ def split_subtitle_lines_for_display(
             for chunk in chunks
         ]
         total_weight = max(sum(weights), 1)
+        minimum_durations = [
+            max(
+                500,
+                min(
+                    900,
+                    int(len(chunk.replace(" ", "")) / 18 * 1000),
+                ),
+            )
+            for chunk in chunks
+        ]
+        minimum_total = sum(minimum_durations)
+        if minimum_total > total_ms:
+            scale = total_ms / max(minimum_total, 1)
+            minimum_durations = [
+                max(320, int(duration * scale))
+                for duration in minimum_durations
+            ]
+            overflow = sum(minimum_durations) - total_ms
+            while overflow > 0:
+                candidate = max(
+                    range(len(minimum_durations)),
+                    key=minimum_durations.__getitem__,
+                )
+                reducible = min(
+                    overflow,
+                    max(minimum_durations[candidate] - 320, 0),
+                )
+                if reducible <= 0:
+                    break
+                minimum_durations[candidate] -= reducible
+                overflow -= reducible
         cursor = start_ms
         cumulative_weight = 0
         available_anchors = sorted(
@@ -671,10 +731,15 @@ def split_subtitle_lines_for_display(
                 desired_end = start_ms + int(
                     total_ms * cumulative_weight / total_weight
                 )
+                minimum_end = cursor + minimum_durations[idx]
+                maximum_end = end_ms - sum(minimum_durations[idx + 1 :])
+                if maximum_end < minimum_end:
+                    maximum_end = minimum_end
+                desired_end = min(max(desired_end, minimum_end), maximum_end)
                 viable_anchors = [
                     anchor
                     for anchor in available_anchors
-                    if cursor + 140 <= anchor <= end_ms - 140
+                    if minimum_end <= anchor <= maximum_end
                 ]
                 nearest_anchor = (
                     min(
@@ -693,7 +758,7 @@ def split_subtitle_lines_for_display(
                     )
                     else desired_end
                 )
-                chunk_end = min(end_ms, max(chunk_end, cursor + 140))
+                chunk_end = min(maximum_end, max(chunk_end, minimum_end))
                 available_anchors = [
                     anchor for anchor in available_anchors if anchor > chunk_end
                 ]

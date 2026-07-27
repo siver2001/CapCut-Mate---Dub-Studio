@@ -76,6 +76,46 @@ class TimingSyncTests(unittest.TestCase):
         self.assertEqual(chunks[0].end_ms, 900)
         self.assertEqual(chunks[1].end_ms, 2100)
 
+    def test_subtitle_chunks_do_not_flash_too_quickly(self):
+        chunks = split_subtitle_lines_for_display(
+            [
+                SubtitleLine(
+                    index=1,
+                    start_ms=0,
+                    end_ms=3529,
+                    content=(
+                        "Mười phút vàng buổi sáng: năm thói quen dưỡng "
+                        "sinh giúp cơ thể khỏe đẹp hơn."
+                    ),
+                )
+            ],
+            max_words=5,
+            max_chars=22,
+            punctuation_aware=True,
+            timing_anchors=[[1229, 2575, 2994]],
+        )
+        self.assertTrue(all(item.end_ms - item.start_ms >= 500 for item in chunks))
+        self.assertTrue(all(len(item.content.split()) >= 2 for item in chunks))
+
+    def test_ordinal_is_merged_with_following_subtitle_text(self):
+        chunks = split_subtitle_lines_for_display(
+            [
+                SubtitleLine(
+                    index=1,
+                    start_ms=4000,
+                    end_ms=9903,
+                    content=(
+                        "Một, xoa bụng ba phút để điều hòa tỳ vị, "
+                        "khai thông trung tiêu."
+                    ),
+                )
+            ],
+            max_words=5,
+            max_chars=22,
+            punctuation_aware=True,
+        )
+        self.assertTrue(chunks[0].content.startswith("Một, xoa"))
+
     def test_detect_profile_on_missing_file_fails_loudly(self):
         with self.assertRaises(Exception):
             detect_tts_speech_profile(Path("missing-audio.wav"))
