@@ -2178,7 +2178,7 @@ def create_dub_audio(
         item["pause_offsets_ms"] = pause_offsets
         segment["startMs"] = actual_start
         segment["endMs"] = actual_end
-        segment["subtitleStartMs"] = speech_start
+        segment["subtitleStartMs"] = actual_start
         segment["subtitleEndMs"] = speech_end
         segment["ttsPauseOffsetsMs"] = pause_offsets
         
