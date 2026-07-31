@@ -266,7 +266,7 @@ class WindowBatchMixin:
         # Read the current shared settings so all videos use the same config
         self.read_settings_from_widgets()
 
-        # Reset pending items
+        # Reset items selected for this new batch run, including their retry cycle.
         for item in self._batch_queue:
             if item.status in ("pending", "error"):
                 item.status = "pending"
@@ -275,6 +275,7 @@ class WindowBatchMixin:
                 item.error = ""
                 item.output_path = ""
                 item.job_id = None
+                item.retry_count = 0
 
         self._batch_running = True
         self._batch_cancelled = False
@@ -383,12 +384,7 @@ class WindowBatchMixin:
             )
             item.job_id = job_id
         except Exception as exc:
-            item.status = "error"
-            item.error = str(exc)
-            self._update_batch_log(f"  ✗ Lỗi phân tích: {exc}")
-            self._refresh_batch_ui()
-            # Continue to next item after a cooldown delay
-            QTimer.singleShot(15000, self._batch_process_next)
+            self._batch_handle_item_failure(item, str(exc), phase="analysis")
 
     def _batch_on_analysis_ready(self, job_id: str, analysis: dict[str, Any]) -> None:
         """Called when a batch item's analysis completes → start rendering."""
@@ -435,11 +431,7 @@ class WindowBatchMixin:
             render_options = self._batch_build_render_options(analysis, item)
             self.controller.render_video(job_id, render_options)
         except Exception as exc:
-            item.status = "error"
-            item.error = str(exc)
-            self._update_batch_log(f"  ✗ Lỗi render: {exc}")
-            self._refresh_batch_ui()
-            QTimer.singleShot(15000, self._batch_process_next)
+            self._batch_handle_item_failure(item, str(exc), phase="rendering")
 
     def _batch_on_render_ready(self, job_id: str, payload: dict[str, Any]) -> None:
         """Called when a batch item's render completes → export & proceed."""
@@ -505,35 +497,49 @@ class WindowBatchMixin:
         release_system_memory()
 
         msg_clean = repair_mojibake_text(message)
-        msg_lower = msg_clean.lower()
-        is_mem_error = any(
-            k in msg_lower for k in ("memory", "paging file", "1455", "vram", "allocation", "out of memory", "crashed", "process crashed")
-        )
+        self._batch_handle_item_failure(item, msg_clean)
 
-        current_retries = getattr(item, "retry_count", 0)
-        if is_mem_error and current_retries < 2:
-            item.retry_count = current_retries + 1
-            item.status = "pending"
-            item.detail_status = f"⏳ Tạm nghỉ 15s giải phóng bộ nhớ & thử lại ({item.retry_count}/2)..."
-            item.progress = 0.0
-            item.job_id = None
-            self._update_batch_log(
-                f"  ⚠️ Video '{Path(item.input_path).name}' gặp sự cố bộ nhớ. Tạm nghỉ 15 giây giải phóng RAM/VRAM rồi tự động thử lại (Lần {item.retry_count}/2)..."
-            )
-            self._refresh_batch_ui()
-            QTimer.singleShot(15000, self._batch_process_next)
-            return
-
-        item.status = "error"
-        item.detail_status = "❌ Lỗi"
-        item.error = msg_clean
+    def _batch_handle_item_failure(
+        self, item: _BatchItem, message: str, *, phase: str = "processing"
+    ) -> None:
+        """Retry once immediately, then retry once more at the queue tail."""
+        message = repair_mojibake_text(message)
+        attempt = item.retry_count
+        item.error = message
         item.progress = 0.0
-        self._update_batch_log(f"  ✗ Lỗi: {msg_clean}")
+        item.job_id = None
+
+        if attempt == 0:
+            item.retry_count = 1
+            item.status = "pending"
+            item.detail_status = "Retrying immediately (1/2)..."
+            self._update_batch_log(
+                f"  Warning: {Path(item.input_path).name} failed during {phase}; retrying immediately (1/2)."
+            )
+        elif attempt == 1:
+            item.retry_count = 2
+            item.status = "pending"
+            item.detail_status = "Waiting for final retry at queue end (2/2)..."
+            # Do not let one failed video block the remaining imported videos.
+            try:
+                self._batch_queue.remove(item)
+                self._batch_queue.append(item)
+            except ValueError:
+                pass
+            self._batch_current_index = -1
+            self._update_batch_log(
+                f"  Warning: {Path(item.input_path).name} still failed; moved to the queue end for final retry (2/2)."
+            )
+        else:
+            item.status = "error"
+            item.detail_status = "Failed after 2 retries"
+            self._update_batch_log(
+                f"  Error: {Path(item.input_path).name} failed after 2 retries: {message}"
+            )
+
         self._refresh_batch_ui()
-
-        # Continue to next item after 15s cooldown
+        # Keep the existing cooldown so resources settle before the next attempt.
         QTimer.singleShot(15000, self._batch_process_next)
-
     def _batch_on_status_changed(self, job_id: str, payload: dict[str, Any]) -> None:
         """Update progress for the currently running batch item."""
         if not self._batch_running:
