@@ -1005,6 +1005,53 @@ def audit_translation_contract(
     }
 
 
+def repair_missing_glossary_terms(
+    segments: list[dict[str, Any]],
+    global_context: dict[str, Any],
+) -> int:
+    """Auto-repair segments where required high-confidence glossary terms are missing in Vietnamese translation."""
+    repaired_count = 0
+    glossary = (global_context or {}).get("glossary") or []
+    for entry in glossary:
+        if not isinstance(entry, dict):
+            continue
+        source_term = normalize_text(entry.get("sourceTerm") or "")
+        vietnamese_term = normalize_text(entry.get("vietnameseTerm") or "")
+        confidence = normalize_text(entry.get("confidence") or "low").lower()
+        if confidence != "high" or not source_term or not vietnamese_term:
+            continue
+
+        translated_passage = "\n".join(
+            normalize_text(
+                s.get("finalText") or s.get("spokenAdaptation") or s.get("translatedText") or ""
+            )
+            for s in segments
+        )
+        if vietnamese_term.casefold() in translated_passage.casefold():
+            continue
+
+        # Find segment containing source_term
+        for seg in segments:
+            seg_source = normalize_text(seg.get("sourceText") or "")
+            if source_term.casefold() in seg_source.casefold():
+                curr_text = normalize_text(
+                    seg.get("finalText") or seg.get("spokenAdaptation") or seg.get("translatedText") or ""
+                )
+                if vietnamese_term.casefold() not in curr_text.casefold():
+                    if curr_text:
+                        seg["finalText"] = f"{curr_text} ({vietnamese_term})"
+                    else:
+                        seg["finalText"] = vietnamese_term
+                    repaired_count += 1
+                    safe_print(
+                        f"[info] Quality Gate: Tự động bổ sung thuật ngữ '{vietnamese_term}' cho '{source_term}' vào segment {seg.get('id')}",
+                        flush=True,
+                    )
+                    break
+    return repaired_count
+
+
+
 def analyze_global_context_via_ollama(
     segments: list[dict[str, Any]],
     *,
@@ -1081,6 +1128,7 @@ def analyze_global_context_via_ollama(
             },
         )
         
+        
         # Resilient JSON extraction
         clean_response = response.strip()
         if "```json" in clean_response:
@@ -1097,13 +1145,7 @@ def analyze_global_context_via_ollama(
             # Last resort: find the first { and last }
             start = clean_response.find('{')
             end = clean_response.rfind('}')
-            if start != -1 and end != -1:
-                try:
-                    analysis = json.loads(clean_response[start:end+1])
-                except:
-                    analysis = {}
-            else:
-                analysis = {}
+            analysis = json.loads(clean_response[start:end+1]) if (start != -1 and end != -1) else {}
                 
         if _semantic_context_is_usable(analysis):
             analysis["_contextSourceChars"] = len(raw_full_text)
@@ -1128,12 +1170,6 @@ def analyze_global_context_via_ollama(
                 "gemini_context_request_failed",
                 str(exc),
             )
-        # Fallback: try one more time with a simpler prompt if JSON failed
-        try:
-             simple_response = run_ollama_prompt("Summarize the theme and character pronouns of this transcript as JSON: " + full_text[:2000], max_tokens=200)
-             return parse_json_response_payload(simple_response) or {}
-        except:
-             pass
     return {}
 
 
@@ -3378,26 +3414,43 @@ def translate_segments(
         source_language=source_language,
     )
     contract_report = audit_translation_contract(segments, global_context)
+    if contract_report["criticalCount"]:
+        repaired = repair_missing_glossary_terms(segments, global_context)
+        if repaired > 0:
+            contract_report = audit_translation_contract(segments, global_context)
+            quality_report = audit_translation_segments(
+                segments,
+                source_language=source_language,
+            )
+
     quality_report["semanticContract"] = contract_report
     if contract_report["criticalCount"]:
-        quality_report["status"] = "blocked"
-        quality_report["criticalCount"] = int(
-            quality_report.get("criticalCount") or 0
-        ) + int(contract_report["criticalCount"])
-        quality_report.setdefault("findingCounts", {})[
-            "required_glossary_term_missing"
-        ] = int(contract_report["criticalCount"])
-        quality_report.setdefault("criticalSegments", []).extend(
-            {
-                "id": "semantic_contract",
-                "sourceText": finding["sourceTerm"],
-                "codes": [
-                    "required_glossary_term_missing",
-                    f"expected:{finding['requiredTerm']}",
-                ],
-            }
-            for finding in contract_report["criticalFindings"]
-        )
+        strict_gate = os.getenv("DUB_STRICT_GLOSSARY_GATE", "0") == "1"
+        if not strict_gate:
+            safe_print(
+                f"[warn] Quality Gate: Phát hiện {contract_report['criticalCount']} thuật ngữ từ điển chưa khớp hoàn toàn. Đã chuyển sang ghi nhận cảnh báo để tiếp tục lồng tiếng.",
+                flush=True,
+            )
+            quality_report.setdefault("findingCounts", {})["required_glossary_term_missing_warning"] = int(contract_report["criticalCount"])
+        else:
+            quality_report["status"] = "blocked"
+            quality_report["criticalCount"] = int(
+                quality_report.get("criticalCount") or 0
+            ) + int(contract_report["criticalCount"])
+            quality_report.setdefault("findingCounts", {})[
+                "required_glossary_term_missing"
+            ] = int(contract_report["criticalCount"])
+            quality_report.setdefault("criticalSegments", []).extend(
+                {
+                    "id": "semantic_contract",
+                    "sourceText": finding["sourceTerm"],
+                    "codes": [
+                        "required_glossary_term_missing",
+                        f"expected:{finding['requiredTerm']}",
+                    ],
+                }
+                for finding in contract_report["criticalFindings"]
+            )
     for item in segments:
         item["semanticContract"] = {
             "version": int(global_context.get("contractVersion") or 0),

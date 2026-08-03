@@ -932,31 +932,48 @@ def run_ollama_prompt(
             payload["generationConfig"]["responseJsonSchema"] = json_schema
         try:
             resp = None
-            for cloud_attempt in range(3):
+            max_attempts = 4
+            effective_timeout = timeout or 120
+            for cloud_attempt in range(max_attempts):
                 _AI_USAGE_STATS["requests"] += 1
                 _AI_USAGE_STATS["promptChars"] += len(prompt)
-                resp = requests.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=timeout or 60,
-                )
+                try:
+                    resp = requests.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=effective_timeout,
+                    )
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as net_err:
+                    if cloud_attempt < max_attempts - 1:
+                        safe_print(
+                            f"[warn] Kết nối Gemini bị nghẽn ({net_err.__class__.__name__}); đang tự thử lại lần {cloud_attempt + 2}/{max_attempts}...",
+                            flush=True,
+                        )
+                        time.sleep(3.0 * (cloud_attempt + 1))
+                        continue
+                    else:
+                        raise CloudAIError(
+                            f"Không kết nối được tới Gemini sau {max_attempts} lần thử lại do mạng nghẽn hoặc server timeout. Chi tiết: {net_err}",
+                            code="network_timeout",
+                        ) from net_err
+
                 transient_server_error = resp.status_code in {
                     500,
                     502,
                     503,
                     504,
                 }
-                if not transient_server_error or cloud_attempt >= 2:
+                if not transient_server_error or cloud_attempt >= max_attempts - 1:
                     break
                 safe_print(
                     (
-                        "[warn] Gemini tạm quá tải; thử lại "
-                        f"{cloud_attempt + 2}/3 sau ít giây..."
+                        f"[warn] Gemini tạm quá tải (HTTP {resp.status_code}); thử lại "
+                        f"{cloud_attempt + 2}/{max_attempts} sau ít giây..."
                     ),
                     flush=True,
                 )
-                time.sleep(2.0 * (cloud_attempt + 1))
+                time.sleep(3.0 * (cloud_attempt + 1))
             assert resp is not None
             if resp.status_code == 429:
                 _CLOUD_AI_UNAVAILABLE_REASON = "Hết quota Gemini trong job hiện tại"
