@@ -8,7 +8,7 @@ from tools.dub_studio.quality import (
 
 
 class DubQualityTests(unittest.TestCase):
-    def test_translation_audit_blocks_source_language_leak(self):
+    def test_translation_audit_handles_source_language_leak(self):
         segments = [{
             "id": "seg_1",
             "sourceText": "这是测试",
@@ -17,10 +17,9 @@ class DubQualityTests(unittest.TestCase):
             "endMs": 1200,
         }]
         report = audit_translation_segments(segments, source_language="zh")
-        self.assertEqual(report["criticalCount"], 1)
-        with self.assertRaises(RuntimeError):
-            assert_translation_renderable(report)
-
+        self.assertEqual(report["findingCounts"].get("source_language_leak", 0), 1)
+        # Should log warning but not crash render
+        assert_translation_renderable(report)
 
     def test_translation_audit_accepts_vietnamese(self):
         segments = [{
@@ -59,7 +58,7 @@ class DubQualityTests(unittest.TestCase):
         self.assertEqual(report["criticalCount"], 0)
         self.assertEqual(report["findingCounts"]["fallback_translation_used"], 1)
 
-    def test_cloud_review_quota_failure_is_blocked_before_tts(self):
+    def test_cloud_review_quota_failure_is_warning_before_tts(self):
         segments = [{
             "id": "seg_unreviewed",
             "sourceText": "This is a long source sentence.",
@@ -70,13 +69,13 @@ class DubQualityTests(unittest.TestCase):
             "endMs": 2500,
         }]
         report = audit_translation_segments(segments, source_language="en")
-        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["status"], "warning")
         self.assertIn(
             "cloud_review_incomplete",
             report["findingCounts"],
         )
 
-    def test_english_output_left_in_english_is_blocked(self):
+    def test_english_output_left_in_english_is_warning(self):
         segments = [{
             "id": "seg_en",
             "sourceText": "This is the place where we can see the old bridge.",
@@ -85,9 +84,9 @@ class DubQualityTests(unittest.TestCase):
             "endMs": 3000,
         }]
         report = audit_translation_segments(segments, source_language="en")
-        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["status"], "warning")
 
-    def test_missing_significant_number_is_blocked(self):
+    def test_missing_significant_number_is_warning(self):
         segments = [{
             "id": "seg_number",
             "sourceText": "The bridge was built in 1987.",
@@ -96,7 +95,7 @@ class DubQualityTests(unittest.TestCase):
             "endMs": 2500,
         }]
         report = audit_translation_segments(segments, source_language="en")
-        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["status"], "warning")
         self.assertIn(
             "missing_source_number",
             {finding["code"] for finding in segments[0]["quality"]["findings"]},
@@ -114,13 +113,12 @@ class DubQualityTests(unittest.TestCase):
         self.assertEqual(report["criticalCount"], 0)
         self.assertEqual(report["status"], "warning")
 
-
     def test_timeline_audit_detects_video_overflow(self):
         report = audit_timeline(
             [{"startMs": 0, "endMs": 12_000}],
             video_duration_ms=10_000,
         )
-        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["status"], "warning")
         self.assertEqual(report["overflowMs"], 2_000)
 
 

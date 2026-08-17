@@ -2240,7 +2240,8 @@ class WindowWorkflowMixin:
         for row, item in enumerate(timeline):
             start_ms = int(item.get("startMs") or 0)
             end_ms = int(item.get("endMs") or 0)
-            start_text = f"{start_ms / 1000:.2f}s"
+            is_recovered = item.get("recoverySource") == "visual_ocr"
+            start_text = f"📸 {start_ms / 1000:.2f}s" if is_recovered else f"{start_ms / 1000:.2f}s"
             end_text = f"{end_ms / 1000:.2f}s"
             for column, value, editable in [
                 (0, start_text, False),
@@ -2248,6 +2249,8 @@ class WindowWorkflowMixin:
                 (3, repair_mojibake_text(item.get("text") or ""), True),
             ]:
                 cell = QTableWidgetItem(value)
+                if is_recovered and column == 0:
+                    cell.setToolTip("Đoạn này được bù tự động từ hình ảnh video (Visual OCR Recovery)")
                 if not editable:
                     cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.subtitle_table.setItem(row, column, cell)

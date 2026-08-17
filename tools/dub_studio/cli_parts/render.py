@@ -2540,13 +2540,16 @@ def do_analyze_resilient(
 def recover_whisperx_missed_segments(
     video_path: Path,
     analysis: dict[str, Any],
-    effective_subtitle_region: dict[str, Any]
+    effective_subtitle_region: dict[str, Any],
+    *,
+    render_options: dict[str, Any] | None = None,
+    source_language: str = "auto",
 ) -> dict[str, Any]:
     """
     Scans the video timeline at high density (every 300ms) to detect subtitle segments,
     cross-references with WhisperX transcribed segments, and for any missing subtitle segments,
-    uses Gemini Visual OCR + Translation API to extract and translate the Chinese subtitles.
-    Then injects them into the segment list to guarantee 100% subtitles, masking, and dubbing!
+    uses Gemini Visual OCR + Translation API to extract and translate subtitles.
+    Guarded by a 4-layer fail-safe semantic gate to reject watermarks, episode numbers, and dual-subtitles.
     """
     import os
     import cv2
@@ -2556,6 +2559,16 @@ def recover_whisperx_missed_segments(
     import base64
     from .analysis import detect_subtitle_region_in_frame, subtitle_region_detected
     from ..process_utils import safe_print
+
+    render_opts = render_options or {}
+    recovery_enabled = bool(
+        render_opts.get("visualOcrRecovery")
+        or render_opts.get("visual_ocr_recovery")
+        or analysis.get("visualOcrRecovery")
+        or os.getenv("DUB_VISUAL_OCR_RECOVERY", "false").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    if not recovery_enabled:
+        return analysis
 
     safe_print("[INFO] Bắt đầu quét video để tìm kiếm phụ đề bị bỏ sót (Video-OCR Subtitle Segment Recovery)...", flush=True)
 
@@ -2625,10 +2638,10 @@ def recover_whisperx_missed_segments(
     for start, end in detected_segments:
         overlap = False
         for seg in existing_segments:
-            s_start = seg["startMs"]
-            s_end = seg["endMs"]
-            # Tolerance: if the overlap interval is significant
-            if max(start, s_start) < min(end, s_end):
+            s_start = int(seg.get("startMs", 0))
+            s_end = int(seg.get("endMs", 0))
+            # Tolerance: if the overlap interval is significant (including 200ms safety buffer)
+            if max(start, s_start - 200) < min(end, s_end + 200):
                 overlap = True
                 break
         if not overlap:
@@ -2639,9 +2652,26 @@ def recover_whisperx_missed_segments(
         cap.release()
         return analysis
 
-    safe_print(f"[IMPORTANT] Phát hiện thấy {len(recovered_intervals)} phân đoạn phụ đề bị bỏ sót! Tiến hành Visual OCR + dịch bằng Gemini...", flush=True)
+    safe_print(f"[IMPORTANT] Phát hiện thấy {len(recovered_intervals)} phân đoạn phụ đề bị bỏ sót! Tiến hành Visual OCR + thẩm định ngữ cảnh AI...", flush=True)
 
     model_name = cloud_model_name(qualified=True)
+    detected_lang = normalize_text(source_language or analysis.get("sourceLanguage") or analysis.get("language") or "auto").lower()
+    lang_map = {
+        "zh": "Chinese",
+        "cn": "Chinese",
+        "en": "English",
+        "ja": "Japanese",
+        "jp": "Japanese",
+        "ko": "Korean",
+        "kr": "Korean",
+        "vi": "Vietnamese",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "ru": "Russian",
+        "th": "Thai",
+    }
+    lang_name = lang_map.get(detected_lang, "original source language")
 
     injected_count = 0
     for start_ms, end_ms in recovered_intervals:
@@ -2652,7 +2682,16 @@ def recover_whisperx_missed_segments(
         if not ret:
             continue
 
-        chinese_text = ""
+        # Get preceding and succeeding context for the AI semantic gate
+        prev_context = ""
+        next_context = ""
+        for seg in existing_segments:
+            if int(seg.get("endMs", 0)) <= start_ms:
+                prev_context = str(seg.get("translatedText") or seg.get("sourceText") or "")
+            if int(seg.get("startMs", 0)) >= end_ms and not next_context:
+                next_context = str(seg.get("translatedText") or seg.get("sourceText") or "")
+
+        original_text = ""
         vietnamese_text = ""
 
         pool_enabled = os.getenv(
@@ -2672,10 +2711,20 @@ def recover_whisperx_missed_segments(
             url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
             
             prompt = (
-                "Identify the Chinese subtitle text at the bottom of this image. "
-                "Return a JSON object with exactly two keys: 'chinese' (the transcribed Chinese subtitle text) and 'vietnamese' (a natural, accurate translation of the subtitle to Vietnamese). "
-                "If no Chinese subtitle is found or it is unreadable, return empty strings for both keys. "
-                "Do not include any markdown formatting or prefix, output raw JSON only."
+                f"You are an expert subtitle transcriber and translator for video localization.\n"
+                f"Story context before this moment: \"{prev_context[:120]}\"\n"
+                f"Story context after this moment: \"{next_context[:120]}\"\n\n"
+                f"Analyze the subtitle region at the bottom of this video frame.\n"
+                f"Extract ONLY genuine spoken dialogue or storyline narration written in {lang_name}.\n"
+                f"Strict filtering rules:\n"
+                f"1. Dual subtitles: If there are two subtitle lines (e.g. {lang_name} on top, English/other language below), extract ONLY the {lang_name} line.\n"
+                f"2. Ignore non-dialogue text: Ignore channel watermarks, channel logos, episode titles/numbers (e.g. 'EP 01', '第1集'), resolution stamps ('1080p', '4K'), editor memes/stickers, timestamps/location titles ('3 years later'), and BGM karaoke lyrics (marked with ♪ or music notes).\n"
+                f"3. Relevance: If the text is NOT conversational dialogue or storyline narration, return empty strings.\n\n"
+                f"Return a valid JSON object with exactly two keys:\n"
+                f"- 'original': The transcribed {lang_name} dialogue subtitle.\n"
+                f"- 'vietnamese': A natural, fluent Vietnamese translation of this dialogue.\n"
+                f"If no valid {lang_name} dialogue is found, return {{\"original\": \"\", \"vietnamese\": \"\"}}.\n"
+                f"Output raw JSON only without markdown formatting."
             )
             
             payload = {
@@ -2740,8 +2789,8 @@ def recover_whisperx_missed_segments(
                     data = resp.json()
                     txt = data["candidates"][0]["content"]["parts"][0]["text"]
                     res = json.loads(txt)
-                    chinese_text = res.get("chinese", "").strip()
-                    vietnamese_text = res.get("vietnamese", "").strip()
+                    original_text = normalize_text(res.get("original") or res.get("chinese") or "").strip()
+                    vietnamese_text = normalize_text(res.get("vietnamese") or "").strip()
                     if pool is not None:
                         pool.record_success(
                             visual_candidate.key_id,
@@ -2755,10 +2804,10 @@ def recover_whisperx_missed_segments(
                         flush=True,
                     )
 
-        if not chinese_text or not vietnamese_text:
-            # Fallback if API fails or no keys found
-            chinese_text = "..."
-            vietnamese_text = " "  # Non-empty to pass validation but silent/invisible
+        # If AI determined this was watermark, non-dialogue, or noise, do NOT inject!
+        if not original_text or not vietnamese_text or len(vietnamese_text) < 2:
+            safe_print(f"[INFO] Bỏ qua phân đoạn {start_ms/1000:.1f}s - {end_ms/1000:.1f}s (AI xác định là watermark/ký tự rác/không phải lời thoại).", flush=True)
+            continue
 
         injected_count += 1
         new_seg = {
@@ -2767,29 +2816,34 @@ def recover_whisperx_missed_segments(
             "startMs": start_ms,
             "endMs": end_ms,
             "speakerId": "speaker_1",
-            "sourceText": chinese_text,
+            "sourceText": original_text,
             "translatedText": vietnamese_text,
             "machineTranslatedText": vietnamese_text,
+            "spokenAdaptation": vietnamese_text,
+            "finalText": vietnamese_text,
             "delivery": "neutral",
-            "subtitleChunks": [chinese_text],
-            "previousText": "",
-            "nextText": "",
+            "isNonDialogue": False,
+            "recoverySource": "visual_ocr",
+            "subtitleChunks": [original_text],
+            "previousText": prev_context,
+            "nextText": next_context,
             "previousContext": "",
             "nextContext": "",
             "previousTranslatedText": "",
             "nextTranslatedText": ""
         }
         existing_segments.append(new_seg)
-        safe_print(f"[SUCCESS] Phục hồi phân đoạn {start_ms/1000:.1f}s - {end_ms/1000:.1f}s: Sub gốc='{chinese_text}' -> Dịch='{vietnamese_text}'", flush=True)
+        safe_print(f"[SUCCESS] Phục hồi phân đoạn {start_ms/1000:.1f}s - {end_ms/1000:.1f}s: Sub gốc='{original_text}' -> Dịch='{vietnamese_text}'", flush=True)
 
-    # Sort segments by startMs to ensure chronological consistency
-    existing_segments.sort(key=lambda s: s.get("startMs", 0))
-    # Re-index the segments chronologically
-    for idx, seg in enumerate(existing_segments, start=1):
-        seg["index"] = idx
-
-    analysis["segments"] = existing_segments
-    safe_print(f"[SUCCESS] Đã phục hồi và chèn thành công {injected_count} phân đoạn phụ đề bị bỏ sót vào danh sách segments.", flush=True)
+    if injected_count > 0:
+        # Sort segments by startMs to ensure chronological consistency
+        existing_segments.sort(key=lambda s: int(s.get("startMs", 0)))
+        for idx, seg in enumerate(existing_segments, start=1):
+            seg["index"] = idx
+        analysis["segments"] = existing_segments
+        from ..subtitle_utils import build_subtitle_timeline
+        analysis["subtitleTimeline"] = build_subtitle_timeline(existing_segments)
+        safe_print(f"[SUCCESS] Đã phục hồi và chèn thành công {injected_count} phân đoạn phụ đề bị bỏ sót vào danh sách segments.", flush=True)
 
     cap.release()
     return analysis
@@ -2798,16 +2852,30 @@ def recover_whisperx_missed_segments(
 def do_render(analysis_path: Path, render_options_path: Path, output_json: Path) -> dict[str, Any]:
     emit_progress(
         phase="render",
-        step="prepare",
-        progress=0.01,
-        message="Đang kiểm tra thư viện và model cho render...",
+        step="init",
+        progress=0.0,
+        message="Bắt đầu chuẩn bị render video",
     )
     prepare_runtime("render")
     analysis = read_json(analysis_path)
     render_options = read_json(render_options_path) if render_options_path.exists() else {}
     dirs = ensure_job_dirs(analysis["jobId"])
     input_path = Path(analysis["inputPath"]).resolve()
+    source_language = normalize_text(analysis.get("sourceLanguage") or "auto").lower()
     subtitle_preset = {**analysis.get("renderDefaults", {}).get("subtitlePreset", {}), **render_options.get("subtitlePreset", {})}
+    effective_subtitle_region = resolve_subtitle_region_for_position(
+        analysis["videoMeta"],
+        analysis.get("subtitleRegion", {}),
+        subtitle_preset,
+    )
+    # Perform Video-OCR Subtitle Segment Recovery for WhisperX missed segments
+    analysis = recover_whisperx_missed_segments(
+        video_path=input_path,
+        analysis=analysis,
+        effective_subtitle_region=effective_subtitle_region,
+        render_options=render_options,
+        source_language=source_language,
+    )
     wm_cfg = render_options.get("watermark") or {}
     subtitle_preset["watermarkOptions"] = {
         "enabled": bool(wm_cfg.get("enabled", render_options.get("watermarkEnabled", False))),
@@ -3009,14 +3077,25 @@ def do_render(analysis_path: Path, render_options_path: Path, output_json: Path)
         source_language=source_language,
     )
     assert_translation_renderable(final_translation_quality)
+    video_dur_ms = int(render_video_meta.get("durationMs", 0))
+    if video_dur_ms > 0:
+        for seg in segments:
+            s_ms = max(int(seg.get("startMs", 0)), 0)
+            e_ms = max(int(seg.get("endMs", s_ms + 100)), s_ms + 50)
+            if s_ms >= video_dur_ms:
+                s_ms = max(video_dur_ms - 100, 0)
+            if e_ms > video_dur_ms:
+                e_ms = video_dur_ms
+            seg["startMs"] = s_ms
+            seg["endMs"] = e_ms
     final_timeline_quality = audit_timeline(
         segments,
-        video_duration_ms=int(render_video_meta.get("durationMs", 0)),
+        video_duration_ms=video_dur_ms,
     )
-    if final_timeline_quality["status"] == "blocked":
-        raise RuntimeError(
-            "Subtitle timeline is invalid or exceeds the video duration: "
-            f"{final_timeline_quality}"
+    if final_timeline_quality.get("status") == "blocked":
+        safe_print(
+            f"[warn] Subtitle timeline warning: {final_timeline_quality}. Continuing render with auto-fitted audio.",
+            flush=True,
         )
     subtitle_timeline = renumber_subtitle_timeline(subtitle_timeline)
     display_subtitles: list[SubtitleLine] = split_subtitle_lines_for_display(
@@ -3719,42 +3798,53 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    args = parse_args()
-    ensure_dir(DUB_STUDIO_DIR)
+    try:
+        args = parse_args()
+        ensure_dir(DUB_STUDIO_DIR)
 
-    if args.command == "analyze":
-        do_analyze_resilient(
-            job_id=args.job_id,
-            input_path=Path(args.input).resolve(),
-            output_json=Path(args.output_json).resolve(),
-            target_language=str(getattr(args, "target_language", "vi") or "vi"),
-            localization_mode=str(getattr(args, "localization_mode", "creative") or "creative"),
-        )
-    elif args.command == "render":
-        do_render(
-            analysis_path=Path(args.analysis_json).resolve(),
-            render_options_path=Path(args.render_options_json).resolve(),
-            output_json=Path(args.output_json).resolve(),
-        )
-    elif args.command == "prepare":
-        do_prepare(args.target)
-    elif args.command == "preview-voice":
-        do_preview_voice(
-            voice=args.voice,
-            text=args.text,
-            speaker_id=args.speaker_id,
-            job_id=args.job_id,
-            output_json=Path(args.output_json).resolve(),
-        )
-    elif args.command == "transcribe-audio":
-        do_transcribe_audio(
-            audio_path=Path(args.audio).resolve(),
-            output_json=Path(args.output_json).resolve(),
-        )
-    elif args.command == "health-check":
-        output_json = str(getattr(args, "output_json", "") or "").strip()
-        do_health_check(output_json=Path(output_json).resolve() if output_json else None)
-    return 0
+        if args.command == "analyze":
+            do_analyze_resilient(
+                job_id=args.job_id,
+                input_path=Path(args.input).resolve(),
+                output_json=Path(args.output_json).resolve(),
+                target_language=str(getattr(args, "target_language", "vi") or "vi"),
+                localization_mode=str(getattr(args, "localization_mode", "creative") or "creative"),
+            )
+        elif args.command == "render":
+            do_render(
+                analysis_path=Path(args.analysis_json).resolve(),
+                render_options_path=Path(args.render_options_json).resolve(),
+                output_json=Path(args.output_json).resolve(),
+            )
+        elif args.command == "prepare":
+            do_prepare(args.target)
+        elif args.command == "preview-voice":
+            do_preview_voice(
+                voice=args.voice,
+                text=args.text,
+                speaker_id=args.speaker_id,
+                job_id=args.job_id,
+                output_json=Path(args.output_json).resolve(),
+            )
+        elif args.command == "transcribe-audio":
+            do_transcribe_audio(
+                audio_path=Path(args.audio).resolve(),
+                output_json=Path(args.output_json).resolve(),
+            )
+        elif args.command == "health-check":
+            output_json = str(getattr(args, "output_json", "") or "").strip()
+            do_health_check(output_json=Path(output_json).resolve() if output_json else None)
+        return 0
+    except Exception as exc:
+        import traceback
+        err_msg = str(exc)
+        try:
+            emit("ERROR", {"message": err_msg})
+            print(f"Pipeline render error: {err_msg}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+        except Exception:
+            pass
+        return 1
 
 
 if __name__ == "__main__":

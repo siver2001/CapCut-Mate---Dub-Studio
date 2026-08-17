@@ -962,29 +962,39 @@ def apply_subtitle_timeline_to_segments(
     segments: list[dict[str, Any]],
     timeline: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    if not segments:
-        return []
-    updated_segments = [dict(segment) for segment in segments]
     normalized_timeline = renumber_subtitle_timeline(timeline)
+    if not normalized_timeline and not segments:
+        return []
+    if not normalized_timeline:
+        return [dict(segment) for segment in segments]
+
+    updated_segments = [dict(segment) for segment in segments]
     by_segment_id: dict[str, dict[str, Any]] = {}
+    matched_timeline_keys: set[str] = set()
+
     for item in normalized_timeline:
         key = str(item.get("segmentId") or item.get("id") or "")
         if key:
             by_segment_id[key] = item
+
     for index, segment in enumerate(updated_segments):
         matched = None
         segment_id = str(segment.get("id") or "")
         if segment_id and segment_id in by_segment_id:
             matched = by_segment_id[segment_id]
+            matched_timeline_keys.add(str(matched.get("id") or segment_id))
         elif len(normalized_timeline) == len(updated_segments) and index < len(normalized_timeline):
             matched = normalized_timeline[index]
+            matched_timeline_keys.add(str(matched.get("id") or f"sub_{index+1:04d}"))
         if not matched:
             continue
         translated = normalize_text(matched.get("text") or "")
         segment["translatedText"] = translated
         segment["spokenAdaptation"] = translated
         segment["finalText"] = translated
-        segment.pop("spoken" + "Text", None)
+        segment.pop("spokenText", None)
+        if translated:
+            segment["isNonDialogue"] = False
         voice = normalize_text(
             matched.get("voice")
             or matched.get("voicePreset")
@@ -995,4 +1005,47 @@ def apply_subtitle_timeline_to_segments(
             segment["voice"] = voice
         else:
             segment.pop("voice", None)
+        if matched.get("speakerId"):
+            segment["speakerId"] = str(matched["speakerId"])
+
+    # Insert any timeline items that were not matched to existing audio segments
+    # (e.g. text from imported SRT or text-only/silent video segments)
+    new_segment_count = 0
+    for t_idx, t_item in enumerate(normalized_timeline, start=1):
+        t_id = str(t_item.get("id") or f"sub_{t_idx:04d}")
+        t_seg_id = str(t_item.get("segmentId") or "")
+        if t_id in matched_timeline_keys or (t_seg_id and t_seg_id in by_segment_id and t_seg_id in [str(s.get("id") or "") for s in updated_segments]):
+            continue
+        text_content = normalize_text(t_item.get("text") or "")
+        if not text_content:
+            continue
+        new_segment_count += 1
+        new_seg = {
+            "id": t_item.get("id") or f"seg_timeline_{new_segment_count:04d}",
+            "index": len(updated_segments) + new_segment_count,
+            "startMs": max(int(t_item.get("startMs", 0)), 0),
+            "endMs": max(int(t_item.get("endMs", int(t_item.get("startMs", 0)) + 1000)), int(t_item.get("startMs", 0)) + 200),
+            "sourceText": normalize_text(t_item.get("sourceText") or text_content),
+            "translatedText": text_content,
+            "spokenAdaptation": text_content,
+            "finalText": text_content,
+            "speakerId": str(t_item.get("speakerId") or "speaker_1"),
+            "delivery": str(t_item.get("delivery") or "neutral"),
+            "isNonDialogue": False,
+        }
+        voice = normalize_text(
+            t_item.get("voice")
+            or t_item.get("voicePreset")
+            or t_item.get("voiceOverride")
+            or ""
+        )
+        if voice:
+            new_seg["voice"] = voice
+        updated_segments.append(new_seg)
+
+    # Sort all segments chronologically by startMs and renumber
+    updated_segments.sort(key=lambda s: int(s.get("startMs", 0)))
+    for idx, seg in enumerate(updated_segments, start=1):
+        seg["index"] = idx
+
     return updated_segments

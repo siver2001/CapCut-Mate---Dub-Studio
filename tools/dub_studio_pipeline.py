@@ -36,7 +36,7 @@ def setup_quiet_excepthook() -> None:
             traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stderr)
         except Exception:
             pass
-        sys.exit(1)
+        os._exit(1)
     sys.excepthook = custom_excepthook
 
 
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     setup_quiet_excepthook()
     try:
         ret = main()
-        sys.exit(ret if isinstance(ret, int) else 0)
+        os._exit(ret if isinstance(ret, int) else 0)
     except Exception as exc:  # pragma: no cover
         import json
         err_msg = str(exc)
@@ -53,5 +53,5 @@ if __name__ == "__main__":
             print(f"Pipeline failed: {err_msg}", file=sys.stderr, flush=True)
         except (BrokenPipeError, OSError):
             pass
-        sys.exit(1)
+        os._exit(1)
 

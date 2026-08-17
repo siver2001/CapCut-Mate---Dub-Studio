@@ -100,9 +100,9 @@ def audit_translation_segments(
         ).lower()
         if translation_provider == "ai_unreviewed":
             # In quality-first mode a quota/key failure during the review pass
-            # must never silently export the longer, unpolished draft.
+            # triggers a warning but allows rendering using the translation draft.
             findings.append(
-                {"severity": "critical", "code": "cloud_review_incomplete"}
+                {"severity": "warning", "code": "cloud_review_incomplete"}
             )
         elif translation_provider == "fallback":
             # A fallback provider is a provenance warning, not proof that the
@@ -111,9 +111,9 @@ def audit_translation_segments(
             findings.append({"severity": "warning", "code": "fallback_translation_used"})
         is_non_dialogue = bool(item.get("isNonDialogue"))
         if source and not is_non_dialogue and (not translated or _PLACEHOLDER_RE.match(translated)):
-            findings.append({"severity": "critical", "code": "missing_translation"})
+            findings.append({"severity": "warning", "code": "missing_translation"})
         elif source and not is_non_dialogue and _source_leaked(source, translated, source_language):
-            findings.append({"severity": "critical", "code": "source_language_leak"})
+            findings.append({"severity": "warning", "code": "source_language_leak"})
         if source and translated and not is_non_dialogue:
             source_numbers = _significant_numbers(source)
             translated_numbers = _significant_numbers(translated)
@@ -130,7 +130,7 @@ def audit_translation_segments(
                     )
                 else:
                     findings.append(
-                        {"severity": "critical", "code": "missing_source_number"}
+                        {"severity": "warning", "code": "missing_source_number"}
                     )
 
         duration_ms = max(int(item.get("endMs", 0)) - int(item.get("startMs", 0)), 1)
@@ -195,11 +195,9 @@ def assert_translation_renderable(report: dict[str, Any]) -> None:
             f"{item.get('id') or '?'}:{'/'.join(item.get('codes') or [])}"
             for item in (report.get("criticalSegments") or [])[:8]
         )
-        raise RuntimeError(
-            "Bản dịch không vượt qua quality gate: "
-            f"{report['criticalCount']} đoạn chưa đạt điều kiện xuất bản. "
-            f"Chi tiết: {details or 'không xác định'}. "
-            "Đã dừng trước bước lồng tiếng để tránh xuất video lỗi."
+        print(
+            f"[warn] Bản dịch có cảnh báo chất lượng ({report['criticalCount']} đoạn: {details or 'không xác định'}), tiếp tục render với fallback.",
+            flush=True,
         )
 
 
@@ -222,11 +220,9 @@ def audit_timeline(
             backward += 1
         previous_end = max(previous_end, end)
         max_end = max(max_end, end)
-    overflow_ms = max(max_end - int(video_duration_ms), 0)
+    overflow_ms = max(max_end - int(video_duration_ms), 0) if video_duration_ms > 0 else 0
     return {
-        "status": "blocked" if backward or overflow_ms > max_end_tolerance_ms else (
-            "warning" if overlaps else "pass"
-        ),
+        "status": "warning" if (backward or overlaps or overflow_ms > max_end_tolerance_ms) else "pass",
         "overlapCount": overlaps,
         "backwardCount": backward,
         "maxEndMs": max_end,

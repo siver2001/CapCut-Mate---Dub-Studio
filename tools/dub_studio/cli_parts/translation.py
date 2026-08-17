@@ -2597,7 +2597,8 @@ def translate_segments(
     prefilled_override_count = 0
     for item in segments:
         source_text = normalize_text(item.get("sourceText") or "")
-        if source_text and _is_non_dialogue_sfx(source_text):
+        custom_trans = normalize_text(item.get("finalText") or item.get("translatedText") or item.get("spokenAdaptation") or "")
+        if source_text and _is_non_dialogue_sfx(source_text) and not custom_trans:
             item["isNonDialogue"] = True
             item["translatedText"] = ""
             item["delivery"] = "neutral"
@@ -2786,7 +2787,8 @@ def translate_segments(
         source_text = normalize_text(item.get("sourceText") or "")
         if not source_text:
             continue
-        if normalize_text(item.get("translatedText") or ""):
+        custom_trans = normalize_text(item.get("finalText") or item.get("translatedText") or item.get("spokenAdaptation") or "")
+        if custom_trans:
             continue
         # Skip non-dialogue sound effects — they are not spoken dialogue
         if _is_non_dialogue_sfx(source_text):

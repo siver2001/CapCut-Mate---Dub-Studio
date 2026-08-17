@@ -193,6 +193,7 @@ EDGE_TTS_CONCURRENCY = max(
     1,
 )
 DUB_SUBTITLE_REGION_SAMPLES = 2
+DUB_VISUAL_OCR_RECOVERY = env_bool("DUB_VISUAL_OCR_RECOVERY", default=False)
 OMNIVOICE_TTS_CONCURRENCY = max(
     int(
         env_value(

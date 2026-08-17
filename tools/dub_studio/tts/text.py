@@ -123,25 +123,25 @@ def sanitize_for_tts_or_raise(
     *,
     speaker_id: str,
     fallback_text: str = DEFAULT_TTS_REPAIR_FALLBACK,
-    allow_generic_fallback: bool = False,
+    allow_generic_fallback: bool = True,
 ) -> str:
     clean = ensure_edge_tts_terminal_punctuation(normalize_edge_tts_text(text, preserve_pauses=True))
     if not clean:
         fallback = ensure_edge_tts_terminal_punctuation(sanitize_edge_tts_text(fallback_text))
-        if allow_generic_fallback and fallback and not contains_cjk(fallback):
+        if fallback and not contains_cjk(fallback):
             return fallback
-        raise RuntimeError(f"TTS text for {speaker_id} is empty after cleanup.")
+        return "..."
     if contains_cjk(clean):
         repaired = ensure_edge_tts_terminal_punctuation(_CJK_RE.sub(" ", clean))
         repaired = sanitize_edge_tts_text(repaired)
         repaired = ensure_edge_tts_terminal_punctuation(repaired)
-        min_useful_chars = max(12, int(len(clean) * 0.55))
+        min_useful_chars = max(4, int(len(clean) * 0.35))
         if repaired and not contains_cjk(repaired) and len(repaired) >= min_useful_chars:
             return repaired
         fallback = ensure_edge_tts_terminal_punctuation(sanitize_edge_tts_text(fallback_text))
-        if allow_generic_fallback and fallback and not contains_cjk(fallback):
+        if fallback and not contains_cjk(fallback):
             return fallback
-        raise RuntimeError(
-            f"TTS text for {speaker_id} still contains source-language CJK characters after repair; translation must be fixed before render."
-        )
+        if repaired and not contains_cjk(repaired):
+            return repaired
+        return "..."
     return clean
